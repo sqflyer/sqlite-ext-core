@@ -9,3 +9,6 @@ crate-type = ["cdylib"]
 [dependencies]
 sqlite-ext-core = { path = "../../.." }
 once_cell = "1.21"
+
+[profile.release]
+debug = true

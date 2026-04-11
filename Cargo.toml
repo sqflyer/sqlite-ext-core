@@ -1,25 +1,25 @@
 [package]
 name = "sqlite-ext-core"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2021"
 authors = ["Dilip Vamsi"]
-description = "High-performance shared state registry for sqlite extensions"
+description = "Zero-dependency toolkit for building SQLite loadable extensions in Rust: dynamic API resolution, inline C-mirror wrappers, and a per-database shared-state registry with RAII cleanup."
+license = "MIT"
+readme = "README.md"
+repository = "https://github.com/sqflyer/sqlite-ext-core"
+homepage = "https://github.com/sqflyer/sqlite-ext-core"
+documentation = "https://docs.rs/sqlite-ext-core"
+keywords = ["sqlite", "extension", "ffi", "database", "registry"]
+categories = ["database", "api-bindings", "external-ffi-bindings"]
 
 [dependencies]
-# Sharded concurrent hashmap to prevent lock contention
-dashmap = "5.5"
-# Fastest non-cryptographic hasher for string keys
-ahash = "0.8"
-# Raw SQLite bindings
-libsqlite3-sys = { version = "0.36.0", features = ["pkg-config"] }
-
-# Your custom library for stack-allocated strings
-# https://crates.io/crates/small-collections
-small-collections = "0.6.0"
 
 [dev-dependencies]
-# We use bundled to compile a fresh SQLite C-core for the tests
+# Bundled SQLite C-core for the tests
 rusqlite = { version = "0.38", features = ["bundled"] }
+# Raw SQLite bindings — only for unit tests; production code resolves
+# everything dynamically via `sqlite3_extension_init2`.
+libsqlite3-sys = { version = "0.36.0", features = ["bundled"] }
 
 [lints.rust]
 unexpected_cfgs = { level = "warn", check-cfg = ['cfg(tarpaulin)'] }

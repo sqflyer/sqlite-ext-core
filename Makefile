@@ -15,9 +15,10 @@ leak-check-integration:
 	@cp tests/integration/rust_extension/target/release/libintegration_ext.so $(BIN_DIR)/libmyext.so
 	@echo "Building C leak check program..."
 	cd tests/integration/rust_extension && \
-		gcc leak_check.c -o $(BIN_DIR)/leak_check -lsqlite3
+		gcc leak_check.c -o $(BIN_DIR)/leak_check -lsqlite3 -ldl
 	@echo "Running Valgrind memory leak check on C program..."
-	valgrind --leak-check=full --show-leak-kinds=all --errors-for-leak-kinds=definite $(BIN_DIR)/leak_check
+	valgrind --leak-check=full --show-leak-kinds=all --errors-for-leak-kinds=definite \
+		$(BIN_DIR)/leak_check $(BIN_DIR)/libmyext.so
 
 coverage:
 	cargo install cargo-tarpaulin || true

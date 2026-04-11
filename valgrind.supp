@@ -1,18 +1,73 @@
-{
-   std_thread_init_leak
-   Memcheck:Leak
-   match-leak-kinds: all
-   fun:malloc
-   ...
-   fun:*std*thread*Thread*new*
-   ...
-}
-{
-   std_sync_mpmc_leak
-   Memcheck:Leak
-   match-leak-kinds: all
-   fun:malloc
-   ...
-   fun:*std*sync*mpmc*context*Context*new*
-   ...
-}
+# Valgrind leak suppressions for `make leak-check-valgrind`.
+#
+# This file is loaded only by the `leak-check-valgrind` target, which runs
+# `cargo valgrind test` over the Rust unit tests. It is NOT used by
+# `leak-check-integration`, which runs valgrind directly against a C harness
+# and relies purely on valgrind's built-in default suppressions.
+#
+# ## Current state: empty
+#
+# As of the 0.2.0 cut, the crate's unit tests run cleanly under
+# `cargo valgrind test` with no suppressions at all. Verified by running
+# with `VALGRIND_OPTS=""` and observing zero unsuppressed errors across
+# all 16 unit tests and 1 doctest. If you see this file and wonder why
+# it's empty, that is why.
+#
+# ## If you ever need to add a rule
+#
+# Every suppression below the header should have three required pieces:
+#
+# 1. A `match-leak-kinds:` line that is as narrow as reasonably possible.
+#    Prefer `possible,reachable` for "internal Rust runtime state that
+#    legitimately lives until thread/process exit" — never `all`, because
+#    `all` would also silence `definite` leaks, which is precisely what
+#    we want the leak check to catch.
+#
+# 2. A stack pattern that targets a specific symbol, not a wildcard over
+#    the whole std tree. `fun:malloc` + `...` + a specific `std::...`
+#    symbol is the right shape.
+#
+# 3. A comment block explaining WHAT the rule suppresses, WHY it was
+#    added (ideally with a commit hash or date), and a TODO for whether
+#    it can eventually be removed. Without the WHY, a future maintainer
+#    has no way to tell whether the rule is still load-bearing or stale
+#    debris from a long-forgotten `cargo valgrind test` run.
+#
+# ## Template
+#
+# Use this as a starting point; delete this comment block if/when you
+# add a real rule.
+#
+# ###############################################################################
+# # <symbol_being_suppressed> — <one-line summary of why it leaks>
+# ###############################################################################
+# #
+# # <Two or three sentences on what the allocation is, why it's a
+# # non-issue in our context, and what the escape hatch is if the
+# # upstream fix lands.>
+# #
+# # Added: YYYY-MM-DD, <brief reason>
+# # TODO: <when to re-check, e.g. "drop after Rust 1.90" or
+# # "drop after rusqlite 0.40">
+# #
+# # {
+# #    <short_rule_name_that_describes_the_leak>
+# #    Memcheck:Leak
+# #    match-leak-kinds: possible,reachable
+# #    fun:malloc
+# #    ...
+# #    fun:*<specific_std_symbol>*
+# #    ...
+# # }
+#
+# ## Re-auditing an existing rule
+#
+# To check whether any rule is stale, comment it out and run:
+#
+#     make leak-check-valgrind
+#
+# If valgrind reports no new errors, the rule is stale and can be
+# deleted. If it does report errors, read the new stack traces to see
+# whether the allocation is still coming from the same place this rule
+# intended to cover (in which case un-comment it) or whether the shape
+# has moved (in which case write a new, more specific rule).
