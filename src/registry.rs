@@ -49,15 +49,88 @@
 //! impl guards against this by comparing the live pointer in the map
 //! against `self` before removing — see the comment in the impl below.
 
+use std::borrow::Cow;
 use std::collections::HashMap;
 use std::ffi::{c_void, CStr};
 use std::fmt::Debug;
 use std::ops::Deref;
-use std::os::raw::c_char;
+use std::os::raw::{c_char, c_int};
 use std::sync::{Arc, Mutex, Weak};
 
 use crate::api::GLOBAL_API;
 use crate::ffi::*;
+
+/// Compile-time FNV-1a hash of a byte string.
+///
+/// Used to derive a deterministic, crate-identity-derived auxdata slot
+/// for [`DEFAULT_AUXDATA_SLOT`]. Any library following the same "hash
+/// your crate name" convention gets a distinct slot by construction,
+/// without any global coordination.
+const fn fnv1a_hash(s: &[u8]) -> u32 {
+    // FNV-1a parameters (offset basis + prime), unchanged since 1994.
+    let mut hash: u32 = 0x811c_9dc5;
+    let mut i = 0;
+    while i < s.len() {
+        hash ^= s[i] as u32;
+        hash = hash.wrapping_mul(0x0100_0193);
+        i += 1;
+    }
+    hash
+}
+
+/// Default slot index used by [`DbRegistry`] for its per-statement
+/// auxdata hot-path cache.
+///
+/// ## Why not slot `0`, and why not `i32::MAX`
+///
+/// SQLite's `sqlite3_set_auxdata(ctx, N, ptr, destructor)` uses `N` as a
+/// key into a per-statement slot table. The **convention** in the wild
+/// is to use slot `N` to cache the parsed form of scalar-function
+/// argument `N` — a regex compiled from `argv[0]` goes into slot `0`, a
+/// JSON path compiled from `argv[1]` goes into slot `1`, and so on.
+/// That makes slots `0..=argc-1` effectively "taken" for any function
+/// that wants to do argument caching, which is the single most common
+/// auxdata use case in existing C extensions.
+///
+/// Our registry uses auxdata for a completely different purpose — it
+/// caches the `Arc<InternalEntry<T>>` pointer so per-row state
+/// retrieval becomes a single load — so it must pick a slot that cannot
+/// conflict with the argument-caching convention. A naive fix would be
+/// to use `i32::MAX`, but that choice is arbitrary: two libraries that
+/// both pick `i32::MAX` would collide with each other silently.
+///
+/// ## How this value is derived
+///
+/// `DEFAULT_AUXDATA_SLOT` is the **FNV-1a hash of the literal string
+/// `"sqlite-ext-core"`**, masked to 31 bits so the result is always a
+/// non-negative `i32`. Any other library that follows the same "hash
+/// your crate name" convention for picking its default auxdata slot
+/// gets a completely different value, by construction — no global slot
+/// registry needed, no hand-coordination between library authors.
+///
+/// The resulting value is comfortably above SQLite's
+/// `SQLITE_LIMIT_FUNCTION_ARG` ceiling (default 1000, absolute max
+/// 32767), so it cannot collide with the argument-caching convention
+/// either. A compile-time assertion below enforces this invariant.
+///
+/// Override via [`DbRegistry::with_auxdata_slot`] if you need a
+/// different slot for any reason (e.g. you want two `DbRegistry`
+/// instances in the same process that share state policies but use
+/// different slots for testing isolation).
+pub const DEFAULT_AUXDATA_SLOT: c_int =
+    (fnv1a_hash(b"sqlite-ext-core") & 0x7FFF_FFFF) as c_int;
+
+// Sanity check: the computed slot must be above the argument-index
+// range (SQLITE_LIMIT_FUNCTION_ARG_HI = 32767) so it cannot collide
+// with the conventional "slot N caches argument N" pattern. In the
+// vanishingly unlikely event that the FNV hash of a future crate name
+// lands in [0, 32767], this assertion will fail at compile time and
+// we'll need to apply an explicit high-bit offset.
+const _: () = assert!(
+    DEFAULT_AUXDATA_SLOT > 32767,
+    "DEFAULT_AUXDATA_SLOT hashed below the argument-index ceiling; \
+     OR with a high-bit mask to push it above SQLITE_LIMIT_FUNCTION_ARG_HI"
+);
 
 /// Marker trait for types that can live inside a [`DbRegistry`].
 ///
@@ -138,6 +211,10 @@ pub struct DbRegistry<T: SharedState> {
     /// never keeps state alive on its own — state lives exactly as long as
     /// some connection holds a strong `State<T>` handle.
     pub(crate) map: Arc<RegistryMap<T>>,
+
+    /// SQLite `sqlite3_auxdata` slot used by the hot-path cache. See
+    /// [`DEFAULT_AUXDATA_SLOT`] for the rationale behind the default.
+    pub(crate) auxdata_slot: c_int,
 }
 
 /// Type alias for the internal registry map.
@@ -283,10 +360,28 @@ impl<T: SharedState> Drop for InternalEntry<T> {
 }
 
 impl<T: SharedState> DbRegistry<T> {
-    /// Creates a new, empty `DbRegistry`.
+    /// Creates a new, empty `DbRegistry` using [`DEFAULT_AUXDATA_SLOT`]
+    /// for the hot-path auxdata cache.
     pub fn new() -> Self {
+        Self::with_auxdata_slot(DEFAULT_AUXDATA_SLOT)
+    }
+
+    /// Creates a new, empty `DbRegistry` using an explicit auxdata slot
+    /// for the hot-path cache.
+    ///
+    /// Use this if you know another library or another `DbRegistry`
+    /// instance in your process already uses [`DEFAULT_AUXDATA_SLOT`],
+    /// or if you want to pick a slot that plays nicely with some other
+    /// convention you have for auxdata in this process.
+    ///
+    /// Note that picking a small slot (especially `0..=argc-1` for any
+    /// scalar function you register) is likely to collide with the
+    /// standard auxdata-per-argument caching idiom, so prefer
+    /// out-of-band values — `i32::MAX`, `i32::MAX - 1`, etc.
+    pub fn with_auxdata_slot(slot: c_int) -> Self {
         Self {
             map: Arc::new(Mutex::new(HashMap::new())),
+            auxdata_slot: slot,
         }
     }
 
@@ -303,14 +398,27 @@ impl<T: SharedState> DbRegistry<T> {
     ///
     /// Returns `None` if no state has been initialized for this database.
     ///
+    /// # Panics
+    /// Panics if `db` is null. A null `db` has no meaningful per-database
+    /// identity and never corresponds to anything a real SQLite extension
+    /// would see — this check fails fast on accidental misuse rather than
+    /// silently routing the call into a shared "no database" slot.
+    ///
     /// # Safety
-    /// Both `ctx` and `db` must be either null or valid pointers produced by
-    /// SQLite (typically retrieved from a scalar-function callback). Any
-    /// other value is undefined behavior.
+    /// `db` must be a valid, non-null pointer to an open `sqlite3*` handle
+    /// produced by SQLite. `ctx` must be null or a valid `sqlite3_context*`
+    /// pointer produced by SQLite (typically from inside a scalar-function
+    /// callback). Any other value is undefined behavior.
     pub fn get(&self, ctx: Option<*mut sqlite3_context>, db: *mut sqlite3) -> Option<State<T>> {
+        assert!(
+            !db.is_null(),
+            "sqlite-ext-core: DbRegistry::get called with a null db pointer — \
+             pass the `sqlite3*` handle from your extension init function or \
+             from sqlite3_context_db_handle(ctx)"
+        );
         // 1. Layer 1: SQLite AuxData (Logical O(1) bypass)
-        if let (Some(ctx_ptr), Some(api)) = (ctx, unsafe { GLOBAL_API }) {
-            let raw_cached_ptr = unsafe { (api.get_auxdata)(ctx_ptr, 0) };
+        if let (Some(ctx_ptr), Some(api)) = (ctx, GLOBAL_API.get()) {
+            let raw_cached_ptr = unsafe { (api.get_auxdata)(ctx_ptr, self.auxdata_slot) };
             if !raw_cached_ptr.is_null() {
                 // Return existing handle from SQLite's internal context memory.
                 let temp_arc = unsafe { Arc::from_raw(raw_cached_ptr as *const InternalEntry<T>) };
@@ -325,14 +433,22 @@ impl<T: SharedState> DbRegistry<T> {
 
         let state = {
             let guard = self.map.lock().expect("registry map poisoned");
-            guard.get(raw_path).and_then(|w| w.upgrade()).map(State)
+            guard
+                .get(raw_path.as_ref())
+                .and_then(|w| w.upgrade())
+                .map(State)
         };
 
         // 3. Layer 3: Cache result back in SQLite AuxData for the next row if found
-        if let (Some(state), Some(ctx_ptr), Some(api)) = (&state, ctx, unsafe { GLOBAL_API }) {
+        if let (Some(state), Some(ctx_ptr), Some(api)) = (&state, ctx, GLOBAL_API.get()) {
             let ptr_to_store = Arc::into_raw(state.0.clone()) as *mut c_void;
             unsafe {
-                (api.set_auxdata)(ctx_ptr, 0, ptr_to_store, Some(destructor_bridge::<T>));
+                (api.set_auxdata)(
+                    ctx_ptr,
+                    self.auxdata_slot,
+                    ptr_to_store,
+                    Some(destructor_bridge::<T>),
+                );
             }
         }
 
@@ -351,8 +467,12 @@ impl<T: SharedState> DbRegistry<T> {
     /// be short and must not recursively call other `DbRegistry` methods —
     /// std's `Mutex` is not reentrant.
     ///
+    /// # Panics
+    /// Panics if `db` is null. Same rationale as [`DbRegistry::get`].
+    ///
     /// # Safety
-    /// Both `ctx` and `db` must be either null or valid pointers produced by
+    /// `db` must be a valid, non-null pointer to an open `sqlite3*` handle.
+    /// `ctx` must be null or a valid `sqlite3_context*` pointer produced by
     /// SQLite. Any other value is undefined behavior.
     pub fn init<F>(
         &self,
@@ -363,6 +483,13 @@ impl<T: SharedState> DbRegistry<T> {
     where
         F: FnOnce() -> T,
     {
+        assert!(
+            !db.is_null(),
+            "sqlite-ext-core: DbRegistry::init called with a null db pointer — \
+             pass the `sqlite3*` handle from your extension init function or \
+             from sqlite3_context_db_handle(ctx)"
+        );
+
         // 1. Try to get existing state first (Hot/Warm path)
         if let Some(state) = self.get(ctx, db) {
             return state;
@@ -370,7 +497,7 @@ impl<T: SharedState> DbRegistry<T> {
 
         // 2. Slow path: Initialize and insert
         let raw_path = unsafe { get_raw_db_path(db) };
-        let shared_path: Arc<str> = Arc::from(raw_path);
+        let shared_path: Arc<str> = Arc::from(raw_path.as_ref());
 
         let state = {
             use std::collections::hash_map::Entry;
@@ -402,10 +529,15 @@ impl<T: SharedState> DbRegistry<T> {
         };
 
         // 3. Cache in SQLite AuxData
-        if let (Some(ctx_ptr), Some(api)) = (ctx, unsafe { GLOBAL_API }) {
+        if let (Some(ctx_ptr), Some(api)) = (ctx, GLOBAL_API.get()) {
             let ptr_to_store = Arc::into_raw(state.0.clone()) as *mut c_void;
             unsafe {
-                (api.set_auxdata)(ctx_ptr, 0, ptr_to_store, Some(destructor_bridge::<T>));
+                (api.set_auxdata)(
+                    ctx_ptr,
+                    self.auxdata_slot,
+                    ptr_to_store,
+                    Some(destructor_bridge::<T>),
+                );
             }
         }
 
@@ -434,35 +566,62 @@ impl<T: SharedState> Default for DbRegistry<T> {
     }
 }
 
-/// Resolves a `sqlite3*` handle to a borrowed `&str` view of its file path
-/// via `sqlite3_db_filename`, with no allocation.
+/// Resolves a `sqlite3*` handle to a `Cow<str>` registry key.
 ///
-/// Returns `":memory:"` in three cases: a null `db` pointer, a null or
-/// empty path from SQLite (in-memory or temp databases), or a non-UTF-8
-/// path. The returned slice borrows from SQLite's internal immutable path
-/// storage and is valid for as long as the `db` handle stays open.
+/// Two return shapes, mutually exclusive by the presence of a real
+/// filesystem path:
+///
+/// - **Borrowed file path.** The common case. If `sqlite3_db_filename`
+///   returns a non-null, non-empty pointer and the path is valid UTF-8,
+///   we return it as a `&str` borrowed from SQLite's internal immutable
+///   storage, valid for as long as the handle stays open. Zero
+///   allocations on the hot path.
+/// - **Owned in-memory key with NUL sentinel.** An in-memory database, a
+///   temp DB with no backing file, or a non-UTF-8 path produces an owned
+///   `":memory:\0<ptr>"` string keyed on the raw `db` address.
+///
+///   The embedded NUL byte is the collision-proof part: SQLite's
+///   `sqlite3_db_filename` returns a C string, which by definition
+///   cannot contain interior NULs, so a real filesystem path can never
+///   produce the same bytes as an in-memory key. Two independent
+///   in-memory databases open simultaneously get distinct registry
+///   entries because their `db` pointers differ.
 ///
 /// # Panics
-/// Panics if `db` is non-null but [`crate::api::sqlite3_extension_init2`]
-/// has not yet been called — we need `GlobalApi::db_filename` to do the
-/// resolution.
+/// - Panics (via `debug_assert!`) if `db` is null. This is an internal
+///   invariant: [`DbRegistry::get`] and [`DbRegistry::init`] both reject
+///   null `db` pointers at the public API boundary, so by the time we
+///   reach this helper, `db` is guaranteed non-null in debug builds and
+///   cannot sensibly be null in release either.
+/// - Panics if [`crate::api::sqlite3_extension_init2`] has not yet been
+///   called — we need `GlobalApi::db_filename` to do the resolution.
 ///
 /// # Safety
-/// `db` must be either null or a valid, open `sqlite3*` handle.
-pub(crate) unsafe fn get_raw_db_path<'a>(db: *mut sqlite3) -> &'a str {
-    if db.is_null() {
-        return ":memory:";
-    }
+/// `db` must be a valid, non-null, open `sqlite3*` handle.
+pub(crate) unsafe fn get_raw_db_path<'a>(db: *mut sqlite3) -> Cow<'a, str> {
+    debug_assert!(
+        !db.is_null(),
+        "get_raw_db_path called with null db — public API must reject this at the boundary"
+    );
+
     let api = GLOBAL_API
+        .get()
         .expect("sqlite-ext-core: GLOBAL_API not initialized — call sqlite3_extension_init2 first");
     let z_name = b"main\0".as_ptr() as *const c_char;
     let path_ptr = (api.db_filename)(db, z_name);
 
-    if path_ptr.is_null() || *path_ptr == 0 {
-        return ":memory:";
+    if !path_ptr.is_null() && *path_ptr != 0 {
+        // Real filesystem path — borrow from SQLite's internal storage.
+        // to_str checks UTF-8 validity without allocating; on invalid
+        // UTF-8 we fall through to the owned NUL-keyed branch so we
+        // still get a unique key for this handle.
+        if let Ok(s) = CStr::from_ptr(path_ptr).to_str() {
+            return Cow::Borrowed(s);
+        }
     }
 
-    // Convert the raw C-String pointer to a Rust string slice.
-    // to_str().unwrap_or checks for UTF-8 validity without allocating.
-    CStr::from_ptr(path_ptr).to_str().unwrap_or(":memory:")
+    // In-memory database, temp DB, or non-UTF-8 path. Key by the raw
+    // handle address with a NUL-byte prefix that guarantees no collision
+    // with any real filesystem path.
+    Cow::Owned(format!(":memory:\0{:p}", db))
 }

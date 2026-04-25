@@ -15,10 +15,11 @@
 //!
 //! **All wrappers in this module panic if called before
 //! [`crate::api::sqlite3_extension_init2`] has populated `EXTENSION_API`.**
-//! They all use the same `EXTENSION_API.unwrap()` pattern internally, so the
-//! first call from a mis-ordered extension will produce a clear panic at the
-//! call site instead of a segfault. The individual function docs are
-//! deliberately short — this contract applies uniformly.
+//! They dispatch through a private helper that unwraps the `OnceLock` with a
+//! clear diagnostic, so the first call from a mis-ordered extension
+//! produces a named panic at the call site instead of a segfault. The
+//! individual function docs are deliberately short — this contract applies
+//! uniformly.
 //!
 //! ## Safety
 //!
@@ -31,13 +32,26 @@
 use std::ffi::c_void;
 use std::os::raw::{c_char, c_int};
 
-use crate::api::EXTENSION_API;
+use crate::api::{ExtensionApi, EXTENSION_API};
 use crate::ffi::*;
+
+/// Borrows the resolved extension API table, panicking with a clear
+/// diagnostic if [`crate::api::sqlite3_extension_init2`] has not been
+/// called yet. Every wrapper in this module routes through here.
+#[inline(always)]
+fn api() -> &'static ExtensionApi {
+    EXTENSION_API.get().expect(
+        "sqlite-ext-core: SQLite API wrapper called before \
+         sqlite3_extension_init2(p_api) — make sure your extension's \
+         init function invokes sqlite3_extension_init2 before doing \
+         anything else",
+    )
+}
 
 /// Inline wrapper for `sqlite3_user_data` that utilizes the dynamically resolved API.
 #[inline(always)]
 pub unsafe fn sqlite3_user_data(ctx: *mut sqlite3_context) -> *mut c_void {
-    (EXTENSION_API.unwrap().user_data)(ctx)
+    (api().user_data)(ctx)
 }
 
 /// Inline wrapper for `sqlite3_result_blob` that utilizes the dynamically resolved API.
@@ -48,37 +62,37 @@ pub unsafe fn sqlite3_result_blob(
     len: c_int,
     destructor: Option<unsafe extern "C" fn(*mut c_void)>,
 ) {
-    (EXTENSION_API.unwrap().result_blob)(ctx, val, len, destructor)
+    (api().result_blob)(ctx, val, len, destructor)
 }
 
 /// Inline wrapper for `sqlite3_result_double` that utilizes the dynamically resolved API.
 #[inline(always)]
 pub unsafe fn sqlite3_result_double(ctx: *mut sqlite3_context, val: f64) {
-    (EXTENSION_API.unwrap().result_double)(ctx, val)
+    (api().result_double)(ctx, val)
 }
 
 /// Inline wrapper for `sqlite3_result_error` that utilizes the dynamically resolved API.
 #[inline(always)]
 pub unsafe fn sqlite3_result_error(ctx: *mut sqlite3_context, val: *const c_char, len: c_int) {
-    (EXTENSION_API.unwrap().result_error)(ctx, val, len)
+    (api().result_error)(ctx, val, len)
 }
 
 /// Inline wrapper for `sqlite3_result_int` that utilizes the dynamically resolved API.
 #[inline(always)]
 pub unsafe fn sqlite3_result_int(ctx: *mut sqlite3_context, val: c_int) {
-    (EXTENSION_API.unwrap().result_int)(ctx, val)
+    (api().result_int)(ctx, val)
 }
 
 /// Inline wrapper for `sqlite3_result_int64` that utilizes the dynamically resolved API.
 #[inline(always)]
 pub unsafe fn sqlite3_result_int64(ctx: *mut sqlite3_context, val: i64) {
-    (EXTENSION_API.unwrap().result_int64)(ctx, val)
+    (api().result_int64)(ctx, val)
 }
 
 /// Inline wrapper for `sqlite3_result_null` that utilizes the dynamically resolved API.
 #[inline(always)]
 pub unsafe fn sqlite3_result_null(ctx: *mut sqlite3_context) {
-    (EXTENSION_API.unwrap().result_null)(ctx)
+    (api().result_null)(ctx)
 }
 
 /// Inline wrapper for `sqlite3_result_text` that utilizes the dynamically resolved API.
@@ -89,61 +103,61 @@ pub unsafe fn sqlite3_result_text(
     len: c_int,
     destructor: Option<unsafe extern "C" fn(*mut c_void)>,
 ) {
-    (EXTENSION_API.unwrap().result_text)(ctx, val, len, destructor)
+    (api().result_text)(ctx, val, len, destructor)
 }
 
 /// Inline wrapper for `sqlite3_value_blob` that utilizes the dynamically resolved API.
 #[inline(always)]
 pub unsafe fn sqlite3_value_blob(val: *mut sqlite3_value) -> *const c_void {
-    (EXTENSION_API.unwrap().value_blob)(val)
+    (api().value_blob)(val)
 }
 
 /// Inline wrapper for `sqlite3_value_bytes` that utilizes the dynamically resolved API.
 #[inline(always)]
 pub unsafe fn sqlite3_value_bytes(val: *mut sqlite3_value) -> c_int {
-    (EXTENSION_API.unwrap().value_bytes)(val)
+    (api().value_bytes)(val)
 }
 
 /// Inline wrapper for `sqlite3_value_double` that utilizes the dynamically resolved API.
 #[inline(always)]
 pub unsafe fn sqlite3_value_double(val: *mut sqlite3_value) -> f64 {
-    (EXTENSION_API.unwrap().value_double)(val)
+    (api().value_double)(val)
 }
 
 /// Inline wrapper for `sqlite3_value_int` that utilizes the dynamically resolved API.
 #[inline(always)]
 pub unsafe fn sqlite3_value_int(val: *mut sqlite3_value) -> c_int {
-    (EXTENSION_API.unwrap().value_int)(val)
+    (api().value_int)(val)
 }
 
 /// Inline wrapper for `sqlite3_value_int64` that utilizes the dynamically resolved API.
 #[inline(always)]
 pub unsafe fn sqlite3_value_int64(val: *mut sqlite3_value) -> i64 {
-    (EXTENSION_API.unwrap().value_int64)(val)
+    (api().value_int64)(val)
 }
 
 /// Inline wrapper for `sqlite3_value_numeric_type` that utilizes the dynamically resolved API.
 #[inline(always)]
 pub unsafe fn sqlite3_value_numeric_type(val: *mut sqlite3_value) -> c_int {
-    (EXTENSION_API.unwrap().value_numeric_type)(val)
+    (api().value_numeric_type)(val)
 }
 
 /// Inline wrapper for `sqlite3_value_text` that utilizes the dynamically resolved API.
 #[inline(always)]
 pub unsafe fn sqlite3_value_text(val: *mut sqlite3_value) -> *const c_char {
-    (EXTENSION_API.unwrap().value_text)(val)
+    (api().value_text)(val)
 }
 
 /// Inline wrapper for `sqlite3_value_type` that utilizes the dynamically resolved API.
 #[inline(always)]
 pub unsafe fn sqlite3_value_type(val: *mut sqlite3_value) -> c_int {
-    (EXTENSION_API.unwrap().value_type)(val)
+    (api().value_type)(val)
 }
 
 /// Inline wrapper for `sqlite3_context_db_handle` that utilizes the dynamically resolved API.
 #[inline(always)]
 pub unsafe fn sqlite3_context_db_handle(ctx: *mut sqlite3_context) -> *mut sqlite3 {
-    (EXTENSION_API.unwrap().context_db_handle)(ctx)
+    (api().context_db_handle)(ctx)
 }
 
 /// Inline wrapper for `sqlite3_create_function_v2` that utilizes the dynamically resolved API.
@@ -159,7 +173,7 @@ pub unsafe fn sqlite3_create_function_v2(
     x_final: Option<unsafe extern "C" fn(*mut sqlite3_context)>,
     x_destroy: Option<unsafe extern "C" fn(*mut c_void)>,
 ) -> c_int {
-    (EXTENSION_API.unwrap().create_function_v2)(
+    (api().create_function_v2)(
         db,
         z_func_name,
         n_arg,

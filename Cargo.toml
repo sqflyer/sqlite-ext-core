@@ -2,6 +2,9 @@
 name = "sqlite-ext-core"
 version = "0.2.0"
 edition = "2021"
+# Required for std::sync::OnceLock (1.70) and inline `const { ... }`
+# expression blocks used in api.rs's resolve_slot helper (1.79).
+rust-version = "1.79"
 authors = ["Dilip Vamsi"]
 description = "Zero-dependency toolkit for building SQLite loadable extensions in Rust: dynamic API resolution, inline C-mirror wrappers, and a per-database shared-state registry with RAII cleanup."
 license = "MIT"
@@ -11,6 +14,16 @@ homepage = "https://github.com/sqflyer/sqlite-ext-core"
 documentation = "https://docs.rs/sqlite-ext-core"
 keywords = ["sqlite", "extension", "ffi", "database", "registry"]
 categories = ["database", "api-bindings", "external-ffi-bindings"]
+# Keep the published tarball lean: the Go integration suite, the
+# repo-level Makefile, and the valgrind suppressions file are all
+# dev-only tooling that consumers of this crate via cargo never need.
+# The architecture.md / leaks.md design docs deliberately stay in.
+exclude = [
+    "tests/integration/",
+    "Makefile",
+    "valgrind.supp",
+    ".gitignore",
+]
 
 [dependencies]
 

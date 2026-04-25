@@ -153,8 +153,79 @@ removes the registry entry automatically — no manual cleanup, no leaks.
 
 Call `sqlite3_extension_init2` **before** any other API in this crate. The
 inline wrappers panic if they're used before init (clear panic, not a
-segfault), and `DbRegistry::get` / `DbRegistry::init` panic only when they
-need to resolve a non-null database path.
+segfault), and `DbRegistry::get` / `DbRegistry::init` panic on a null `db`
+pointer.
+
+## Auxdata slot used by the hot path
+
+The registry's nanosecond-scale per-row lookup works by caching an `Arc`
+pointer into SQLite's `sqlite3_auxdata` table under a single integer
+slot. This is the mechanism that makes `DbRegistry::get` essentially
+free inside a tight scalar-function loop: one pointer dereference, no
+hashing, no locking.
+
+Picking the right slot matters. SQLite's `sqlite3_set_auxdata(ctx, N, …)`
+uses `N` as a key into a per-statement slot table, and by convention
+scalar functions use slot `N` to cache the parsed form of `argv[N]` —
+a compiled regex from `argv[0]` goes into slot `0`, a parsed JSON path
+from `argv[1]` goes into slot `1`, and so on. Any library that picks a
+low-numbered slot for its own purposes collides with this convention.
+
+### `DEFAULT_AUXDATA_SLOT`
+
+`sqlite-ext-core` exposes a compile-time constant:
+
+```rust
+pub const DEFAULT_AUXDATA_SLOT: c_int =
+    (fnv1a_hash(b"sqlite-ext-core") & 0x7FFF_FFFF) as c_int;
+```
+
+This resolves at compile time to **`816_545_397`** (`0x30AB7E75`) — the
+[FNV-1a hash](https://en.wikipedia.org/wiki/Fowler%E2%80%93Noll%E2%80%93Vo_hash_function)
+of the literal string `"sqlite-ext-core"` with the sign bit masked off
+so the value is a non-negative `i32`. Three things fall out of this
+choice:
+
+- **Far above the argument-index range.** `SQLITE_LIMIT_FUNCTION_ARG`
+  caps at 32767 absolute maximum; `816_545_397` is four orders of
+  magnitude higher, so it cannot collide with any scalar function's
+  conventional argument-caching slot. A `const { assert!(…) }` in the
+  source pins this invariant at compile time — if the crate ever gets
+  renamed to something whose FNV hash lands below the ceiling, the
+  build fails with a clear message rather than silently shipping a
+  collision-prone default.
+- **Unique by construction.** Any other library that follows the same
+  "hash your crate name" convention gets a completely different
+  default slot, without coordination. Two libraries picking
+  `i32::MAX` would collide silently; two libraries hashing their
+  distinct crate names will not.
+- **Reproducible and auditable.** There's no magic number. Anyone can
+  re-derive the value from the string `"sqlite-ext-core"` and verify
+  it matches what the crate ships.
+
+Under the hood, SQLite 3.30+ stores auxdata as a linked list of
+`AuxData` structs (not a dense array indexed by `N`), so picking a
+large slot number costs nothing in memory — it's a single list entry.
+
+### Overriding the slot
+
+If you know another library in your process already uses
+`DEFAULT_AUXDATA_SLOT`, or you want two `DbRegistry` instances in the
+same process to avoid sharing auxdata state, construct with an
+explicit slot:
+
+```rust
+use sqlite_ext_core::DbRegistry;
+
+// Pick any non-negative i32 that doesn't collide with other slots
+// in your process. Staying above 32767 keeps you out of the
+// argument-caching convention range.
+let registry = DbRegistry::<MyState>::with_auxdata_slot(0x4000_0000);
+```
+
+`DbRegistry::new()` is equivalent to
+`DbRegistry::with_auxdata_slot(DEFAULT_AUXDATA_SLOT)`, so most users
+never need to touch this.
 
 ## Choosing `T` for your `DbRegistry<T>`
 
@@ -245,7 +316,7 @@ The integration suite exercises the registry under realistic loads:
   actually measures and why.
 
 ```bash
-cargo test                          # 16 unit tests
+cargo test                          # 17 unit tests + 1 doctest
 make test-integration               # Go concurrency + lazy-load suite
 make leak-check-integration         # Valgrind run (requires valgrind)
 ```
@@ -253,52 +324,60 @@ make leak-check-integration         # Valgrind run (requires valgrind)
 ## Project status
 
 `sqlite-ext-core` is **pre-1.0** and the API may change between minor
-versions. The current `0.2.0` release is usable in production for
-loadable extensions and has been stress-tested against the sqlite3 CLI,
-rusqlite, and Go's `mattn/go-sqlite3`, but a handful of known rough
-edges (listed in the roadmap below) are being worked through before a
-stable `1.0` is cut. See [docs.rs](https://docs.rs/sqlite-ext-core) for
-the current API surface.
+versions. The current `0.2.x` line has landed every correctness
+blocker that was originally on the path to 1.0 — it is sound under
+Rust's strict aliasing rules, isolates in-memory databases correctly,
+and rejects null-pointer misuse at the public API boundary. It has
+been stress-tested against the sqlite3 CLI, rusqlite, and Go's
+`mattn/go-sqlite3`. What remains before cutting `1.0.0` is one quality
+item (a direct Rust-side test for `sqlite3_extension_init2`) plus a
+small set of nice-to-haves (benchmarks, CI, docs.rs polish). See the
+roadmap below for the full status. Current API surface is on
+[docs.rs](https://docs.rs/sqlite-ext-core).
 
 ## Roadmap to 1.0
 
-The path from `0.2.0` to `1.0.0` is deliberately short: three
-correctness items, two quality items, and five nice-to-haves. The hard
-engineering is done; what's left is soundness polish and confidence
-building.
+The path from `0.2.x` to `1.0.0` is deliberately short. All correctness
+blockers have landed; what remains is one quality item plus five
+nice-to-haves.
 
-### Must-fix (correctness blockers)
+### Must-fix (correctness blockers) — all landed
 
-These are real soundness or correctness issues that must land before a
-stable `1.0` tag.
-
-- **Replace `static mut GLOBAL_API` / `static mut EXTENSION_API` with
-  `std::sync::OnceLock`.** The current statics are written exactly once
-  under a `Once` guard, which makes them sound in practice, but reading
-  a `static mut` from multiple threads is technically UB under Rust's
-  aliasing rules. `OnceLock<GlobalApi>` expresses the same write-once
-  pattern explicitly, removes every `unsafe { GLOBAL_API }` site in the
-  crate, and has zero runtime cost.
-- **Fix the in-memory database collision.** Every `:memory:` connection
-  resolves to the literal string `":memory:"` today, which means two
-  independent in-memory databases in the same process share registry
-  state. When `sqlite3_db_filename` returns null/empty, key the
-  registry on the raw `db` pointer address instead (e.g. via a
-  dedicated `MemKey(usize)` entry type).
-- **Validate slot pointers before `transmute`.** If SQLite ever hands
-  back a `sqlite3_api_routines` table where one of the slots we read is
-  zero (stripped build, missing routine), the `std::mem::transmute` in
-  `sqlite3_extension_init2` produces a null function pointer that
-  segfaults the moment anything calls it. Wrap each slot read in a
-  non-null check and panic with a clear message instead.
+- **✅ Replace `static mut GLOBAL_API` / `static mut EXTENSION_API`
+  with `std::sync::OnceLock`.** *Landed in 0.2.x.* Both API tables are
+  now `OnceLock<GlobalApi>` / `OnceLock<ExtensionApi>` with race-free
+  reads and no `unsafe { STATIC }` sites in the crate. The wrappers
+  module routes through a single private `api()` helper that unwraps
+  the `OnceLock` with a clear panic if init was skipped.
+- **✅ Fix the in-memory database collision.** *Landed in 0.2.x.*
+  `get_raw_db_path` now returns a `Cow<'a, str>` keyed on
+  `":memory:\0<ptr>"` for any handle whose `sqlite3_db_filename`
+  resolves to null/empty. The embedded NUL byte is the collision-proof
+  part — SQLite's `sqlite3_db_filename` returns a C string, which by
+  definition cannot contain interior NULs, so a real filesystem path
+  can never collide with an in-memory key. As a side benefit, null
+  `db` pointers are now rejected at the `DbRegistry::get`/`init`
+  public API boundary with a named panic, so accidental misuse fails
+  fast instead of routing into a shared "no database" slot.
+- **✅ Validate slot pointers before `transmute`.** *Landed in 0.2.x.*
+  Each slot read in `sqlite3_extension_init2` now goes through a
+  private `resolve_slot<T>(slots, offset, name)` helper that asserts
+  the raw `usize` is non-zero and panics with the routine name and
+  offset if not. A `const { assert!(size_of::<T>() ==
+  size_of::<usize>()) }` enforces at compile time that every caller
+  resolves a pointer-sized type. Stripped or incompatible SQLite
+  builds now panic at init with a clear diagnostic instead of
+  segfaulting on first FFI call.
 
 ### Should-fix (quality polish)
 
-- **Configurable auxdata slot.** Slot `0` is hardcoded in the
-  registry's hot path. Any other extension using auxdata slot `0` for
-  its own caching will clobber ours and vice versa. Expose a
-  `DbRegistry::with_auxdata_slot(slot: i32)` constructor so users can
-  pick a higher-numbered slot that's unlikely to conflict.
+- **✅ Configurable auxdata slot.** *Landed in 0.2.x.* The hot-path
+  cache now uses [`DEFAULT_AUXDATA_SLOT`](#auxdata-slot-used-by-the-hot-path)
+  (the FNV-1a hash of the crate name, resolving to `816_545_397` —
+  well above the argument-caching convention range), and
+  `DbRegistry::with_auxdata_slot(slot)` lets callers override it.
+  See the "Auxdata slot used by the hot path" section above for the
+  full rationale.
 - **Rust-side test for `sqlite3_extension_init2`.** The slot-walking
   code is currently only exercised by the Go integration tests; the
   Rust unit tests bootstrap `GLOBAL_API` / `EXTENSION_API` via a

@@ -266,7 +266,7 @@ reason (e.g. `Extension load failed`), check:
 
 ## Related targets
 
-- **`make test`** — Rust unit tests. 16 tests exercise the registry,
+- **`make test`** — Rust unit tests. 17 tests exercise the registry,
   the FFI glue, and `destructor_bridge` directly. No valgrind.
 - **`make test-integration`** — Go concurrency + lazy-load stress
   tests. Exercises the full extension under multi-threaded load but
