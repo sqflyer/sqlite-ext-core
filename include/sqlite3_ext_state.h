@@ -251,7 +251,7 @@ typedef pthread_rwlock_t ext_rwlock_t;
             sqlite3_mutex *master = sqlite3_mutex_alloc(SQLITE_MUTEX_STATIC_MASTER); \
             sqlite3_mutex_enter(master); \
             if (!StateType##_registry_mutex) { \
-                StateType##_registry_mutex = sqlite3_mutex_alloc(SQLITE_MUTEX_FAST); \
+                StateType##_registry_mutex = sqlite3_mutex_alloc(SQLITE_MUTEX_STATIC_APP1); \
             } \
             sqlite3_mutex_leave(master); \
         } \

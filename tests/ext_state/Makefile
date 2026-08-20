@@ -49,5 +49,12 @@ build-cpp: build-go-integration
 	@echo "Building C++ extension..."
 	g++ -shared -fPIC -O2 $(CPP_EXT_DIR)/myext.cpp -o $(CPP_EXT_PATH)
 
+leak-check: build-c
+	@echo "Building C leak check program..."
+	gcc $(C_EXT_DIR)/leak_check.c -o $(BIN_DIR)/leak_check -lsqlite3
+	@echo "Running Valgrind memory leak check on C program..."
+	valgrind --leak-check=full --show-leak-kinds=all --errors-for-leak-kinds=definite \
+		$(BIN_DIR)/leak_check $(C_EXT_PATH)
+
 clean:
 	rm -rf $(BIN_DIR)
