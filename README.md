@@ -23,6 +23,20 @@ Maintaining state (like connection pools, LRU caches, or simple counters) inside
 - [State Manager Internal Architecture](docs/EXT_STATE_ARCHITECTURE.md)
 - Usage examples can be found in `tests/integration/c_extension/myext.c` and `tests/integration/cpp_extension/myext.cpp`.
 
+### 2. C++ RAII Data Types (`sqlite3_value_keys.hpp`)
+Zero-dependency C++ RAII wrappers for SQLite core data types designed for zero-allocation lookups and heterogeneous map keys.
+
+#### Key Features:
+- **Zero-Allocation Lookups**: Provides non-owning `View` wrappers (`SqliteStringView`, `SqliteBlobView`, `SqliteValueView`) to prevent expensive memory allocations during C++ map key lookups.
+- **Heterogeneous Lookups**: Natively supports comparing `View`s against heavy, memory-managed `Owned` classes.
+- **Polymorphic Variants**: Safely store Integer, Float, Text, and Blob payloads inside the exact same `std::map` using the polymorphic `SqliteValueOwned` wrapper.
+- **Ergonomic String Builders**: Easily construct dynamic strings without a database handle using standard `(const char*)` constructors, or safely instantiate them inside User-Defined Functions with `(sqlite3_context*)` wrappers.
+- **Zero STL Overhead**: Fully implemented using raw C-pointers and SQLite's native memory profilers (`sqlite3_malloc`). No `<string>` or `<vector>` overhead. Perfect for constrained environments like WASM.
+
+#### Documentation
+- [Value Keys README](docs/VALUE_KEYS_README.md)
+- [Value Keys Internal Architecture](docs/VALUE_KEYS_ARCHITECTURE.md)
+
 ## Building and Testing
 This repository includes a robust Go-based concurrency and lazy-loading test suite to verify the thread-safety and memory-safety of the extensions under immense load.
 
