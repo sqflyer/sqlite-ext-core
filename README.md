@@ -24,8 +24,18 @@ The state manager solves this by automatically generating a thread-safe, garbage
 - [State Manager Quickstart](docs/EXT_STATE_README.md)
 - [State Manager Internal Architecture](docs/EXT_STATE_ARCHITECTURE.md)
 
-### 2. SQLite Shared Pointers (`sqlite3_shared_ptr.h` / `.hpp`)
-Zero-dependency C macro and C++ templates (`sqlite3_shared_ptr<T>`) for thread-safe, reference-counted memory allocation that integrates directly into SQLite's memory manager (`sqlite3_malloc`). Allows sharing dynamic payloads safely across UDF boundaries.
+### 2. Synchronization Primitives (`sqlite3_atomic.h`, `sqlite3_tiny_lock`, `sqlite3_mutex_lock`)
+A zero-dependency, freestanding suite of cross-platform atomics and locks designed for high-concurrency extensions, WebAssembly ports, and OS kernels.
+
+#### Key Features:
+- **`sqlite3_atomic.h`**: Explicitly sized (8, 16, 32, 64-bit) atomics wrapping GCC/Clang built-ins and MSVC intrinsics to guarantee perfectly typed cross-platform memory operations without `<stdatomic.h>`.
+- **`sqlite3_tiny_lock`**: A microscopic (4-byte) hybrid spinlock. On native hardware, it acts as a blistering-fast CPU-yielding spinlock (`PAUSE`/`YIELD`). On WebAssembly, it dynamically transforms into a true 0% CPU sleeping mutex via `memory.atomic.wait32`.
+- **`sqlite3_mutex_lock`**: An owning C++ wrapper over SQLite's native `sqlite3_mutex_alloc`. Mimics `std::mutex` and `std::lock_guard` perfectly, while safely handling `nullptr` mutexes in single-threaded SQLite compilations.
+
+#### Documentation
+- [Atomic Architecture](docs/ATOMIC_ARCHITECTURE.md)
+- [TinyLock Architecture](docs/TINY_LOCK_ARCHITECTURE.md)
+- [Mutex Lock Architecture](docs/MUTEX_LOCK_ARCHITECTURE.md)
 
 ### 3. C++ RAII Data Types (`sqlite3_value_keys.hpp`)
 Zero-dependency C++ RAII wrappers for SQLite core data types designed for zero-allocation lookups and heterogeneous map keys.

@@ -47,7 +47,7 @@ build-c: build-go-integration
 build-cpp: build-go-integration
 	@mkdir -p $(BIN_DIR)/cpp_ext
 	@echo "Building C++ extension..."
-	g++ -shared -fPIC -O2 $(CPP_EXT_DIR)/myext.cpp -o $(CPP_EXT_PATH)
+	g++ -shared -fPIC -O2 -fno-exceptions -fno-rtti -nostdlib++ $(CPP_EXT_DIR)/myext.cpp -o $(CPP_EXT_PATH)
 
 leak-check: build-c
 	@echo "Building C leak check program..."

@@ -1,13 +1,9 @@
 #include <sqlite3.h>
 #define SQLITE_CORE
 #include "../../include/sqlite3_value_keys.hpp"
-#include <cassert>
-#include <iostream>
-#include <string>
-#include <cstring>
-#include <map>
-
-using namespace std;
+#include <stdio.h>
+#include <assert.h>
+#include <string.h>
 
 void test_string_types(sqlite3* db) {
     SqliteStringOwned owned1(db);
@@ -165,13 +161,13 @@ void test_string_builder(sqlite3* db) {
 
 void test_move_semantics() {
     SqliteStringOwned str1("move_test");
-    SqliteStringOwned str2(std::move(str1));
+    SqliteStringOwned str2(static_cast<SqliteStringOwned&&>(str1));
     assert(str2.length() == 9);
     assert(str1.length() == 0 || str1.value() == nullptr);
     
     char blob_data[] = {0x01, 0x02};
     SqliteBlobOwned blob1(blob_data, 2);
-    SqliteBlobOwned blob2(std::move(blob1));
+    SqliteBlobOwned blob2(static_cast<SqliteBlobOwned&&>(blob1));
     assert(blob2.size() == 2);
     assert(blob1.size() == 0 || blob1.data() == nullptr);
 }
@@ -201,40 +197,40 @@ int main() {
     
     sqlite3* db;
     if (sqlite3_open(":memory:", &db) != SQLITE_OK) {
-        cerr << "Failed to open sqlite db" << endl;
+        printf("Failed to open sqlite db\n");
         return 1;
     }
 
-    cout << "Testing String Types..." << endl;
+    printf("Testing String Types...\n");
     test_string_types(db);
     
-    cout << "Testing Blob Types..." << endl;
+    printf("Testing Blob Types...\n");
     test_blob_types();
     
-    cout << "Testing Value Types..." << endl;
+    printf("Testing Value Types...\n");
     test_value_types(db);
     
-    cout << "Testing String Builder..." << endl;
+    printf("Testing String Builder...\n");
     test_string_builder(db);
     
-    cout << "Testing Move Semantics..." << endl;
+    printf("Testing Move Semantics...\n");
     test_move_semantics();
     
-    cout << "Testing Strict Equality..." << endl;
+    printf("Testing Strict Equality...\n");
     test_value_strict_equality(db);
     
-    cout << "Testing Collation Order..." << endl;
+    printf("Testing Collation Order...\n");
     test_collation(db);
     
-    cout << "Testing Bind Methods..." << endl;
+    printf("Testing Bind Methods...\n");
     test_bind(db);
     
-    cout << "Testing Result Methods..." << endl;
+    printf("Testing Result Methods...\n");
     test_result(db);
     
     sqlite3_close(db);
     sqlite3_shutdown();
     
-    cout << "All C++ Type Tests Passed!" << endl;
+    printf("All C++ Type Tests Passed!\n");
     return 0;
 }
