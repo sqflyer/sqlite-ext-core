@@ -27,7 +27,7 @@ func main() {
 	numDbs := 3                              // We will test 3 completely separate SQLite databases
 	connsPerDb := 25                         // We will hit each database with 25 concurrent connections
 	iterations := 100                        // Each connection will run 100 queries
-	expectedTotal := iterations * connsPerDb // Expected final state count (2500 per DB)
+	expectedTotal := (iterations * connsPerDb * 11) + 100 // Expected final state count (27600 per DB)
 
 	var wg sync.WaitGroup
 	dbResults := make([]int, numDbs)
@@ -105,6 +105,10 @@ func runTestOnConn(db *sql.DB, iterations int) (int, error) {
 	var lastCount int
 	for k := 0; k < iterations; k++ {
 		err := db.QueryRow("SELECT test_counter()").Scan(&lastCount)
+		if err != nil {
+			return 0, err
+		}
+		err = db.QueryRow("SELECT test_counter_from_db()").Scan(&lastCount)
 		if err != nil {
 			return 0, err
 		}

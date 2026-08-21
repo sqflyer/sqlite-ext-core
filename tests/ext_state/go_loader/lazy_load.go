@@ -25,7 +25,7 @@ func main() {
 	numDbs := 3
 	connsPerDb := 25
 	iterations := 100
-	expectedTotal := connsPerDb * iterations
+	expectedTotal := (connsPerDb * iterations * 11) + 100
 
 	for i := 0; i < numDbs; i++ {
 		dbPath := filepath.Join(os.TempDir(), fmt.Sprintf("test_lazy_load_%d.sqlite", i))
@@ -72,6 +72,10 @@ func main() {
 				for k := 0; k < iterations; k++ {
 					var rowCount int
 					err := conn.QueryRowContext(context.Background(), "SELECT test_counter()").Scan(&rowCount)
+					if err != nil {
+						log.Fatalf("DB %d, Conn %d: Query failed: %v", dId, cId, err)
+					}
+					err = conn.QueryRowContext(context.Background(), "SELECT test_counter_from_db()").Scan(&rowCount)
 					if err != nil {
 						log.Fatalf("DB %d, Conn %d: Query failed: %v", dId, cId, err)
 					}

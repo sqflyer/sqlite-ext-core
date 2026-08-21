@@ -1,6 +1,6 @@
 # SQLite Extension State Manager (C/C++)
 
-This header (`sqlite3_ext_state.h`) provides a zero-dependency, zero-boilerplate macro that automatically generates a thread-safe, garbage-collected, **Per-Database Shared State Registry** for your SQLite extensions.
+These headers (`sqlite3_ext_state.h` for C, `sqlite3_ext_state.hpp` for C++) provide zero-dependency, thread-safe, garbage-collected **Per-Database Shared State Registries** for your SQLite extensions.
 
 ## Why do I need this?
 If you want your SQLite extension to maintain state (like a connection pool, an LRU cache, or a simple counter), you cannot use global variables because that state would be illegally shared across every database loaded in the same process. You must instantiate state exactly once per database file. This macro does all of that heavy lifting for you automatically.
@@ -47,28 +47,36 @@ int sqlite3_myext_init(sqlite3 *db, char **pzErrMsg, const sqlite3_api_routines 
 ```
 
 ### 3. Use it in your Functions (C++)
-If you compile with a C++ compiler (`g++`, `clang++`, MSVC), the macro automatically generates RAII lock guards for perfect exception-safety.
+If you compile with a C++ compiler (`g++`, `clang++`, MSVC), use the `SqliteExtState<T>` template from `sqlite3_ext_state.hpp`. It automatically generates RAII lock guards and safely manages embedded C++ objects via placement `new` and pseudo-destructors.
 
 ```cpp
+#include "sqlite3_ext_state.hpp"
+
+struct SharedState { int counter; std::string name; };
+
 static void test_counter_func(sqlite3_context *ctx, int argc, sqlite3_value **argv) {
-    auto state = SharedState_from_context(ctx);
+    auto state = SqliteExtState<SharedState>::from_context(ctx);
     if (!state) return;
     
     // Automatically acquires the Write Lock, and releases it at the end of the curly braces!
     {
-        SharedState_WriteGuard lock(state);
+        SqliteExtState<SharedState>::WriteGuard lock(state);
         lock->counter++;
     } 
     
     // Automatically acquires the Read Lock!
     int val = 0;
     {
-        SharedState_ReadGuard lock(state);
+        SqliteExtState<SharedState>::ReadGuard lock(state);
         val = lock->counter;
     }
     
     sqlite3_result_int64(ctx, (sqlite3_int64)val);
 }
+
+// In your init function:
+// void* raw_state = SqliteExtState<SharedState>::init(db);
+// sqlite3_create_function_v2(..., raw_state, ..., SqliteExtState<SharedState>::destructor);
 ```
 
 ### 3 (Alternative). Use it in your Functions (Pure C)

@@ -36,7 +36,7 @@ test-cpp: build-cpp
 build-go-integration:
 	@echo "Building Go integration tests..."
 	@mkdir -p $(BIN_DIR)
-	cd $(GO_LOADER_DIR) && go build -tags sqlite_extension -o $(BIN_DIR)/concurrency_test main.go
+	cd $(GO_LOADER_DIR) && go build -tags sqlite_extension -o $(BIN_DIR)/concurrency_test concurrency.go
 	cd $(GO_LOADER_DIR) && go build -tags sqlite_extension -o $(BIN_DIR)/lazy_test lazy_load.go
 
 build-c: build-go-integration

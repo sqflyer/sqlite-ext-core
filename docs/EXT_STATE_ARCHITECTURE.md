@@ -43,3 +43,9 @@ The architecture uses strict double-checked locking using a secondary mutex (`en
 ## 5. In-Memory Isolation
 In-memory databases (`:memory:`) all share the exact same filepath string (`:memory:`). If the registry relied strictly on filepaths, all in-memory databases would accidentally share the same state.
 To prevent this, the architecture intercepts `:memory:` filepaths and dynamically concatenates the raw memory address of the SQLite connection pointer (e.g., `:memory:0x1234abcd`). This guarantees perfect isolation for in-memory databases.
+
+## 6. C++ Memory Lifecycle (`sqlite3_ext_state.hpp`)
+While C simply allocates structs using `sqlite3_malloc`, the C++ template (`SqliteExtState<T>`) must seamlessly support embedding complex C++ objects (like `std::string` or `std::vector`) directly inside the state without causing memory leaks or constructor bypassing.
+
+1. **Placement New**: During the Cold Path initialization, after allocating the raw C memory via `sqlite3_malloc`, the C++ template executes a placement `new` operator (`new (&entry->state) T()`). This forces the C++ compiler to run the default constructors for all embedded objects inside the raw SQLite memory block.
+2. **Pseudo-Destructors**: During Garbage Collection, if a custom `free_fn` is not provided, the template manually triggers the pseudo-destructor of the state (`entry->state.~T()`) *before* calling `sqlite3_free()`. This guarantees that all embedded C++ objects are safely torn down, preventing silent memory leaks.

@@ -163,53 +163,6 @@ typedef pthread_rwlock_t ext_rwlock_t;
  * causing a permanent memory leak for the lifetime of the process!
  */
 
-#ifdef __cplusplus
-/* =================================================================================
- * C++ RAII ABSTRACTIONS
- * =================================================================================
- * If this header is included in a C++ project, the preprocessor automatically 
- * generates RAII (Resource Acquisition Is Initialization) Guard classes.
- * 
- * These guards automatically acquire the lock when instantiated and safely release 
- * it when they go out of scope. This guarantees absolute exception-safety and 
- * completely eliminates the risk of deadlocks caused by forgotten `release` calls 
- * or early returns.
- * 
- * Usage:
- *   {
- *       SharedState_WriteGuard lock(state);
- *       lock->counter++;
- *   } // Lock is automatically released here!
- */
-#define SQLITE_EXTENSION_STATE_CPP_RAII(StateType) \
-    class StateType##_ReadGuard { \
-        StateType* state; \
-    public: \
-        explicit StateType##_ReadGuard(StateType* s) : state(s) { \
-            StateType##_read_acquire(state); \
-        } \
-        ~StateType##_ReadGuard() { \
-            StateType##_read_release(state); \
-        } \
-        StateType* operator->() { return state; } \
-        StateType& operator*() { return *state; } \
-    }; \
-    \
-    class StateType##_WriteGuard { \
-        StateType* state; \
-    public: \
-        explicit StateType##_WriteGuard(StateType* s) : state(s) { \
-            StateType##_write_acquire(state); \
-        } \
-        ~StateType##_WriteGuard() { \
-            StateType##_write_release(state); \
-        } \
-        StateType* operator->() { return state; } \
-        StateType& operator*() { return *state; } \
-    };
-#else
-#define SQLITE_EXTENSION_STATE_CPP_RAII(StateType) /* Empty in pure C */
-#endif
 
 #define SQLITE_EXTENSION_STATE(StateType) \
     typedef struct StateType##_Entry { \
@@ -525,8 +478,6 @@ typedef pthread_rwlock_t ext_rwlock_t;
         if (!state) return; \
         StateType##_Entry *entry = (StateType##_Entry *)((char *)state - offsetof(StateType##_Entry, state)); \
         EXT_RWLOCK_WRITE_RELEASE(entry->state_mutex); \
-    } \
-    \
-    SQLITE_EXTENSION_STATE_CPP_RAII(StateType)
+    }
 
 #endif /* SQLITE3_EXT_STATE_H */

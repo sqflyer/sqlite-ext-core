@@ -14,4 +14,82 @@ Zero-dependency C++ RAII wrappers for SQLite core data types, engineered specifi
 ## Setup
 Simply `#include "include/sqlite3_value_keys.hpp"` in your SQLite C++ extension project!
 
+## Examples of Usage
+
+### 1. Heterogeneous Map Lookups (Zero-Allocation)
+Using `std::map<SqliteStringOwned, MyData, std::less<>>` allows you to store strings securely, but look them up using a transient `sqlite3_value` without ever allocating memory.
+
+```cpp
+// 1. Create your map with the C++14 heterogeneous lookup comparator: std::less<>
+std::map<SqliteStringOwned, int, std::less<>> my_map;
+
+// 2. Insert data by copying memory (SqliteStringOwned)
+my_map.emplace(SqliteStringOwned("my_key_1"), 100);
+my_map.emplace(SqliteStringOwned("my_key_2"), 200);
+
+// Inside your UDF scalar function:
+static void map_lookup_udf(sqlite3_context* ctx, int argc, sqlite3_value** argv) {
+    // 3. Create a zero-allocation View from the incoming parameter
+    SqliteStringView search_key(argv[0]);
+
+    // 4. Perform the map lookup instantly! No malloc() or std::string construction required.
+    auto it = my_map.find(search_key);
+    if (it != my_map.end()) {
+        sqlite3_result_int(ctx, it->second);
+    }
+}
+```
+
+### 2. Polymorphic Variants
+You can store Integers, Floats, Strings, and Blobs in the exact same `std::map` securely using `SqliteValueOwned`. The keys are perfectly sorted according to SQLite's native collation rules (`NULL < NUMERIC < TEXT < BLOB`).
+
+```cpp
+std::map<SqliteValueOwned, std::string, std::less<>> poly_map;
+
+// Inside your UDF scalar function inserting data:
+static void insert_poly_udf(sqlite3_context* ctx, int argc, sqlite3_value** argv) {
+    // Securely duplicates the transient sqlite3_value (could be Int, Float, Text, etc.)
+    SqliteValueOwned key_to_store(argv[0]);
+    poly_map.emplace(std::move(key_to_store), "Stored!");
+}
+
+// Inside your UDF searching for data:
+static void search_poly_udf(sqlite3_context* ctx, int argc, sqlite3_value** argv) {
+    // Zero-allocation lookup against the polymorphic map
+    SqliteValueView search_key(argv[0]);
+    
+    auto it = poly_map.find(search_key);
+    if (it != poly_map.end()) {
+        // ...
+    }
+}
+```
+
+### 3. Ergonomic String Builders
+Construct strings dynamically and seamlessly without ever managing memory directly.
+
+```cpp
+// Works inside UDFs or background threads. Uses sqlite3_malloc under the hood.
+SqliteStringOwned builder;
+builder.append("Hello ", 6);
+builder.appendchar(1, '[');
+builder.appendf("%d", 42); // Type-safe snprintf integration
+builder.appendchar(1, ']');
+
+// Result natively abstracts away sqlite3_result_text
+builder.result(ctx); // Outputs: "Hello [42]"
+```
+
+### 4. Fast Binding & Result Wrappers
+```cpp
+static void bind_example(sqlite3_stmt* stmt, sqlite3_value** argv) {
+    // Bind incoming SQLite values directly to a prepared statement
+    SqliteValueView val(argv[0]);
+    val.bind(stmt, 1); // Binds exactly as the original type (Int, Text, Blob, etc.)
+    
+    SqliteStringView str("static_text", 11);
+    str.bind(stmt, 2);
+}
+```
+
 For architectural details, please see [VALUE_KEYS_ARCHITECTURE.md](VALUE_KEYS_ARCHITECTURE.md).
