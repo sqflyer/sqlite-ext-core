@@ -2,7 +2,6 @@
 #define SQLITE3_MUTEX_LOCK_HPP
 
 #include <sqlite3.h>
-#include <sqlite3ext.h>
 
 /**
  * @brief An owning C++ wrapper around a dynamic sqlite3_mutex.
