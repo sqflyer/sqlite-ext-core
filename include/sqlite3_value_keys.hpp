@@ -3,6 +3,24 @@
 
 #include "sqlite3ext.h"
 #include <stdarg.h>
+#include <string.h>
+
+namespace SqliteMemoryUtil {
+    /**
+     * @brief Performs a fast lexicographical memory comparison.
+     * 
+     * Shared by String, Blob, and Value classes to replace manual char-by-char
+     * loops. Uses standard C memcmp for SIMD-accelerated performance.
+     */
+    inline bool memcmp_less(const void* val1, int len1, const void* val2, int len2) {
+        int min_len = (len1 < len2) ? len1 : len2;
+        int cmp = memcmp(val1, val2, min_len);
+        if (cmp != 0) {
+            return cmp < 0;
+        }
+        return len1 < len2;
+    }
+}
 
 /**
  * @file sqlite3_value_keys.hpp
@@ -14,6 +32,7 @@
  * std::unordered_map.
  */
 
+ 
 // ============================================================================
 // 1. STRING TYPES
 // ============================================================================
@@ -62,12 +81,7 @@ namespace SqliteStringUtil {
             return false;
         }
 
-        for (int i = 0; i < len1; ++i) {
-            if (val1[i] != val2[i]) {
-                return false;
-            }
-        }
-        return true;
+        return memcmp(val1, val2, len1) == 0;
     }
     
     /**
@@ -84,18 +98,7 @@ namespace SqliteStringUtil {
             return false;
         }
 
-        int min_len = (len1 < len2) ? len1 : len2;
-        for (int i = 0; i < min_len; ++i) {
-            unsigned char c1 = (unsigned char)val1[i];
-            unsigned char c2 = (unsigned char)val2[i];
-            if (c1 < c2) {
-                return true;
-            }
-            if (c1 > c2) {
-                return false;
-            }
-        }
-        return len1 < len2;
+        return SqliteMemoryUtil::memcmp_less(val1, len1, val2, len2);
     }
 }
 
@@ -112,6 +115,14 @@ class SqliteStringView {
     int m_size;
 
 public:
+    /** @brief Sets this object as the return result of a SQLite UDF context. */
+    void result(sqlite3_context* ctx) const {
+        sqlite3_result_text(ctx, data(), length(), SQLITE_TRANSIENT);
+    }
+    /** @brief Binds this object to a prepared SQLite statement at the given 1-based column index. */
+    int bind(sqlite3_stmt* stmt, int col) const {
+        return sqlite3_bind_text(stmt, col, data(), length(), SQLITE_TRANSIENT);
+    }
     /**
      * @brief Constructs a view over an existing string buffer.
      * @param data Pointer to the character array.
@@ -163,6 +174,14 @@ class SqliteStringOwned {
     sqlite3_str* m_str;
 
 public:
+    /** @brief Sets this object as the return result of a SQLite UDF context. */
+    void result(sqlite3_context* ctx) const {
+        sqlite3_result_text(ctx, value(), length(), SQLITE_TRANSIENT);
+    }
+    /** @brief Binds this object to a prepared SQLite statement at the given 1-based column index. */
+    int bind(sqlite3_stmt* stmt, int col) const {
+        return sqlite3_bind_text(stmt, col, value(), length(), SQLITE_TRANSIENT);
+    }
     /**
      * @brief Creates a new string builder tied to a specific database connection.
      * @param db The SQLite database connection.
@@ -397,14 +416,7 @@ namespace SqliteBlobUtil {
             return false;
         }
 
-        const char* p1 = static_cast<const char*>(val1);
-        const char* p2 = static_cast<const char*>(val2);
-        for (int i = 0; i < len1; ++i) {
-            if (p1[i] != p2[i]) {
-                return false;
-            }
-        }
-        return true;
+        return memcmp(val1, val2, len1) == 0;
     }
     
     /**
@@ -421,20 +433,7 @@ namespace SqliteBlobUtil {
             return false;
         }
 
-        int min_len = (len1 < len2) ? len1 : len2;
-        const char* p1 = static_cast<const char*>(val1);
-        const char* p2 = static_cast<const char*>(val2);
-        for (int i = 0; i < min_len; ++i) {
-            unsigned char c1 = (unsigned char)p1[i];
-            unsigned char c2 = (unsigned char)p2[i];
-            if (c1 < c2) {
-                return true;
-            }
-            if (c1 > c2) {
-                return false;
-            }
-        }
-        return len1 < len2;
+        return SqliteMemoryUtil::memcmp_less(val1, len1, val2, len2);
     }
 }
 
@@ -451,6 +450,14 @@ class SqliteBlobView {
     int m_size;
 
 public:
+    /** @brief Sets this object as the return result of a SQLite UDF context. */
+    void result(sqlite3_context* ctx) const {
+        sqlite3_result_blob(ctx, data(), size(), SQLITE_TRANSIENT);
+    }
+    /** @brief Binds this object to a prepared SQLite statement at the given 1-based column index. */
+    int bind(sqlite3_stmt* stmt, int col) const {
+        return sqlite3_bind_blob(stmt, col, data(), size(), SQLITE_TRANSIENT);
+    }
     /**
      * @brief Constructs a view over an existing binary buffer.
      * @param data Pointer to the binary payload.
@@ -503,6 +510,14 @@ class SqliteBlobOwned {
     int m_size;
 
 public:
+    /** @brief Sets this object as the return result of a SQLite UDF context. */
+    void result(sqlite3_context* ctx) const {
+        sqlite3_result_blob(ctx, data(), size(), SQLITE_TRANSIENT);
+    }
+    /** @brief Binds this object to a prepared SQLite statement at the given 1-based column index. */
+    int bind(sqlite3_stmt* stmt, int col) const {
+        return sqlite3_bind_blob(stmt, col, data(), size(), SQLITE_TRANSIENT);
+    }
     /**
      * @brief Allocates memory and copies the provided binary data.
      * @param data Pointer to the binary payload to copy.
@@ -759,20 +774,40 @@ namespace SqliteValueUtil {
      * @brief Performs a polymorphic less-than comparison of two sqlite3_values.
      */
     inline bool less(const sqlite3_value* v1, const sqlite3_value* v2) {
+        auto type_rank = [](int t) -> int {
+            switch (t) {
+                case SQLITE_NULL:    return 0; // NULL is smallest
+                case SQLITE_INTEGER: 
+                case SQLITE_FLOAT:   return 1; // Both are Numeric class
+                case SQLITE_TEXT:    return 2;
+                case SQLITE_BLOB:    return 3;
+                default:             return 0;
+            }
+        };
+
         int t1 = type(v1);
         int t2 = type(v2);
-        if (t1 != t2) {
-            return t1 < t2;
+        int r1 = type_rank(t1);
+        int r2 = type_rank(t2);
+        
+        if (r1 != r2) {
+            return r1 < r2;
         }
         
         sqlite3_value* mut_v1 = const_cast<sqlite3_value*>(v1);
         sqlite3_value* mut_v2 = const_cast<sqlite3_value*>(v2);
 
-        switch (t1) {
-            case SQLITE_INTEGER: 
+        // Both are Numeric: compare as double, or as int64 if both are integers
+        if (r1 == 1) {
+            if (t1 == SQLITE_INTEGER && t2 == SQLITE_INTEGER) {
                 return sqlite3_value_int64(mut_v1) < sqlite3_value_int64(mut_v2);
-            case SQLITE_FLOAT: 
-                return sqlite3_value_double(mut_v1) < sqlite3_value_double(mut_v2);
+            }
+            double d1 = sqlite3_value_double(mut_v1);
+            double d2 = sqlite3_value_double(mut_v2);
+            return d1 < d2;
+        }
+
+        switch (t1) {
             case SQLITE_TEXT: 
             case SQLITE_BLOB: {
                 int len1 = sqlite3_value_bytes(mut_v1);
@@ -790,18 +825,7 @@ namespace SqliteValueUtil {
                     return false;
                 }
                 
-                int min_len = (len1 < len2) ? len1 : len2;
-                for (int i = 0; i < min_len; ++i) {
-                    unsigned char c1 = (unsigned char)data1[i];
-                    unsigned char c2 = (unsigned char)data2[i];
-                    if (c1 < c2) {
-                        return true;
-                    }
-                    if (c1 > c2) {
-                        return false;
-                    }
-                }
-                return len1 < len2;
+                return SqliteMemoryUtil::memcmp_less(data1, len1, data2, len2);
             }
             case SQLITE_NULL: 
                 return false;
@@ -822,6 +846,14 @@ class SqliteValueView {
     const sqlite3_value* m_val;
 
 public:
+    /** @brief Sets this object as the return result of a SQLite UDF context. */
+    void result(sqlite3_context* ctx) const {
+        sqlite3_result_value(ctx, const_cast<sqlite3_value*>(get()));
+    }
+    /** @brief Binds this object to a prepared SQLite statement at the given 1-based column index. */
+    int bind(sqlite3_stmt* stmt, int col) const {
+        return sqlite3_bind_value(stmt, col, get());
+    }
     /**
      * @brief Constructs a view over a temporary `sqlite3_value`.
      * @param val The transient value pointer passed from SQLite.
@@ -876,6 +908,14 @@ class SqliteValueOwned {
     sqlite3_value* m_val;
 
 public:
+    /** @brief Sets this object as the return result of a SQLite UDF context. */
+    void result(sqlite3_context* ctx) const {
+        sqlite3_result_value(ctx, const_cast<sqlite3_value*>(get()));
+    }
+    /** @brief Binds this object to a prepared SQLite statement at the given 1-based column index. */
+    int bind(sqlite3_stmt* stmt, int col) const {
+        return sqlite3_bind_value(stmt, col, get());
+    }
     /**
      * @brief Duplicates the temporary value into owned memory.
      * @param val The transient value to copy.

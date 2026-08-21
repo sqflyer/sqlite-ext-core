@@ -35,7 +35,10 @@ Use these `Owned` classes as the actual Keys stored inside your Maps.
 - `SqliteBlobUtil`
 - `SqliteValueUtil`
 
-These hold the shared logic for computing `FNV-1a` hashes, equality, and lexicographical less-than comparisons. By centralizing this logic, we enable **Heterogeneous Lookups**, allowing a `View` object to directly search and compare against an `Owned` object natively.
+These hold the shared logic for computing `FNV-1a` hashes, equality, and lexicographical less-than comparisons. To guarantee optimal performance, these comparisons replace manual byte-loops with `SqliteMemoryUtil::memcmp_less` which relies on SIMD-accelerated C `memcmp`. Furthermore, `SqliteValueUtil` implements the official SQLite collation order (`NULL < NUMERIC < TEXT < BLOB`). By centralizing this logic, we enable **Heterogeneous Lookups**, allowing a `View` object to directly search and compare against an `Owned` object natively.
+
+## SQLite Integration Helpers
+All `View` and `Owned` wrappers provide `bind(sqlite3_stmt*, int col)` and `result(sqlite3_context*)` helper methods. These methods abstract away the `sqlite3_bind_*` and `sqlite3_result_*` C-APIs, making it effortless to return custom payloads from UDFs or bind data into prepared statements using `SQLITE_TRANSIENT` memory lifetimes.
 
 ## Polymorphic Variants
 The `SqliteValueOwned` and `SqliteValueView` classes act as type-safe polymorphic variant map keys. A map constructed with `std::map<SqliteValueOwned, T>` can safely store and query Integer, Float, Text, and Blob variants simultaneously without type collisions.

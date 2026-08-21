@@ -86,6 +86,116 @@ void test_value_types(sqlite3* db) {
     sqlite3_finalize(stmt);
 }
 
+void test_collation(sqlite3* db) {
+    sqlite3_stmt* stmt;
+    sqlite3_prepare_v2(db, "SELECT NULL, 100, 0.5, 'hello', x'0102';", -1, &stmt, nullptr);
+    sqlite3_step(stmt);
+    
+    SqliteValueOwned val_null(sqlite3_column_value(stmt, 0));
+    SqliteValueOwned val_int(sqlite3_column_value(stmt, 1));
+    SqliteValueOwned val_float(sqlite3_column_value(stmt, 2));
+    SqliteValueOwned val_text(sqlite3_column_value(stmt, 3));
+    SqliteValueOwned val_blob(sqlite3_column_value(stmt, 4));
+    
+    // NULL is smallest
+    assert(val_null < val_int);
+    assert(val_null < val_float);
+    assert(val_null < val_text);
+    assert(val_null < val_blob);
+    
+    // Float(0.5) < Int(100)
+    assert(val_float < val_int);
+    
+    // Numeric < Text
+    assert(val_int < val_text);
+    
+    // Text < Blob
+    assert(val_text < val_blob);
+    
+    sqlite3_finalize(stmt);
+}
+
+void test_bind(sqlite3* db) {
+    SqliteStringOwned str(db);
+    str.appendall("bind_test");
+    
+    sqlite3_stmt* stmt;
+    sqlite3_prepare_v2(db, "SELECT ?;", -1, &stmt, nullptr);
+    
+    // Test bind
+    str.bind(stmt, 1);
+    sqlite3_step(stmt);
+    
+    const unsigned char* res = sqlite3_column_text(stmt, 0);
+    assert(strcmp((const char*)res, "bind_test") == 0);
+    
+    sqlite3_finalize(stmt);
+}
+
+static void dummy_udf(sqlite3_context* ctx, int argc, sqlite3_value** argv) {
+    SqliteStringView str("result_test", 11);
+    str.result(ctx);
+}
+
+void test_result(sqlite3* db) {
+    sqlite3_create_function(db, "test_result_fn", 0, SQLITE_UTF8, nullptr, dummy_udf, nullptr, nullptr);
+    
+    sqlite3_stmt* stmt;
+    sqlite3_prepare_v2(db, "SELECT test_result_fn();", -1, &stmt, nullptr);
+    sqlite3_step(stmt);
+    
+    const unsigned char* res = sqlite3_column_text(stmt, 0);
+    assert(strcmp((const char*)res, "result_test") == 0);
+    
+    sqlite3_finalize(stmt);
+}
+
+void test_string_builder(sqlite3* db) {
+    SqliteStringOwned str(db);
+    str.append("hello world", 5);
+    str.appendchar(1, ' ');
+    str.appendf("%d", 42);
+    
+    SqliteStringView view("hello 42", 8);
+    assert(str == view);
+    
+    str.reset();
+    assert(str.length() == 0);
+}
+
+void test_move_semantics() {
+    SqliteStringOwned str1("move_test");
+    SqliteStringOwned str2(std::move(str1));
+    assert(str2.length() == 9);
+    assert(str1.length() == 0 || str1.value() == nullptr);
+    
+    char blob_data[] = {0x01, 0x02};
+    SqliteBlobOwned blob1(blob_data, 2);
+    SqliteBlobOwned blob2(std::move(blob1));
+    assert(blob2.size() == 2);
+    assert(blob1.size() == 0 || blob1.data() == nullptr);
+}
+
+void test_value_strict_equality(sqlite3* db) {
+    sqlite3_stmt* stmt;
+    sqlite3_prepare_v2(db, "SELECT 5, 5.0, 5, '5';", -1, &stmt, nullptr);
+    sqlite3_step(stmt);
+    
+    SqliteValueOwned val_int1(sqlite3_column_value(stmt, 0));
+    SqliteValueOwned val_float(sqlite3_column_value(stmt, 1));
+    SqliteValueOwned val_int2(sqlite3_column_value(stmt, 2));
+    SqliteValueOwned val_text(sqlite3_column_value(stmt, 3));
+    
+    // Int == Int
+    assert(val_int1 == val_int2);
+    // Strict typing: Int != Float
+    assert(val_int1 != val_float);
+    // Strict typing: Int != Text
+    assert(val_int1 != val_text);
+    
+    sqlite3_finalize(stmt);
+}
+
 int main() {
     sqlite3_initialize();
     
@@ -103,6 +213,24 @@ int main() {
     
     cout << "Testing Value Types..." << endl;
     test_value_types(db);
+    
+    cout << "Testing String Builder..." << endl;
+    test_string_builder(db);
+    
+    cout << "Testing Move Semantics..." << endl;
+    test_move_semantics();
+    
+    cout << "Testing Strict Equality..." << endl;
+    test_value_strict_equality(db);
+    
+    cout << "Testing Collation Order..." << endl;
+    test_collation(db);
+    
+    cout << "Testing Bind Methods..." << endl;
+    test_bind(db);
+    
+    cout << "Testing Result Methods..." << endl;
+    test_result(db);
     
     sqlite3_close(db);
     sqlite3_shutdown();
