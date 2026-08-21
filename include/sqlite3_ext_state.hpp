@@ -12,7 +12,7 @@
  * - Automated Garbage Collection tied to SQLite's connection lifecycle (`xDestroy`).
  * - Cross-Platform Read/Write Locks (Windows SRWLOCK, POSIX pthreads, and WASM).
  * - C++ RAII Guards (`ReadGuard` / `WriteGuard`) for exception-safe locking.
- * - Embedded C++ Objects: Automatically calls Placement New and Pseudo-Destructors for `T`.
+ * - Embedded C++ Objects: Automatically calls `sqlite_construct_at` and `sqlite_destroy_at` for `T`.
  * - In-Memory Database Isolation (`:memory:` instances don't share state).
  * 
  * Usage:
@@ -34,8 +34,11 @@
 #ifndef SQLITE3_EXT_STATE_HPP
 #define SQLITE3_EXT_STATE_HPP
 
-#include "sqlite3_ext_state.h" // Required for EXT_RWLOCK macros and SQLITE_EXT_STATE_AUXDATA_SLOT
-#include <new>
+#include "sqlite3_ext_state.h" // Required for SQLITE_EXT_STATE_AUXDATA_SLOT
+#include "sqlite3_allocator.hpp"
+#include "sqlite3_rw_lock.hpp"
+#include "sqlite3_tiny_lock.hpp"
+#include "sqlite3_mutex_lock.hpp"
 
 /**
  * @brief Zero-dependency C++ template for per-database shared extension state.
@@ -47,17 +50,20 @@ template <typename T>
 class SqliteExtState {
 private:
     struct Entry {
-        char *db_path;
-        int refcount;
-        sqlite3_mutex *ref_mutex;
-        ext_rwlock_t state_mutex;
-        void (*free_fn)(T*);
-        Entry *next;
+        char *db_path = nullptr;
+        int refcount = 0;
+        SqliteTinyLock ref_mutex;
+        SqliteRwLock state_mutex;
+        Entry *next = nullptr;
         T state;
+        
+        ~Entry() {
+            if (db_path) sqlite3_free(db_path);
+        }
     };
 
     static Entry* registry_head;
-    static sqlite3_mutex* registry_mutex;
+    static SqliteMutex* registry_mutex;
 
     /**
      * @brief Resolves the database path for use as a registry key.
@@ -81,7 +87,7 @@ private:
             sqlite3_mutex *master = sqlite3_mutex_alloc(SQLITE_MUTEX_STATIC_MASTER);
             sqlite3_mutex_enter(master);
             if (!registry_mutex) {
-                registry_mutex = sqlite3_mutex_alloc(SQLITE_MUTEX_STATIC_APP1);
+                registry_mutex = sqlite_new<SqliteMutex>(SQLITE_MUTEX_STATIC_APP1);
             }
             sqlite3_mutex_leave(master);
         }
@@ -92,29 +98,29 @@ private:
      */
     static Entry* entry_retain(Entry *entry) {
         if (!entry) return nullptr;
-        sqlite3_mutex_enter(entry->ref_mutex);
+        entry->ref_mutex.lock();
         entry->refcount++;
-        sqlite3_mutex_leave(entry->ref_mutex);
+        entry->ref_mutex.unlock();
         return entry;
     }
 
     /**
      * @brief Safely destroys a state entry.
      * Handles double-checked locking to prevent race conditions during deletion,
-     * removes the entry from the global linked list, triggers the C++ destructor
-     * or custom free function, and frees all associated memory and locks.
+     * removes the entry from the global linked list, and safely deletes the entry
+     * via sqlite_delete, automatically invoking all C++ destructors.
      */
     static void entry_free(Entry *entry) {
         ensure_mutex_init();
-        sqlite3_mutex_enter(registry_mutex);
+        registry_mutex->lock();
         
-        sqlite3_mutex_enter(entry->ref_mutex);
+        entry->ref_mutex.lock();
         if (entry->refcount > 0) {
-            sqlite3_mutex_leave(entry->ref_mutex);
-            sqlite3_mutex_leave(registry_mutex);
+            entry->ref_mutex.unlock();
+            registry_mutex->unlock();
             return;
         }
-        sqlite3_mutex_leave(entry->ref_mutex);
+        entry->ref_mutex.unlock();
         
         Entry **curr = &registry_head;
         while (*curr) {
@@ -124,19 +130,9 @@ private:
             }
             curr = &(*curr)->next;
         }
-        sqlite3_mutex_leave(registry_mutex);
+        registry_mutex->unlock();
         
-        EXT_RWLOCK_DESTROY(entry->state_mutex);
-        
-        if (entry->free_fn) {
-            entry->free_fn(&entry->state);
-        } else {
-            entry->state.~T(); // Run C++ destructor if no custom free function provided
-        }
-        
-        if (entry->db_path) sqlite3_free(entry->db_path);
-        if (entry->ref_mutex) sqlite3_mutex_free(entry->ref_mutex);
-        sqlite3_free(entry);
+        sqlite_delete(entry);
     }
 
     /**
@@ -145,10 +141,10 @@ private:
      */
     static void entry_release(Entry *entry) {
         if (!entry) return;
-        sqlite3_mutex_enter(entry->ref_mutex);
+        entry->ref_mutex.lock();
         entry->refcount--;
         int count = entry->refcount;
-        sqlite3_mutex_leave(entry->ref_mutex);
+        entry->ref_mutex.unlock();
         
         if (count == 0) {
             entry_free(entry);
@@ -157,41 +153,27 @@ private:
 
     /**
      * @brief Allocates and initializes a new state entry.
-     * Configures the internal locks, deep-copies the database path, and uses
-     * placement `new` to properly construct the embedded C++ state object.
+     * Deep-copies the database path and uses `sqlite_new` to properly 
+     * construct the embedded C++ state object and locks.
      * Assumes the caller holds the registry lock, as it injects itself into the linked list.
      */
-    static Entry* entry_alloc(const char *db_path, void (*init_fn)(T*), void (*free_fn)(T*)) {
-        Entry *entry = (Entry*) sqlite3_malloc(sizeof(Entry));
+    static Entry* entry_alloc(const char *db_path, void (*init_fn)(T*)) {
+        Entry *entry = sqlite_new<Entry>();
         if (entry) {
             int path_len = strlen(db_path);
             entry->db_path = (char*)sqlite3_malloc(path_len + 1);
             if (entry->db_path) {
                 memcpy(entry->db_path, db_path, path_len + 1);
             } else {
-                sqlite3_free(entry);
-                entry = nullptr;
+                sqlite_delete(entry);
+                return nullptr;
             }
-        }
-        if (entry) {
-            entry->ref_mutex = sqlite3_mutex_alloc(SQLITE_MUTEX_FAST);
-            if (!entry->ref_mutex) {
-                sqlite3_free(entry->db_path);
-                sqlite3_free(entry);
-                entry = nullptr;
-            }
-        }
-        if (entry) {
-            EXT_RWLOCK_INIT(entry->state_mutex);
-            
-            new (&entry->state) T(); // Placement new for zero-init/constructor
             
             if (init_fn) {
                 init_fn(&entry->state);
             }
             
             entry->refcount = 1;
-            entry->free_fn = free_fn;
             entry->next = registry_head;
             registry_head = entry;
         }
@@ -222,9 +204,9 @@ private:
      */
     static Entry* entry_get(const char *db_path) {
         ensure_mutex_init();
-        sqlite3_mutex_enter(registry_mutex);
+        registry_mutex->lock();
         Entry *entry = entry_find_locked(db_path);
-        sqlite3_mutex_leave(registry_mutex);
+        registry_mutex->unlock();
         return entry;
     }
 
@@ -232,14 +214,14 @@ private:
      * @brief Retrieves an existing state entry or creates a new one if it does not exist.
      * Thread-safe against concurrent initialization attempts across multiple connections.
      */
-    static Entry* entry_get_or_create(const char *db_path, void (*init_fn)(T*), void (*free_fn)(T*)) {
+    static Entry* entry_get_or_create(const char *db_path, void (*init_fn)(T*)) {
         ensure_mutex_init();
-        sqlite3_mutex_enter(registry_mutex);
+        registry_mutex->lock();
         Entry *entry = entry_find_locked(db_path);
         if (!entry) {
-            entry = entry_alloc(db_path, init_fn, free_fn);
+            entry = entry_alloc(db_path, init_fn);
         }
-        sqlite3_mutex_leave(registry_mutex);
+        registry_mutex->unlock();
         return entry;
     }
 
@@ -251,11 +233,11 @@ public:
     }
 
     /** @brief Initializes or fetches the shared state for the attached database. */
-    static void* init(sqlite3 *db, void (*init_fn)(T*) = nullptr, void (*free_fn)(T*) = nullptr) {
+    static void* init(sqlite3 *db, void (*init_fn)(T*) = nullptr) {
         if (!db) return nullptr;
         char resolved_path[128];
         const char *db_path = get_db_path(db, resolved_path);
-        return (void*)entry_get_or_create(db_path, init_fn, free_fn);
+        return (void*)entry_get_or_create(db_path, init_fn);
     }
 
     /** @brief Fetches state for the current query using the optimized 3-layer lookup. */
@@ -297,7 +279,7 @@ public:
     static void read_acquire(T *state) {
         if (!state) return;
         Entry *entry = (Entry *)((char *)state - offsetof(Entry, state));
-        EXT_RWLOCK_READ_ACQUIRE(entry->state_mutex);
+        entry->state_mutex.lock_read();
     }
 
     /**
@@ -306,7 +288,7 @@ public:
     static void read_release(T *state) {
         if (!state) return;
         Entry *entry = (Entry *)((char *)state - offsetof(Entry, state));
-        EXT_RWLOCK_READ_RELEASE(entry->state_mutex);
+        entry->state_mutex.unlock_read();
     }
 
     /**
@@ -316,7 +298,7 @@ public:
     static void write_acquire(T *state) {
         if (!state) return;
         Entry *entry = (Entry *)((char *)state - offsetof(Entry, state));
-        EXT_RWLOCK_WRITE_ACQUIRE(entry->state_mutex);
+        entry->state_mutex.lock_write();
     }
 
     /**
@@ -325,7 +307,7 @@ public:
     static void write_release(T *state) {
         if (!state) return;
         Entry *entry = (Entry *)((char *)state - offsetof(Entry, state));
-        EXT_RWLOCK_WRITE_RELEASE(entry->state_mutex);
+        entry->state_mutex.unlock_write();
     }
 
     /**
@@ -359,6 +341,6 @@ template <typename T>
 typename SqliteExtState<T>::Entry* SqliteExtState<T>::registry_head = nullptr;
 
 template <typename T>
-sqlite3_mutex* SqliteExtState<T>::registry_mutex = nullptr;
+SqliteMutex* SqliteExtState<T>::registry_mutex = nullptr;
 
 #endif // SQLITE3_EXT_STATE_HPP

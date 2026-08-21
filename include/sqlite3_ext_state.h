@@ -27,50 +27,18 @@
 #define SQLITE3_EXT_STATE_H
 
 #include "sqlite3ext.h"
+#include <sqlite3.h>
 #include <string.h>
-#include <stdlib.h>
 #include <stddef.h>
 #include <stdio.h>
+#include "sqlite3_tiny_lock.h"
 
 #ifndef SQLITE_EXT_STATE_AUXDATA_SLOT
 /* Use a high pseudo-random slot to avoid colliding with argument caching (slot 0..N) */
 #define SQLITE_EXT_STATE_AUXDATA_SLOT 0x45585400
 #endif
 
-/* =================================================================================
- * CROSS-PLATFORM READ/WRITE LOCKS
- * =================================================================================
- * To support high-concurrency without degrading read performance, we map our macros
- * to native OS Read/Write locks. These allow concurrent readers but exclusive writers.
- */
-#ifdef _WIN32
-#include <windows.h>
-typedef SRWLOCK ext_rwlock_t;
-#define EXT_RWLOCK_INIT(lock) InitializeSRWLock(&(lock))
-#define EXT_RWLOCK_READ_ACQUIRE(lock) AcquireSRWLockShared(&(lock))
-#define EXT_RWLOCK_READ_RELEASE(lock) ReleaseSRWLockShared(&(lock))
-#define EXT_RWLOCK_WRITE_ACQUIRE(lock) AcquireSRWLockExclusive(&(lock))
-#define EXT_RWLOCK_WRITE_RELEASE(lock) ReleaseSRWLockExclusive(&(lock))
-#define EXT_RWLOCK_DESTROY(lock) /* SRWLOCK does not require explicit destruction */
-#elif defined(__wasm__) || defined(__EMSCRIPTEN__)
-/* WASM environments are typically single-threaded. Use sqlite3_mutex as a safe fallback. */
-typedef sqlite3_mutex* ext_rwlock_t;
-#define EXT_RWLOCK_INIT(lock) (lock) = sqlite3_mutex_alloc(SQLITE_MUTEX_FAST)
-#define EXT_RWLOCK_READ_ACQUIRE(lock) sqlite3_mutex_enter(lock)
-#define EXT_RWLOCK_READ_RELEASE(lock) sqlite3_mutex_leave(lock)
-#define EXT_RWLOCK_WRITE_ACQUIRE(lock) sqlite3_mutex_enter(lock)
-#define EXT_RWLOCK_WRITE_RELEASE(lock) sqlite3_mutex_leave(lock)
-#define EXT_RWLOCK_DESTROY(lock) sqlite3_mutex_free(lock)
-#else
-#include <pthread.h>
-typedef pthread_rwlock_t ext_rwlock_t;
-#define EXT_RWLOCK_INIT(lock) pthread_rwlock_init(&(lock), NULL)
-#define EXT_RWLOCK_READ_ACQUIRE(lock) pthread_rwlock_rdlock(&(lock))
-#define EXT_RWLOCK_READ_RELEASE(lock) pthread_rwlock_unlock(&(lock))
-#define EXT_RWLOCK_WRITE_ACQUIRE(lock) pthread_rwlock_wrlock(&(lock))
-#define EXT_RWLOCK_WRITE_RELEASE(lock) pthread_rwlock_unlock(&(lock))
-#define EXT_RWLOCK_DESTROY(lock) pthread_rwlock_destroy(&(lock))
-#endif
+#include "sqlite3_rw_lock.h"
 
 /*
  * DEFINE_SQLITE_EXT_STATE(StateType, Prefix)
@@ -96,7 +64,7 @@ typedef pthread_rwlock_t ext_rwlock_t;
  * 3. Thread Safety and Concurrency
  *    Since SQLite can call into the extension from multiple threads concurrently, 
  *    the registry is protected by a fast `sqlite3_mutex`. The reference count inside 
- *    the state wrapper is also protected by its own fast `sqlite3_mutex`.
+ *    the state wrapper is also protected by its own microscopic `sqlite3_tiny_lock`.
  * 
  * 4. The 3-Layer Lookup (The Hot Path)
  *    To ensure fetching state inside a tight scalar function loop is practically free, 
@@ -163,13 +131,17 @@ typedef pthread_rwlock_t ext_rwlock_t;
  * causing a permanent memory leak for the lifetime of the process!
  */
 
+#ifdef __cplusplus
+#define SQLITE_EXTENSION_STATE(StateType) \
+    static_assert(false, "Do not use SQLITE_EXTENSION_STATE macro in C++. Include sqlite3_ext_state.hpp and use SqliteExtState<T> instead.");
+#else
 
 #define SQLITE_EXTENSION_STATE(StateType) \
     typedef struct StateType##_Entry { \
         char *db_path; \
         int refcount; \
-        sqlite3_mutex *ref_mutex; \
-        ext_rwlock_t state_mutex; \
+        sqlite3_tiny_lock ref_mutex; \
+        sqlite3_rw_lock state_mutex; \
         void (*free_fn)(StateType*); \
         struct StateType##_Entry *next; \
         StateType state; \
@@ -215,9 +187,9 @@ typedef pthread_rwlock_t ext_rwlock_t;
      */ \
     static StateType##_Entry* __##StateType##_entry_retain(StateType##_Entry *entry) { \
         if (!entry) return NULL; \
-        sqlite3_mutex_enter(entry->ref_mutex); \
+        sqlite3_tiny_lock_lock(&entry->ref_mutex); \
         entry->refcount++; \
-        sqlite3_mutex_leave(entry->ref_mutex); \
+        sqlite3_tiny_lock_unlock(&entry->ref_mutex); \
         return entry; \
     } \
     \
@@ -237,13 +209,13 @@ typedef pthread_rwlock_t ext_rwlock_t;
          * the global registry_mutex here, another thread could have searched the \
          * registry, found this entry, and retained it! If so, we MUST abort the free. \
          */ \
-        sqlite3_mutex_enter(entry->ref_mutex); \
+        sqlite3_tiny_lock_lock(&entry->ref_mutex); \
         if (entry->refcount > 0) { \
-            sqlite3_mutex_leave(entry->ref_mutex); \
+            sqlite3_tiny_lock_unlock(&entry->ref_mutex); \
             sqlite3_mutex_leave(StateType##_registry_mutex); \
             return; \
         } \
-        sqlite3_mutex_leave(entry->ref_mutex); \
+        sqlite3_tiny_lock_unlock(&entry->ref_mutex); \
         \
         /* Step 2: Safe to remove the entry from the global linked list */ \
         StateType##_Entry **curr = &StateType##_registry_head; \
@@ -257,7 +229,7 @@ typedef pthread_rwlock_t ext_rwlock_t;
         sqlite3_mutex_leave(StateType##_registry_mutex); \
         \
         /* Step 2: Destroy the cross-platform read-write lock */ \
-        EXT_RWLOCK_DESTROY(entry->state_mutex); \
+        sqlite3_rw_lock_destroy(&entry->state_mutex); \
         \
         /* Step 3: Run the user's custom cleanup routine, if any */ \
         if (entry->free_fn) { \
@@ -266,7 +238,7 @@ typedef pthread_rwlock_t ext_rwlock_t;
         \
         /* Step 4: Free the deep-copied strings and internal SQLite mutexes */ \
         if (entry->db_path) sqlite3_free(entry->db_path); \
-        if (entry->ref_mutex) sqlite3_mutex_free(entry->ref_mutex); \
+        /* ref_mutex is inline TinyLock, no free needed */ \
         sqlite3_free(entry); \
     } \
     \
@@ -276,10 +248,10 @@ typedef pthread_rwlock_t ext_rwlock_t;
      */ \
     static void __##StateType##_entry_release(StateType##_Entry *entry) { \
         if (!entry) return; \
-        sqlite3_mutex_enter(entry->ref_mutex); \
+        sqlite3_tiny_lock_lock(&entry->ref_mutex); \
         entry->refcount--; \
         int count = entry->refcount; \
-        sqlite3_mutex_leave(entry->ref_mutex); \
+        sqlite3_tiny_lock_unlock(&entry->ref_mutex); \
         \
         if (count == 0) { \
             __##StateType##_entry_free(entry); \
@@ -307,17 +279,12 @@ typedef pthread_rwlock_t ext_rwlock_t;
             } \
         } \
         if (entry) { \
-            /* Step 3: Allocate the internal fast mutex for protecting the refcount */ \
-            entry->ref_mutex = sqlite3_mutex_alloc(SQLITE_MUTEX_FAST); \
-            if (!entry->ref_mutex) { \
-                sqlite3_free(entry->db_path); \
-                sqlite3_free(entry); \
-                entry = NULL; \
-            } \
+            /* Step 3: Initialize the inline tiny lock for protecting the refcount */ \
+            sqlite3_tiny_lock_init(&entry->ref_mutex); \
         } \
         if (entry) { \
             /* Step 4: Initialize the cross-platform state R/W lock */ \
-            EXT_RWLOCK_INIT(entry->state_mutex); \
+            sqlite3_rw_lock_init(&entry->state_mutex); \
             \
             /* Step 5: Run the user's custom init routine, or zero-init */ \
             if (init_fn) { \
@@ -450,7 +417,7 @@ typedef pthread_rwlock_t ext_rwlock_t;
     static void StateType##_read_acquire(StateType *state) { \
         if (!state) return; \
         StateType##_Entry *entry = (StateType##_Entry *)((char *)state - offsetof(StateType##_Entry, state)); \
-        EXT_RWLOCK_READ_ACQUIRE(entry->state_mutex); \
+        sqlite3_rw_lock_read_acquire(&entry->state_mutex); \
     } \
     \
     /* \
@@ -459,7 +426,7 @@ typedef pthread_rwlock_t ext_rwlock_t;
     static void StateType##_read_release(StateType *state) { \
         if (!state) return; \
         StateType##_Entry *entry = (StateType##_Entry *)((char *)state - offsetof(StateType##_Entry, state)); \
-        EXT_RWLOCK_READ_RELEASE(entry->state_mutex); \
+        sqlite3_rw_lock_read_release(&entry->state_mutex); \
     } \
     \
     /* \
@@ -468,7 +435,7 @@ typedef pthread_rwlock_t ext_rwlock_t;
     static void StateType##_write_acquire(StateType *state) { \
         if (!state) return; \
         StateType##_Entry *entry = (StateType##_Entry *)((char *)state - offsetof(StateType##_Entry, state)); \
-        EXT_RWLOCK_WRITE_ACQUIRE(entry->state_mutex); \
+        sqlite3_rw_lock_write_acquire(&entry->state_mutex); \
     } \
     \
     /* \
@@ -477,7 +444,9 @@ typedef pthread_rwlock_t ext_rwlock_t;
     static void StateType##_write_release(StateType *state) { \
         if (!state) return; \
         StateType##_Entry *entry = (StateType##_Entry *)((char *)state - offsetof(StateType##_Entry, state)); \
-        EXT_RWLOCK_WRITE_RELEASE(entry->state_mutex); \
+        sqlite3_rw_lock_write_release(&entry->state_mutex); \
     }
+
+#endif /* __cplusplus */
 
 #endif /* SQLITE3_EXT_STATE_H */

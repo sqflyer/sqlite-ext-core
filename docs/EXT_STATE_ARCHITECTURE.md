@@ -18,7 +18,7 @@ To achieve extreme performance without lock contention, the state manager uses a
    When a scalar function is called, it first checks SQLite's internal auxdata. This is an immediate pointer dereference. Over 99% of queries hit this fast path, resulting in nanosecond-level lookups with zero mutex locking.
    
 2. **Layer 2: The Warm Path (The Global Registry)**
-   If the fast path misses (e.g., this is the first row of a new query), the extension acquires a fast `sqlite3_mutex` and looks up the database's filepath in a global linked list (the Registry). If it finds the entry for this database, it increments the reference count, caches the pointer in Layer 1 using `sqlite3_set_auxdata`, and returns.
+   If the fast path misses (e.g., this is the first row of a new query), the extension acquires the global registry lock (wrapped beautifully in a `SqliteMutex(SQLITE_MUTEX_STATIC_APP1)` object) and looks up the database's filepath in a global linked list (the Registry). If it finds the entry for this database, it increments the reference count, caches the pointer in Layer 1 using `sqlite3_set_auxdata`, and returns.
 
 3. **Layer 3: The Cold Path (Initialization)**
    If the database filepath is not in the registry, the extension dynamically allocates a new state registry entry, initializes the read/write locks, runs the user's custom `init_fn`, inserts it into the global linked list, caches it in Layer 1, and returns.
@@ -38,14 +38,17 @@ A critical race condition exists during garbage collection if two connections to
 - Connection A finishes freeing the memory, leaving Connection B with a dangling pointer (Use-After-Free).
 
 **The Fix (Double-Checked Locking):**
-The architecture uses strict double-checked locking using a secondary mutex (`entry->ref_mutex`). During destruction, the extension holds *both* the global registry lock and the entry's ref lock. It verifies the refcount is still exactly `0` before committing to the memory deallocation, perfectly preventing the ghost removal race condition.
+The architecture uses strict double-checked locking using a secondary, microscopic lock (`entry->ref_mutex`, implemented as a `sqlite3_tiny_lock` to avoid an 8-byte heap allocation). During destruction, the extension holds *both* the global registry lock and the entry's ref lock. It verifies the refcount is still exactly `0` before committing to the memory deallocation, perfectly preventing the ghost removal race condition.
 
 ## 5. In-Memory Isolation
 In-memory databases (`:memory:`) all share the exact same filepath string (`:memory:`). If the registry relied strictly on filepaths, all in-memory databases would accidentally share the same state.
 To prevent this, the architecture intercepts `:memory:` filepaths and dynamically concatenates the raw memory address of the SQLite connection pointer (e.g., `:memory:0x1234abcd`). This guarantees perfect isolation for in-memory databases.
 
-## 6. C++ Memory Lifecycle (`sqlite3_ext_state.hpp`)
+## 6. Language Boundaries
+The architecture enforces a strict compile-time boundary between C and C++. If a developer attempts to use the pure C `SQLITE_EXTENSION_STATE` macro inside a C++ compiler, it evaluates to a `static_assert(false)` halting compilation. This forces developers to use the `SqliteExtState<T>` C++ template, preventing memory leaks for embedded C++ objects.
+
+## 7. C++ Memory Lifecycle (`sqlite3_ext_state.hpp`)
 While C simply allocates structs using `sqlite3_malloc`, the C++ template (`SqliteExtState<T>`) must seamlessly support embedding complex C++ objects (like `std::string` or `std::vector`) directly inside the state without causing memory leaks or constructor bypassing.
 
-1. **Placement New**: During the Cold Path initialization, after allocating the raw C memory via `sqlite3_malloc`, the C++ template executes a placement `new` operator (`new (&entry->state) T()`). This forces the C++ compiler to run the default constructors for all embedded objects inside the raw SQLite memory block.
-2. **Pseudo-Destructors**: During Garbage Collection, if a custom `free_fn` is not provided, the template manually triggers the pseudo-destructor of the state (`entry->state.~T()`) *before* calling `sqlite3_free()`. This guarantees that all embedded C++ objects are safely torn down, preventing silent memory leaks.
+1. **sqlite_new**: During the Cold Path initialization, the template allocates the entire state entry using `sqlite_new<Entry>()`. This forces the C++ compiler to automatically run the default constructors for all embedded objects (like the C++ state `T`, and the RAII locks), while bypassing the standard `<new>` header.
+2. **sqlite_delete**: During Garbage Collection, the template simply calls `sqlite_delete(entry)`. This guarantees that all embedded C++ objects and locks are safely torn down by standard C++ destructors, completely eliminating the need for manual teardown or a C-style `free_fn` callback in the C++ API.

@@ -56,9 +56,6 @@ static void my_init_fn(SharedState* state) {
     state->counter = 100;
 }
 
-static void my_free_fn(SharedState* state) {
-    state->counter = -1;
-}
 
 #ifdef _WIN32
 extern "C" __declspec(dllexport)
@@ -69,7 +66,7 @@ int sqlite3_myext_init(sqlite3 *db, char **pzErrMsg, const sqlite3_api_routines 
     SQLITE_EXTENSION_INIT2(pApi);
     if (!pApi) return 1;
 
-    void* raw_state = SqliteExtState<SharedState>::init(db, my_init_fn, my_free_fn);
+    void* raw_state = SqliteExtState<SharedState>::init(db, my_init_fn);
     int rc = sqlite3_create_function_v2(db, "test_counter", 0, SQLITE_UTF8, raw_state, test_counter_func, NULL, NULL, SqliteExtState<SharedState>::destructor);
     if (rc != SQLITE_OK) return rc;
     

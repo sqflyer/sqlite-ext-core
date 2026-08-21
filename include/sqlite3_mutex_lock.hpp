@@ -16,12 +16,12 @@ private:
 public:
     /**
      * @brief Constructs the mutex object.
-     * Allocates a dynamic `SQLITE_MUTEX_FAST` from the SQLite engine.
+     * @param mutex_type The SQLite mutex type to allocate (e.g., SQLITE_MUTEX_FAST, SQLITE_MUTEX_RECURSIVE).
      * Note: In single-threaded SQLite builds, this may allocate a null pointer, 
      * which is safely handled by all lock methods.
      */
-    SqliteMutex() noexcept {
-        m_mutex = sqlite3_mutex_alloc(SQLITE_MUTEX_FAST);
+    explicit SqliteMutex(int mutex_type = SQLITE_MUTEX_FAST) noexcept {
+        m_mutex = sqlite3_mutex_alloc(mutex_type);
     }
 
     /**

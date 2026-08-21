@@ -47,7 +47,7 @@ int sqlite3_myext_init(sqlite3 *db, char **pzErrMsg, const sqlite3_api_routines 
 ```
 
 ### 3. Use it in your Functions (C++)
-If you compile with a C++ compiler (`g++`, `clang++`, MSVC), use the `SqliteExtState<T>` template from `sqlite3_ext_state.hpp`. It automatically generates RAII lock guards and safely manages embedded C++ objects via placement `new` and pseudo-destructors.
+If you compile with a C++ compiler (`g++`, `clang++`, MSVC), you **must** use the `SqliteExtState<T>` template from `sqlite3_ext_state.hpp`. (Attempting to use the pure C `SQLITE_EXTENSION_STATE` macro in C++ will trigger a strict compile-time error). It automatically generates RAII lock guards and safely manages embedded C++ objects via `sqlite_construct_at` and `sqlite_destroy_at` (fully relying on standard C++ destructors without needing custom `free_fn` callbacks).
 
 ```cpp
 #include "sqlite3_ext_state.hpp"

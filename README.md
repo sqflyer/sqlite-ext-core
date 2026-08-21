@@ -42,10 +42,10 @@ Maintaining state (like connection pools, LRU caches, or simple counters) inside
 The state manager solves this by automatically generating a thread-safe, garbage-collected, **Per-Database Shared State Registry**.
 
 #### Key Features:
-- **Zero-Boilerplate APIs**: Available as a C macro (`SQLITE_EXTENSION_STATE`) for pure C extensions, and a C++ template (`SqliteExtState<T>`) for C++ extensions.
+- **Zero-Boilerplate APIs**: Available as a C macro (`SQLITE_EXTENSION_STATE`) for pure C extensions, and a C++ template (`SqliteExtState<T>`) for C++ extensions. (Strict compile-time boundaries prevent accidental cross-language misuse).
 - **3-Layer Caching Architecture**: Implements O(1) nanosecond-fast state retrieval using SQLite's `sqlite3_set_auxdata` cache, falling back to a global registry.
 - **Automated Garbage Collection**: Integrates directly with SQLite's `xDestroy` connection hooks to automatically free memory when the last connection to a database closes.
-- **Embedded C++ Objects**: The C++ template seamlessly manages memory lifecycles via placement `new` and pseudo-destructors to support nested C++ objects (like `std::string`).
+- **Embedded C++ Objects**: The C++ template seamlessly manages memory lifecycles via `sqlite_new` and `sqlite_delete` (fully relying on standard C++ destructors without needing custom `free_fn` callbacks) to support nested C++ objects (like `std::string`).
 - **Ghost-Removal Protection**: Features bullet-proof Double-Checked Locking to prevent Use-After-Free race conditions during concurrent connection teardowns.
 - **Cross-Platform Thread Safety**: Native Read/Write locks for Windows (`SRWLOCK`), macOS/Linux (`pthread_rwlock_t`), and WebAssembly (`memory.atomic.wait32` via `TinyLock`).
 - **C++ RAII Lock Guards**: The C++ template natively provides `ReadGuard` and `WriteGuard` classes to guarantee exception-safe, scope-based locking.
