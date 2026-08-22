@@ -190,6 +190,14 @@ A specialized streaming API for reading and writing potentially massive BLOB dat
 - **Exception-Safe**: Full RAII support ensures that BLOB handles are correctly closed even if an exception occurs during streaming.
 - **Zero-Copy Potential**: Direct access to the underlying SQLite BLOB handle provides the highest possible I/O performance.
 
+### 14. Online Backup API (`sqlite3_backup.hpp`)
+A strict, zero-allocation RAII wrapper over SQLite's Online Backup API (`sqlite3_backup_init`, `sqlite3_backup_step`, `sqlite3_backup_finish`).
+
+#### Key Features:
+- **Resource Safety**: Guarantees that `sqlite3_backup_finish` is called exactly once when the wrapper goes out of scope, preventing the source database from remaining read-locked indefinitely if a C++ exception occurs during the copy process.
+- **Page-Level Granularity**: Allows copying databases page-by-page in a background thread to avoid completely locking out other database clients.
+- **Move Semantics**: The backup handle can be safely passed across scopes or threads using `std::move`.
+
 #### Documentation
 - [Buffer README](docs/BUFFER_README.md)
 - [Buffer Architecture Guide](docs/BUFFER_ARCHITECTURE.md)

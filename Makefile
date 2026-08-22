@@ -1,6 +1,6 @@
-.PHONY: test test-ext-state test-cpp-value test-cpp-value-keys test-locks test-allocator test-smart-ptr test-cpp-udf test-cpp-aggregate test-cpp-statement test-cpp-tvf test-cpp-transaction test-cpp-db test-cpp-buffer leak-check-integration clean
+.PHONY: test test-ext-state test-cpp-value test-cpp-value-keys test-locks test-allocator test-smart-ptr test-cpp-udf test-cpp-aggregate test-cpp-statement test-cpp-tvf test-cpp-transaction test-cpp-db test-cpp-buffer test-blob-stream test-backup leak-check-integration clean
 
-test: test-ext-state test-cpp-value test-locks test-allocator test-smart-ptr test-cpp-udf test-cpp-aggregate test-cpp-statement test-cpp-tvf test-cpp-transaction test-cpp-db test-cpp-buffer
+test: test-ext-state test-cpp-value test-locks test-allocator test-smart-ptr test-cpp-udf test-cpp-aggregate test-cpp-statement test-cpp-tvf test-cpp-transaction test-cpp-db test-cpp-buffer test-blob-stream test-backup
 
 test-ext-state:
 	$(MAKE) -C tests/ext_state test-c test-cpp
@@ -35,6 +35,9 @@ test-cpp-buffer:
 
 test-blob-stream:
 	@$(MAKE) -C tests/cpp_blob_stream test
+
+test-backup:
+	@$(MAKE) -C tests/cpp_backup test
 
 test-locks:
 	$(MAKE) -C tests/locks test
