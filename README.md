@@ -105,6 +105,21 @@ A zero-dependency, freestanding C++ framework for registering and executing SQLi
 - [UDF Builder README](docs/UDF_README.md)
 - [UDF Builder Architecture](docs/UDF_ARCHITECTURE.md)
 
+### 7. C++ RAII Statement Wrapper (`sqlite3_statement.hpp`)
+A zero-dependency, freestanding C++ RAII wrapper over SQLite prepared statements (`sqlite3_stmt*`) for safe lifetime management, fluent bindings, and zero-allocation column extraction.
+
+#### Key Features:
+- **Strict RAII Finalization**: Guarantees statements are safely finalized on scope exit without leaks or exceptions.
+- **Move-Only Semantics**: Explicitly deleted copy operations with noexcept move constructor and move assignment for clean lifecycle transfers.
+- **Fluent & Named Parameter Bindings**: Type-safe overloads for primitives, strings, blobs, and values by 1-based index or named parameters (`:id`, `@name`, `$val`).
+- **Zero-Allocation Column Extraction**: Directly extracts result columns into `SqliteStringView`, `SqliteBlobView`, and `SqliteValueView` without heap copies.
+- **Fast Execution Helpers**: Provides `execute()` for atomic step-and-reset on DML/DDL queries, and `next()` for clean multi-row iteration loops.
+- **Polymorphic Storage**: Easily extracts column values directly into `SqliteValueOwned` objects for insertion into maps or cache layers.
+
+#### Documentation
+- [Statement Wrapper README](docs/STATEMENT_README.md)
+- [Statement Wrapper Architecture](docs/STATEMENT_ARCHITECTURE.md)
+
 ## Building and Testing
 This repository includes a robust test suite to verify the thread-safety and memory-safety of the extensions under immense load.
 
