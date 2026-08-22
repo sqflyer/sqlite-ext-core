@@ -116,12 +116,12 @@ class SqliteStringView {
 
 public:
     /** @brief Sets this object as the return result of a SQLite UDF context. */
-    void result(sqlite3_context* ctx) const {
-        sqlite3_result_text(ctx, data(), length(), SQLITE_TRANSIENT);
+    void result(sqlite3_context* ctx, void(*dtor)(void*) = SQLITE_TRANSIENT) const {
+        sqlite3_result_text(ctx, data(), length(), dtor);
     }
     /** @brief Binds this object to a prepared SQLite statement at the given 1-based column index. */
-    int bind(sqlite3_stmt* stmt, int col) const {
-        return sqlite3_bind_text(stmt, col, data(), length(), SQLITE_TRANSIENT);
+    int bind(sqlite3_stmt* stmt, int col, void(*dtor)(void*) = SQLITE_TRANSIENT) const {
+        return sqlite3_bind_text(stmt, col, data(), length(), dtor);
     }
     /**
      * @brief Constructs a view over an existing string buffer.
@@ -129,6 +129,13 @@ public:
      * @param size Length of the string in bytes.
      */
     SqliteStringView(const char* data, int size) : m_data(data), m_size(size) {}
+    
+    /**
+     * @brief Implicitly constructs a view from a null-terminated C-string.
+     * Enables zero-allocation heterogeneous map lookups like `my_map.find("hello")`.
+     */
+    SqliteStringView(const char* data) : m_data(data), m_size(data ? strlen(data) : 0) {}
+    
     SqliteStringView() : m_data(nullptr), m_size(0) {}
     
     /** @brief Returns a pointer to the underlying string data. */
@@ -451,12 +458,12 @@ class SqliteBlobView {
 
 public:
     /** @brief Sets this object as the return result of a SQLite UDF context. */
-    void result(sqlite3_context* ctx) const {
-        sqlite3_result_blob(ctx, data(), size(), SQLITE_TRANSIENT);
+    void result(sqlite3_context* ctx, void(*dtor)(void*) = SQLITE_TRANSIENT) const {
+        sqlite3_result_blob(ctx, data(), size(), dtor);
     }
     /** @brief Binds this object to a prepared SQLite statement at the given 1-based column index. */
-    int bind(sqlite3_stmt* stmt, int col) const {
-        return sqlite3_bind_blob(stmt, col, data(), size(), SQLITE_TRANSIENT);
+    int bind(sqlite3_stmt* stmt, int col, void(*dtor)(void*) = SQLITE_TRANSIENT) const {
+        return sqlite3_bind_blob(stmt, col, data(), size(), dtor);
     }
     /**
      * @brief Constructs a view over an existing binary buffer.
@@ -673,6 +680,7 @@ namespace SqliteValueUtil {
             }
             case SQLITE_FLOAT: {
                 double d_val = sqlite3_value_double(mut_val);
+                if (d_val == 0.0) d_val = 0.0; // Forces -0.0 to +0.0
                 const char* ptr = reinterpret_cast<const char*>(&d_val);
                 for (unsigned int i = 0; i < sizeof(double); ++i) {
                     h ^= (unsigned char)ptr[i];
@@ -726,8 +734,13 @@ namespace SqliteValueUtil {
         switch (t1) {
             case SQLITE_INTEGER: 
                 return sqlite3_value_int64(mut_v1) == sqlite3_value_int64(mut_v2);
-            case SQLITE_FLOAT: 
-                return sqlite3_value_double(mut_v1) == sqlite3_value_double(mut_v2);
+            case SQLITE_FLOAT: {
+                double d1 = sqlite3_value_double(mut_v1);
+                double d2 = sqlite3_value_double(mut_v2);
+                // Explicitly handle NaN == NaN for map key stability
+                if (d1 != d1 && d2 != d2) return true; 
+                return d1 == d2;
+            }
             case SQLITE_TEXT: {
                 int bytes1 = sqlite3_value_bytes(mut_v1);
                 int bytes2 = sqlite3_value_bytes(mut_v2);
@@ -804,7 +817,20 @@ namespace SqliteValueUtil {
             }
             double d1 = sqlite3_value_double(mut_v1);
             double d2 = sqlite3_value_double(mut_v2);
-            return d1 < d2;
+            
+            // 1. NaN sorting stability (Sort NaNs first)
+            bool isnan1 = (d1 != d1);
+            bool isnan2 = (d2 != d2);
+            if (isnan1 && !isnan2) return true;  
+            if (!isnan1 && isnan2) return false; 
+            
+            // 2. Standard numeric comparison
+            if (d1 != d2) {
+                return d1 < d2;
+            }
+            
+            // 3. TIE-BREAKER: Maintain strict typing in std::map!
+            return t1 < t2;
         }
 
         switch (t1) {
@@ -874,6 +900,11 @@ public:
         return SqliteValueUtil::type(m_val);
     }
     
+    /** @brief Internal helper to access integer value for heterogeneous lookups. */
+    sqlite3_int64 as_int64() const { return m_val ? sqlite3_value_int64(const_cast<sqlite3_value*>(m_val)) : 0; }
+    /** @brief Internal helper to access double value for heterogeneous lookups. */
+    double as_double() const { return m_val ? sqlite3_value_double(const_cast<sqlite3_value*>(m_val)) : 0.0; }
+    
     /** @brief Computes the polymorphic hash. */
     unsigned long long hash() const {
         return SqliteValueUtil::hash(m_val);
@@ -905,29 +936,107 @@ public:
  * and Reals dynamically without ever leaking memory.
  */
 class SqliteValueOwned {
-    sqlite3_value* m_val;
+    /**
+     * @brief The SQLite data type of this value (e.g., SQLITE_INTEGER, SQLITE_TEXT).
+     */
+    int m_type;
+
+    /**
+     * @brief Small Buffer Optimization (SBO) Union.
+     * 
+     * Instead of always making a heap allocation to copy a `sqlite3_value`, 
+     * this union stores small primitive types (Integers and Floats) directly inline.
+     * `sqlite3_value_dup()` and the `pValue` pointer are only used for 
+     * dynamically sized types (Text and Blobs).
+     */
+    union {
+        sqlite3_int64 iValue;  // Active when m_type == SQLITE_INTEGER
+        double dValue;         // Active when m_type == SQLITE_FLOAT
+        sqlite3_value* pValue; // Active when m_type == SQLITE_TEXT or SQLITE_BLOB
+    } m_data;
 
 public:
-    /** @brief Sets this object as the return result of a SQLite UDF context. */
+    /** 
+     * @brief Sets this object as the return result of a SQLite UDF context. 
+     * 
+     * Dynamically switches on the internal SBO type (`m_type`) to call the most efficient 
+     * underlying SQLite C-API function (e.g. `sqlite3_result_int64` vs `sqlite3_result_value`).
+     */
     void result(sqlite3_context* ctx) const {
-        sqlite3_result_value(ctx, const_cast<sqlite3_value*>(get()));
+        switch (m_type) {
+            case SQLITE_INTEGER: sqlite3_result_int64(ctx, m_data.iValue); break;
+            case SQLITE_FLOAT: sqlite3_result_double(ctx, m_data.dValue); break;
+            case SQLITE_TEXT: 
+            case SQLITE_BLOB: sqlite3_result_value(ctx, m_data.pValue); break;
+            case SQLITE_NULL:
+            default: sqlite3_result_null(ctx); break;
+        }
     }
-    /** @brief Binds this object to a prepared SQLite statement at the given 1-based column index. */
+
+    /** 
+     * @brief Binds this object to a prepared SQLite statement at the given 1-based column index. 
+     * 
+     * Dynamically switches on the internal SBO type (`m_type`) to call the most efficient 
+     * underlying SQLite C-API function (e.g. `sqlite3_bind_int64` vs `sqlite3_bind_value`).
+     */
     int bind(sqlite3_stmt* stmt, int col) const {
-        return sqlite3_bind_value(stmt, col, get());
+        switch (m_type) {
+            case SQLITE_INTEGER: return sqlite3_bind_int64(stmt, col, m_data.iValue);
+            case SQLITE_FLOAT: return sqlite3_bind_double(stmt, col, m_data.dValue);
+            case SQLITE_TEXT: 
+            case SQLITE_BLOB: return sqlite3_bind_value(stmt, col, m_data.pValue);
+            case SQLITE_NULL:
+            default: return sqlite3_bind_null(stmt, col);
+        }
     }
     /**
-     * @brief Duplicates the temporary value into owned memory.
+     * @brief Duplicates the temporary value into owned memory or stores it inline.
+     * 
+     * Automatically applies Small Buffer Optimization (SBO). Integers and Floats
+     * are stored inline to avoid `sqlite3_malloc` allocations. Strings and Blobs
+     * are deep-copied into the heap via `sqlite3_value_dup()`.
+     * 
      * @param val The transient value to copy.
      */
     explicit SqliteValueOwned(const sqlite3_value* val) {
-        m_val = sqlite3_value_dup(val);
+        m_type = SqliteValueUtil::type(val);
+        if (m_type == SQLITE_INTEGER) {
+            m_data.iValue = sqlite3_value_int64(const_cast<sqlite3_value*>(val));
+        } else if (m_type == SQLITE_FLOAT) {
+            m_data.dValue = sqlite3_value_double(const_cast<sqlite3_value*>(val));
+        } else if (m_type == SQLITE_TEXT || m_type == SQLITE_BLOB) {
+            m_data.pValue = sqlite3_value_dup(val);
+        } else {
+            m_data.pValue = nullptr; // Nulls require zero memory
+        }
     }
     
-    /** @brief Destructor. Automatically calls `sqlite3_value_free`. */
+    /** @brief Zero-allocation constructor for storing a 64-bit integer inline. */
+    explicit SqliteValueOwned(sqlite3_int64 val) {
+        m_type = SQLITE_INTEGER;
+        m_data.iValue = val;
+    }
+    
+    /** @brief Zero-allocation constructor for storing a double-precision float inline. */
+    explicit SqliteValueOwned(double val) {
+        m_type = SQLITE_FLOAT;
+        m_data.dValue = val;
+    }
+    
+    /** @brief Zero-allocation constructor for storing a standard int (prevents ambiguous overload). */
+    explicit SqliteValueOwned(int val) {
+        m_type = SQLITE_INTEGER;
+        m_data.iValue = static_cast<sqlite3_int64>(val);
+    }
+    
+    /** 
+     * @brief Destructor. 
+     * Automatically calls `sqlite3_value_free` ONLY if the value was heap-allocated 
+     * (i.e. SQLITE_TEXT or SQLITE_BLOB). Inline types require no cleanup.
+     */
     ~SqliteValueOwned() {
-        if (m_val) {
-            sqlite3_value_free(m_val);
+        if ((m_type == SQLITE_TEXT || m_type == SQLITE_BLOB) && m_data.pValue) {
+            sqlite3_value_free(m_data.pValue);
         }
     }
 
@@ -936,73 +1045,456 @@ public:
     SqliteValueOwned& operator=(const SqliteValueOwned&) = delete;
 
     // Allow moving
-    SqliteValueOwned(SqliteValueOwned&& other) noexcept : m_val(other.m_val) {
-        other.m_val = nullptr;
+    SqliteValueOwned(SqliteValueOwned&& other) noexcept : m_type(other.m_type), m_data(other.m_data) {
+        other.m_type = SQLITE_NULL;
+        other.m_data.pValue = nullptr;
     }
 
     SqliteValueOwned& operator=(SqliteValueOwned&& other) noexcept {
         if (this != &other) {
-            if (m_val) {
-                sqlite3_value_free(m_val);
+            if ((m_type == SQLITE_TEXT || m_type == SQLITE_BLOB) && m_data.pValue) {
+                sqlite3_value_free(m_data.pValue);
             }
-            m_val = other.m_val;
-            other.m_val = nullptr;
+            m_type = other.m_type;
+            m_data = other.m_data;
+            other.m_type = SQLITE_NULL;
+            other.m_data.pValue = nullptr;
         }
         return *this;
-    }
-
-    /** @brief Returns a read-only pointer to the underlying owned value. */
-    const sqlite3_value* get() const {
-        return m_val;
     }
     
     /** @brief Returns the SQLite datatype (e.g. SQLITE_INTEGER). */
     int type() const {
-        return SqliteValueUtil::type(m_val);
+        return m_type;
     }
 
-    /** @brief Computes the polymorphic hash. */
+    /** @brief Internal helper to access heap-allocated sqlite3_value pointers for heterogeneous lookups. */
+    const sqlite3_value* heap_value() const {
+        return (m_type == SQLITE_TEXT || m_type == SQLITE_BLOB) ? m_data.pValue : nullptr;
+    }
+
+    /** @brief Internal helper to access SBO integer for heterogeneous lookups. */
+    sqlite3_int64 as_int64() const { return m_data.iValue; }
+    /** @brief Internal helper to access SBO double for heterogeneous lookups. */
+    double as_double() const { return m_data.dValue; }
+
+    /** 
+     * @brief Computes a polymorphic FNV-1a hash of the value.
+     * 
+     * Hashes the type ID first to guarantee no collisions between Ints, Floats, and Strings.
+     * Seamlessly hashes inline SBO types or delegates to `SqliteValueUtil` for heap types.
+     */
     unsigned long long hash() const {
-        return SqliteValueUtil::hash(m_val);
+        static const unsigned long long FNV_OFFSET_BASIS = 0xcbf29ce484222325ULL;
+        static const unsigned long long FNV_PRIME = 0x100000001b3ULL;
+
+        unsigned long long h = FNV_OFFSET_BASIS;
+        h ^= (unsigned char)m_type;
+        h *= FNV_PRIME;
+
+        if (m_type == SQLITE_INTEGER) {
+            const char* ptr = reinterpret_cast<const char*>(&m_data.iValue);
+            for (unsigned int i = 0; i < sizeof(sqlite3_int64); ++i) {
+                h ^= (unsigned char)ptr[i];
+                h *= FNV_PRIME;
+            }
+        } else if (m_type == SQLITE_FLOAT) {
+            double d = m_data.dValue == 0.0 ? 0.0 : m_data.dValue;
+            const char* ptr = reinterpret_cast<const char*>(&d);
+            for (unsigned int i = 0; i < sizeof(double); ++i) {
+                h ^= (unsigned char)ptr[i];
+                h *= FNV_PRIME;
+            }
+        } else if (m_type == SQLITE_TEXT || m_type == SQLITE_BLOB) {
+            return SqliteValueUtil::hash(m_data.pValue);
+        }
+        return h;
     }
     
+    /**
+     * @brief Performs a strict polymorphic equality check against another owned value.
+     * Returns false immediately if the SQLite types differ.
+     */
     bool operator==(const SqliteValueOwned& other) const {
-        return SqliteValueUtil::equal(m_val, other.m_val);
+        if (m_type != other.m_type) return false;
+        if (m_type == SQLITE_INTEGER) return m_data.iValue == other.m_data.iValue;
+        if (m_type == SQLITE_FLOAT) {
+            // Explicitly handle NaN == NaN for map key stability
+            if (m_data.dValue != m_data.dValue && other.m_data.dValue != other.m_data.dValue) return true;
+            return m_data.dValue == other.m_data.dValue;
+        }
+        if (m_type == SQLITE_TEXT || m_type == SQLITE_BLOB) {
+            return SqliteValueUtil::equal(m_data.pValue, other.m_data.pValue);
+        }
+        return true; // SQLITE_NULL == SQLITE_NULL
     }
 
+    /** @brief Performs a strict polymorphic inequality check against another owned value. */
     bool operator!=(const SqliteValueOwned& other) const {
         return !(*this == other);
     }
 
+    /**
+     * @brief Performs a polymorphic less-than comparison.
+     * Sorts strictly by type first (NULL < Numeric < Text < Blob), then by value.
+     */
     bool operator<(const SqliteValueOwned& other) const {
-        return SqliteValueUtil::less(m_val, other.m_val);
+        auto type_rank = [](int t) -> int {
+            switch (t) {
+                case SQLITE_NULL:    return 0;
+                case SQLITE_INTEGER: 
+                case SQLITE_FLOAT:   return 1;
+                case SQLITE_TEXT:    return 2;
+                case SQLITE_BLOB:    return 3;
+                default:             return 0;
+            }
+        };
+
+        int r1 = type_rank(m_type);
+        int r2 = type_rank(other.m_type);
+        if (r1 != r2) return r1 < r2;
+
+        if (r1 == 1) { // Numeric
+            if (m_type == SQLITE_INTEGER && other.m_type == SQLITE_INTEGER) {
+                return m_data.iValue < other.m_data.iValue;
+            }
+            double d1 = (m_type == SQLITE_INTEGER) ? (double)m_data.iValue : m_data.dValue;
+            double d2 = (other.m_type == SQLITE_INTEGER) ? (double)other.m_data.iValue : other.m_data.dValue;
+            
+            // 1. NaN sorting stability (Sort NaNs first)
+            bool isnan1 = (d1 != d1);
+            bool isnan2 = (d2 != d2);
+            if (isnan1 && !isnan2) return true;  
+            if (!isnan1 && isnan2) return false; 
+            
+            // 2. Standard numeric comparison
+            if (d1 != d2) {
+                return d1 < d2;
+            }
+            
+            // 3. TIE-BREAKER: Maintain strict typing in std::map!
+            return m_type < other.m_type;
+        }
+
+        if (m_type == SQLITE_TEXT || m_type == SQLITE_BLOB) {
+            return SqliteValueUtil::less(m_data.pValue, other.m_data.pValue);
+        }
+        return false;
     }
 
     // Heterogeneous lookups
-    bool operator==(const SqliteValueView& other) const {
-        return SqliteValueUtil::equal(m_val, other.get());
-    }
-
-    bool operator!=(const SqliteValueView& other) const {
-        return !(*this == other);
-    }
-
-    bool operator<(const SqliteValueView& other) const {
-        return SqliteValueUtil::less(m_val, other.get());
-    }
+    /** @brief Heterogeneous equality check against a transient SqliteValueView. */
+    bool operator==(const SqliteValueView& other) const;
+    /** @brief Heterogeneous inequality check against a transient SqliteValueView. */
+    bool operator!=(const SqliteValueView& other) const;
+    /** @brief Heterogeneous less-than comparison against a transient SqliteValueView. */
+    bool operator<(const SqliteValueView& other) const;
 };
 
-// Complete heterogeneous lookups for SqliteValueView
-inline bool SqliteValueView::operator==(const SqliteValueOwned& other) const {
-    return SqliteValueUtil::equal(m_val, other.get());
+// Complete heterogeneous lookups for SqliteValueOwned
+inline bool SqliteValueOwned::operator==(const SqliteValueView& other) const {
+    int o_type = other.type();
+    if (m_type != o_type) return false;
+    if (m_type == SQLITE_INTEGER) return m_data.iValue == sqlite3_value_int64(const_cast<sqlite3_value*>(other.get()));
+    if (m_type == SQLITE_FLOAT) {
+        double d2 = sqlite3_value_double(const_cast<sqlite3_value*>(other.get()));
+        if (m_data.dValue != m_data.dValue && d2 != d2) return true; // NaN == NaN
+        return m_data.dValue == d2;
+    }
+    if (m_type == SQLITE_TEXT || m_type == SQLITE_BLOB) {
+        return SqliteValueUtil::equal(m_data.pValue, other.get());
+    }
+    return true; // NULLs
 }
 
+inline bool SqliteValueOwned::operator!=(const SqliteValueView& other) const {
+    return !(*this == other);
+}
+
+inline bool SqliteValueOwned::operator<(const SqliteValueView& other) const {
+    auto type_rank = [](int t) -> int {
+        switch (t) {
+            case SQLITE_NULL:    return 0;
+            case SQLITE_INTEGER: 
+            case SQLITE_FLOAT:   return 1;
+            case SQLITE_TEXT:    return 2;
+            case SQLITE_BLOB:    return 3;
+            default:             return 0;
+        }
+    };
+
+    int o_type = other.type();
+    int r1 = type_rank(m_type);
+    int r2 = type_rank(o_type);
+    if (r1 != r2) return r1 < r2;
+
+    if (r1 == 1) { // Numeric
+        if (m_type == SQLITE_INTEGER && o_type == SQLITE_INTEGER) {
+            return m_data.iValue < sqlite3_value_int64(const_cast<sqlite3_value*>(other.get()));
+        }
+        double d1 = (m_type == SQLITE_INTEGER) ? (double)m_data.iValue : m_data.dValue;
+        double d2 = (o_type == SQLITE_INTEGER) ? (double)sqlite3_value_int64(const_cast<sqlite3_value*>(other.get())) : sqlite3_value_double(const_cast<sqlite3_value*>(other.get()));
+        
+        // 1. NaN sorting stability (Sort NaNs first)
+        bool isnan1 = (d1 != d1);
+        bool isnan2 = (d2 != d2);
+        if (isnan1 && !isnan2) return true;  
+        if (!isnan1 && isnan2) return false; 
+        
+        // 2. Standard numeric comparison
+        if (d1 != d2) {
+            return d1 < d2;
+        }
+        
+        // 3. TIE-BREAKER: Maintain strict typing in std::map!
+        return m_type < o_type;
+    }
+
+    if (m_type == SQLITE_TEXT || m_type == SQLITE_BLOB) {
+        return SqliteValueUtil::less(m_data.pValue, other.get());
+    }
+    return false;
+}
+
+// Complete heterogeneous lookups for SqliteValueView
+
+/** @brief Heterogeneous equality check against an owned SqliteValueOwned object. */
+inline bool SqliteValueView::operator==(const SqliteValueOwned& other) const {
+    return other == *this;
+}
+
+/** @brief Heterogeneous inequality check against an owned SqliteValueOwned object. */
 inline bool SqliteValueView::operator!=(const SqliteValueOwned& other) const {
     return !(*this == other);
 }
 
+/** @brief Heterogeneous less-than comparison against an owned SqliteValueOwned object. */
 inline bool SqliteValueView::operator<(const SqliteValueOwned& other) const {
-    return SqliteValueUtil::less(m_val, other.get());
+    auto type_rank = [](int t) -> int {
+        switch (t) {
+            case SQLITE_NULL:    return 0;
+            case SQLITE_INTEGER: 
+            case SQLITE_FLOAT:   return 1;
+            case SQLITE_TEXT:    return 2;
+            case SQLITE_BLOB:    return 3;
+            default:             return 0;
+        }
+    };
+
+    int t1 = type();
+    int t2 = other.type();
+    int r1 = type_rank(t1);
+    int r2 = type_rank(t2);
+    
+    if (r1 != r2) return r1 < r2;
+
+    if (r1 == 1) { // Numeric
+        if (t1 == SQLITE_INTEGER && t2 == SQLITE_INTEGER) {
+            return sqlite3_value_int64(const_cast<sqlite3_value*>(get())) < other.as_int64();
+        }
+        double d1 = (t1 == SQLITE_INTEGER) ? (double)sqlite3_value_int64(const_cast<sqlite3_value*>(get())) : sqlite3_value_double(const_cast<sqlite3_value*>(get()));
+        double d2 = (t2 == SQLITE_INTEGER) ? (double)other.as_int64() : other.as_double();
+        
+        // 1. NaN sorting stability (Sort NaNs first)
+        bool isnan1 = (d1 != d1);
+        bool isnan2 = (d2 != d2);
+        if (isnan1 && !isnan2) return true;  
+        if (!isnan1 && isnan2) return false; 
+        
+        // 2. Standard numeric comparison
+        if (d1 != d2) {
+            return d1 < d2;
+        }
+        
+        // 3. TIE-BREAKER: Maintain strict typing in std::map!
+        return t1 < t2;
+    }
+
+    if (t1 == SQLITE_TEXT || t1 == SQLITE_BLOB) {
+        return SqliteValueUtil::less(get(), other.heap_value());
+    }
+    return false;
 }
+
+// ============================================================================
+// HETEROGENEOUS LOOKUPS: VALUES VS STRINGS/BLOBS
+// ============================================================================
+
+/**
+ * @brief Macro to generate all 6 heterogeneous comparison operators (==, !=, <)
+ *        between a variant Value type and a String type in both directions.
+ * 
+ * Ensures strict typing: returns false immediately if the variant is not SQLITE_TEXT.
+ */
+#define SQLITE_DEF_VAL_STR_OPS(VAL_TYPE, VAL_PTR, STR_TYPE, STR_DATA, STR_LEN) \
+    inline bool operator==(const VAL_TYPE& val, const STR_TYPE& str) { \
+        if (val.type() != SQLITE_TEXT) return false; \
+        const sqlite3_value* ptr = val.VAL_PTR(); \
+        return SqliteStringUtil::equal(reinterpret_cast<const char*>(sqlite3_value_text(const_cast<sqlite3_value*>(ptr))), sqlite3_value_bytes(const_cast<sqlite3_value*>(ptr)), str.STR_DATA(), str.STR_LEN()); \
+    } \
+    inline bool operator==(const STR_TYPE& str, const VAL_TYPE& val) { return val == str; } \
+    inline bool operator!=(const VAL_TYPE& val, const STR_TYPE& str) { return !(val == str); } \
+    inline bool operator!=(const STR_TYPE& str, const VAL_TYPE& val) { return !(val == str); } \
+    inline bool operator<(const VAL_TYPE& val, const STR_TYPE& str) { \
+        int r1 = (val.type() == SQLITE_NULL) ? 0 : (val.type() == SQLITE_INTEGER || val.type() == SQLITE_FLOAT) ? 1 : (val.type() == SQLITE_TEXT) ? 2 : 3; \
+        if (r1 != 2) return r1 < 2; \
+        const sqlite3_value* ptr = val.VAL_PTR(); \
+        return SqliteStringUtil::less(reinterpret_cast<const char*>(sqlite3_value_text(const_cast<sqlite3_value*>(ptr))), sqlite3_value_bytes(const_cast<sqlite3_value*>(ptr)), str.STR_DATA(), str.STR_LEN()); \
+    } \
+    inline bool operator<(const STR_TYPE& str, const VAL_TYPE& val) { \
+        int r2 = (val.type() == SQLITE_NULL) ? 0 : (val.type() == SQLITE_INTEGER || val.type() == SQLITE_FLOAT) ? 1 : (val.type() == SQLITE_TEXT) ? 2 : 3; \
+        if (2 != r2) return 2 < r2; \
+        const sqlite3_value* ptr = val.VAL_PTR(); \
+        return SqliteStringUtil::less(str.STR_DATA(), str.STR_LEN(), reinterpret_cast<const char*>(sqlite3_value_text(const_cast<sqlite3_value*>(ptr))), sqlite3_value_bytes(const_cast<sqlite3_value*>(ptr))); \
+    } \
+    inline bool operator>(const VAL_TYPE& val, const STR_TYPE& str) { return str < val; } \
+    inline bool operator>(const STR_TYPE& str, const VAL_TYPE& val) { return val < str; } \
+    inline bool operator<=(const VAL_TYPE& val, const STR_TYPE& str) { return !(str < val); } \
+    inline bool operator<=(const STR_TYPE& str, const VAL_TYPE& val) { return !(val < str); } \
+    inline bool operator>=(const VAL_TYPE& val, const STR_TYPE& str) { return !(val < str); } \
+    inline bool operator>=(const STR_TYPE& str, const VAL_TYPE& val) { return !(str < val); }
+
+SQLITE_DEF_VAL_STR_OPS(SqliteValueOwned, heap_value, SqliteStringView, data, length)
+SQLITE_DEF_VAL_STR_OPS(SqliteValueOwned, heap_value, SqliteStringOwned, value, length)
+SQLITE_DEF_VAL_STR_OPS(SqliteValueView, get, SqliteStringView, data, length)
+SQLITE_DEF_VAL_STR_OPS(SqliteValueView, get, SqliteStringOwned, value, length)
+
+/**
+ * @brief Macro to generate all 6 heterogeneous comparison operators (==, !=, <)
+ *        between a variant Value type and a Blob type in both directions.
+ * 
+ * Ensures strict typing: returns false immediately if the variant is not SQLITE_BLOB.
+ */
+#define SQLITE_DEF_VAL_BLOB_OPS(VAL_TYPE, VAL_PTR, BLOB_TYPE, BLOB_DATA, BLOB_LEN) \
+    inline bool operator==(const VAL_TYPE& val, const BLOB_TYPE& blob) { \
+        if (val.type() != SQLITE_BLOB) return false; \
+        const sqlite3_value* ptr = val.VAL_PTR(); \
+        return SqliteBlobUtil::equal(sqlite3_value_blob(const_cast<sqlite3_value*>(ptr)), sqlite3_value_bytes(const_cast<sqlite3_value*>(ptr)), blob.BLOB_DATA(), blob.BLOB_LEN()); \
+    } \
+    inline bool operator==(const BLOB_TYPE& blob, const VAL_TYPE& val) { return val == blob; } \
+    inline bool operator!=(const VAL_TYPE& val, const BLOB_TYPE& blob) { return !(val == blob); } \
+    inline bool operator!=(const BLOB_TYPE& blob, const VAL_TYPE& val) { return !(val == blob); } \
+    inline bool operator<(const VAL_TYPE& val, const BLOB_TYPE& blob) { \
+        int r1 = (val.type() == SQLITE_NULL) ? 0 : (val.type() == SQLITE_INTEGER || val.type() == SQLITE_FLOAT) ? 1 : (val.type() == SQLITE_TEXT) ? 2 : 3; \
+        if (r1 != 3) return r1 < 3; \
+        const sqlite3_value* ptr = val.VAL_PTR(); \
+        return SqliteBlobUtil::less(sqlite3_value_blob(const_cast<sqlite3_value*>(ptr)), sqlite3_value_bytes(const_cast<sqlite3_value*>(ptr)), blob.BLOB_DATA(), blob.BLOB_LEN()); \
+    } \
+    inline bool operator<(const BLOB_TYPE& blob, const VAL_TYPE& val) { \
+        int r2 = (val.type() == SQLITE_NULL) ? 0 : (val.type() == SQLITE_INTEGER || val.type() == SQLITE_FLOAT) ? 1 : (val.type() == SQLITE_TEXT) ? 2 : 3; \
+        if (3 != r2) return 3 < r2; \
+        const sqlite3_value* ptr = val.VAL_PTR(); \
+        return SqliteBlobUtil::less(blob.BLOB_DATA(), blob.BLOB_LEN(), sqlite3_value_blob(const_cast<sqlite3_value*>(ptr)), sqlite3_value_bytes(const_cast<sqlite3_value*>(ptr))); \
+    } \
+    inline bool operator>(const VAL_TYPE& val, const BLOB_TYPE& blob) { return blob < val; } \
+    inline bool operator>(const BLOB_TYPE& blob, const VAL_TYPE& val) { return val < blob; } \
+    inline bool operator<=(const VAL_TYPE& val, const BLOB_TYPE& blob) { return !(blob < val); } \
+    inline bool operator<=(const BLOB_TYPE& blob, const VAL_TYPE& val) { return !(val < blob); } \
+    inline bool operator>=(const VAL_TYPE& val, const BLOB_TYPE& blob) { return !(val < blob); } \
+    inline bool operator>=(const BLOB_TYPE& blob, const VAL_TYPE& val) { return !(blob < val); }
+
+SQLITE_DEF_VAL_BLOB_OPS(SqliteValueOwned, heap_value, SqliteBlobView, data, size)
+SQLITE_DEF_VAL_BLOB_OPS(SqliteValueOwned, heap_value, SqliteBlobOwned, data, size)
+SQLITE_DEF_VAL_BLOB_OPS(SqliteValueView, get, SqliteBlobView, data, size)
+SQLITE_DEF_VAL_BLOB_OPS(SqliteValueView, get, SqliteBlobOwned, data, size)
+
+// ============================================================================
+// HETEROGENEOUS LOOKUPS: VALUES VS PRIMITIVES
+// ============================================================================
+
+/**
+ * @brief Macro to generate 24 heterogeneous comparison operators (==, !=, <, >)
+ *        between a variant Value type and primitive C++ types (int, int64, double) in both directions.
+ * 
+ * Ensures strict typing: Float(5.0) != Int(5).
+ */
+#define SQLITE_DEF_VAL_PRIM_OPS(VAL_TYPE) \
+    /* Exact type and value match for INTEGER */ \
+    inline bool operator==(const VAL_TYPE& val, sqlite3_int64 num) { return val.type() == SQLITE_INTEGER && val.as_int64() == num; } \
+    inline bool operator==(sqlite3_int64 num, const VAL_TYPE& val) { return val == num; } \
+    inline bool operator!=(const VAL_TYPE& val, sqlite3_int64 num) { return !(val == num); } \
+    inline bool operator!=(sqlite3_int64 num, const VAL_TYPE& val) { return !(val == num); } \
+    /* Less-than comparison honoring type-ranks: NULL(0) < NUMERIC(1) < TEXT(2) < BLOB(3) */ \
+    inline bool operator<(const VAL_TYPE& val, sqlite3_int64 num) { \
+        int t = val.type(); \
+        int r1 = (t == SQLITE_NULL) ? 0 : (t == SQLITE_INTEGER || t == SQLITE_FLOAT) ? 1 : (t == SQLITE_TEXT) ? 2 : 3; \
+        if (r1 != 1) return r1 < 1; \
+        if (t == SQLITE_INTEGER) return val.as_int64() < num; \
+        double d1 = val.as_double(), d2 = static_cast<double>(num); \
+        if (d1 != d1) return true; /* NaN sorts before numbers */ \
+        if (d1 != d2) return d1 < d2; \
+        return SQLITE_FLOAT < SQLITE_INTEGER; /* Tie breaker: Int sorts before Float */ \
+    } \
+    inline bool operator<(sqlite3_int64 num, const VAL_TYPE& val) { \
+        int t = val.type(); \
+        int r2 = (t == SQLITE_NULL) ? 0 : (t == SQLITE_INTEGER || t == SQLITE_FLOAT) ? 1 : (t == SQLITE_TEXT) ? 2 : 3; \
+        if (1 != r2) return 1 < r2; \
+        if (t == SQLITE_INTEGER) return num < val.as_int64(); \
+        double d1 = static_cast<double>(num), d2 = val.as_double(); \
+        if (d2 != d2) return false; /* NaN is less than num, so num is NOT less than NaN */ \
+        if (d1 != d2) return d1 < d2; \
+        return SQLITE_INTEGER < SQLITE_FLOAT; /* Tie breaker: Int sorts before Float */ \
+    } \
+    inline bool operator>(const VAL_TYPE& val, sqlite3_int64 num) { return num < val; } \
+    inline bool operator>(sqlite3_int64 num, const VAL_TYPE& val) { return val < num; } \
+    inline bool operator<=(const VAL_TYPE& val, sqlite3_int64 num) { return !(num < val); } \
+    inline bool operator<=(sqlite3_int64 num, const VAL_TYPE& val) { return !(val < num); } \
+    inline bool operator>=(const VAL_TYPE& val, sqlite3_int64 num) { return !(val < num); } \
+    inline bool operator>=(sqlite3_int64 num, const VAL_TYPE& val) { return !(num < val); } \
+    inline bool operator==(const VAL_TYPE& val, int num) { return val == static_cast<sqlite3_int64>(num); } \
+    inline bool operator==(int num, const VAL_TYPE& val) { return val == static_cast<sqlite3_int64>(num); } \
+    inline bool operator!=(const VAL_TYPE& val, int num) { return val != static_cast<sqlite3_int64>(num); } \
+    inline bool operator!=(int num, const VAL_TYPE& val) { return val != static_cast<sqlite3_int64>(num); } \
+    inline bool operator<(const VAL_TYPE& val, int num) { return val < static_cast<sqlite3_int64>(num); } \
+    inline bool operator<(int num, const VAL_TYPE& val) { return static_cast<sqlite3_int64>(num) < val; } \
+    inline bool operator>(const VAL_TYPE& val, int num) { return val > static_cast<sqlite3_int64>(num); } \
+    inline bool operator>(int num, const VAL_TYPE& val) { return static_cast<sqlite3_int64>(num) > val; } \
+    inline bool operator<=(const VAL_TYPE& val, int num) { return val <= static_cast<sqlite3_int64>(num); } \
+    inline bool operator<=(int num, const VAL_TYPE& val) { return static_cast<sqlite3_int64>(num) <= val; } \
+    inline bool operator>=(const VAL_TYPE& val, int num) { return val >= static_cast<sqlite3_int64>(num); } \
+    inline bool operator>=(int num, const VAL_TYPE& val) { return static_cast<sqlite3_int64>(num) >= val; } \
+    /* Exact type and value match for FLOAT */ \
+    inline bool operator==(const VAL_TYPE& val, double num) { \
+        if (val.type() != SQLITE_FLOAT) return false; \
+        double d = val.as_double(); \
+        if (d != d && num != num) return true; /* NaN == NaN */ \
+        return d == num; \
+    } \
+    inline bool operator==(double num, const VAL_TYPE& val) { return val == num; } \
+    inline bool operator!=(const VAL_TYPE& val, double num) { return !(val == num); } \
+    inline bool operator!=(double num, const VAL_TYPE& val) { return !(val == num); } \
+    inline bool operator<(const VAL_TYPE& val, double num) { \
+        int t = val.type(); \
+        int r1 = (t == SQLITE_NULL) ? 0 : (t == SQLITE_INTEGER || t == SQLITE_FLOAT) ? 1 : (t == SQLITE_TEXT) ? 2 : 3; \
+        if (r1 != 1) return r1 < 1; \
+        double d1 = (t == SQLITE_INTEGER) ? static_cast<double>(val.as_int64()) : val.as_double(); \
+        if (d1 != d1 && num != num) return false; /* NaN is not less than NaN */ \
+        if (d1 != d1) return true; /* NaN sorts before numbers */ \
+        if (num != num) return false; \
+        if (d1 != num) return d1 < num; \
+        if (t == SQLITE_INTEGER) return SQLITE_INTEGER < SQLITE_FLOAT; \
+        return false; \
+    } \
+    inline bool operator<(double num, const VAL_TYPE& val) { \
+        int t = val.type(); \
+        int r2 = (t == SQLITE_NULL) ? 0 : (t == SQLITE_INTEGER || t == SQLITE_FLOAT) ? 1 : (t == SQLITE_TEXT) ? 2 : 3; \
+        if (1 != r2) return 1 < r2; \
+        double d2 = (t == SQLITE_INTEGER) ? static_cast<double>(val.as_int64()) : val.as_double(); \
+        if (num != num && d2 != d2) return false; \
+        if (num != num) return true; \
+        if (d2 != d2) return false; \
+        if (num != d2) return num < d2; \
+        if (t == SQLITE_INTEGER) return SQLITE_FLOAT < SQLITE_INTEGER; \
+        return false; \
+    } \
+    inline bool operator>(const VAL_TYPE& val, double num) { return num < val; } \
+    inline bool operator>(double num, const VAL_TYPE& val) { return val < num; } \
+    inline bool operator<=(const VAL_TYPE& val, double num) { return !(num < val); } \
+    inline bool operator<=(double num, const VAL_TYPE& val) { return !(val < num); } \
+    inline bool operator>=(const VAL_TYPE& val, double num) { return !(val < num); } \
+    inline bool operator>=(double num, const VAL_TYPE& val) { return !(num < val); }
+
+SQLITE_DEF_VAL_PRIM_OPS(SqliteValueOwned)
+SQLITE_DEF_VAL_PRIM_OPS(SqliteValueView)
 
 #endif // SQLITE3_VALUE_KEYS_HPP

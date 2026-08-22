@@ -192,6 +192,263 @@ void test_value_strict_equality(sqlite3* db) {
     sqlite3_finalize(stmt);
 }
 
+void test_heterogeneous_lookups(sqlite3* db) {
+    sqlite3_stmt* stmt;
+    sqlite3_prepare_v2(db, "SELECT 42, 42.0, 'hello', x'0102';", -1, &stmt, nullptr);
+    sqlite3_step(stmt);
+    
+    SqliteValueOwned val_int(sqlite3_column_value(stmt, 0));
+    SqliteValueOwned val_float(sqlite3_column_value(stmt, 1));
+    SqliteValueOwned val_text(sqlite3_column_value(stmt, 2));
+    SqliteValueOwned val_blob(sqlite3_column_value(stmt, 3));
+    
+    // 1. Value vs String Types
+    SqliteStringView str_view("hello", 5);
+    SqliteStringOwned str_owned("hello");
+    assert(val_text == str_view);
+    assert(str_view == val_text);
+    assert(val_text == str_owned);
+    assert(str_owned == val_text);
+    assert(val_int != str_view); // Type mismatch
+    
+    // Implicit C-string lookups
+    assert(val_text == "hello");
+    assert("hello" == val_text);
+    assert(val_text != "world");
+    assert(val_int != "hello");
+    
+    // 2. Value vs Blob Types
+    char blob_data[] = {0x01, 0x02};
+    SqliteBlobView blob_view(blob_data, 2);
+    assert(val_blob == blob_view);
+    assert(blob_view == val_blob);
+    assert(val_text != blob_view); // Type mismatch
+    
+    // 3. Value vs Primitives (Strict Typing)
+    assert(val_int == 42);
+    assert(42 == val_int);
+    assert(val_int != 42.0); // Strict integer vs float
+    assert(42.0 != val_int);
+    
+    assert(val_float == 42.0);
+    assert(42.0 == val_float);
+    assert(val_float != 42); // Strict float vs integer
+    assert(42 != val_float);
+    
+    // Primitive inequalities
+    assert(val_int < 50);
+    assert(val_int > 10);
+    assert(10 < val_int);
+    
+    assert(val_float < 50.0);
+    assert(val_float > 10.0);
+    
+    sqlite3_finalize(stmt);
+}
+
+void test_coverage_edge_cases(sqlite3* db) {
+    sqlite3_stmt* stmt;
+    // SQLite evaluates 0.0/0.0 to NULL, so we create NaN directly in C++
+    sqlite3_prepare_v2(db, "SELECT NULL, 5, 5.0, 'hello';", -1, &stmt, nullptr);
+    sqlite3_step(stmt);
+    
+    double nan_d = 0.0/0.0;
+    SqliteValueOwned val_nan(nan_d); // Uses our new zero-allocation double constructor!
+    SqliteValueOwned val_null(sqlite3_column_value(stmt, 0));
+    SqliteValueOwned val_int(sqlite3_column_value(stmt, 1));
+    SqliteValueOwned val_float(sqlite3_column_value(stmt, 2));
+    SqliteValueOwned val_text(sqlite3_column_value(stmt, 3));
+    
+    // 1. NaN checks
+    assert(val_nan == nan_d);
+    assert(nan_d == val_nan);
+    assert(val_nan != 5.0);
+    assert(!(val_nan < nan_d)); // NaN not less than NaN
+    assert(val_nan < 5.0);      // NaN sorts before numbers
+    assert(!(5.0 < val_nan));   // Numbers sort after NaN
+    
+    // 2. NULL vs Primitives
+    assert(val_null != 5);
+    assert(val_null < 5);      // NULL (0) < NUMERIC (1)
+    assert(!(5 < val_null));
+    assert(val_null < 5.0);
+    assert(!(5.0 < val_null));
+    
+    // 3. String & Blob Inequalities
+    SqliteStringView str_view("hello", 5);
+    char blob_data[] = {0x01, 0x02};
+    SqliteBlobView blob_view(blob_data, 2);
+    
+    assert(val_int < str_view);    // NUMERIC (1) < TEXT (2)
+    assert(!(str_view < val_int)); 
+    assert(val_int < blob_view);   // NUMERIC (1) < BLOB (3)
+    assert(val_text < blob_view);  // TEXT (2) < BLOB (3)
+    
+    // 4. Tie-breakers between Int and Float
+    assert(val_int < 6.0);         
+    assert(val_float < 6);
+    // Int 5 and Float 5.0 -> values are equal, tie-breaker: Int (1) < Float (2) -> false (because SQLITE_INTEGER < SQLITE_FLOAT is true)
+    // Wait, SQLITE_INTEGER is 1, SQLITE_FLOAT is 2
+    // val_int (1) < 5.0 -> float 5.0 becomes type 2 conceptually.
+    assert(val_int < 5.0);
+    assert(!(val_float < 5));
+    
+    sqlite3_finalize(stmt);
+}
+
+void test_view_heterogeneous_lookups(sqlite3* db) {
+    sqlite3_stmt* stmt;
+    sqlite3_prepare_v2(db, "SELECT 42, 42.0, 'hello', x'0102';", -1, &stmt, nullptr);
+    sqlite3_step(stmt);
+    
+    SqliteValueView view_int(sqlite3_column_value(stmt, 0));
+    SqliteValueView view_float(sqlite3_column_value(stmt, 1));
+    SqliteValueView view_text(sqlite3_column_value(stmt, 2));
+    SqliteValueView view_blob(sqlite3_column_value(stmt, 3));
+    
+    // Primitives
+    assert(view_int == 42);
+    assert(42 == view_int);
+    assert(view_int != 42.0);
+    assert(view_float == 42.0);
+    assert(view_float != 42);
+    assert(view_int < 50);
+    assert(view_float > 10.0);
+    
+    // Strings & Blobs
+    SqliteStringView str_view("hello", 5);
+    char blob_data[] = {0x01, 0x02};
+    SqliteBlobView blob_view(blob_data, 2);
+    
+    assert(view_text == str_view);
+    assert(str_view == view_text);
+    assert(view_blob == blob_view);
+    
+    sqlite3_finalize(stmt);
+}
+
+void test_value_move_semantics() {
+    SqliteValueOwned val1(42);
+    SqliteValueOwned val2(static_cast<SqliteValueOwned&&>(val1));
+    
+    // val1 should be null, val2 should be 42
+    assert(val1.type() == SQLITE_NULL);
+    assert(val2.type() == SQLITE_INTEGER);
+    assert(val2 == 42);
+    
+    SqliteValueOwned val3(5.0);
+    val3 = static_cast<SqliteValueOwned&&>(val2);
+    assert(val2.type() == SQLITE_NULL);
+    assert(val3.type() == SQLITE_INTEGER);
+    assert(val3 == 42);
+}
+
+void test_hashing() {
+    SqliteValueOwned val_int(42);
+    SqliteValueOwned val_float(42.0);
+    SqliteValueOwned val_nan(0.0/0.0);
+    
+    // Hashes of identical numeric values must be completely different for map stability
+    assert(val_int.hash() != val_float.hash());
+    
+    // NaN hash must be stable
+    SqliteValueOwned val_nan2(0.0/0.0);
+    assert(val_nan.hash() == val_nan2.hash());
+}
+
+void test_primitive_constructors() {
+    SqliteValueOwned val_int(42);
+    SqliteValueOwned val_int64(static_cast<sqlite3_int64>(9000000000LL));
+    SqliteValueOwned val_float(3.14);
+    
+    assert(val_int.type() == SQLITE_INTEGER);
+    assert(val_int64.type() == SQLITE_INTEGER);
+    assert(val_float.type() == SQLITE_FLOAT);
+    
+    assert(val_int == 42);
+    assert(val_int64 == 9000000000LL);
+    assert(val_float == 3.14);
+    
+    // Ensure that primitive constructors trigger exact SBO storage
+    assert(val_int.as_int64() == 42);
+    assert(val_int64.as_int64() == 9000000000LL);
+    assert(val_float.as_double() == 3.14);
+}
+
+void test_relational_operators(sqlite3* db) {
+    SqliteValueOwned val_int(42);
+    SqliteValueOwned val_float(3.14);
+    
+    // Primitives
+    assert(val_int > 40);
+    assert(40 < val_int);
+    assert(val_int >= 42);
+    assert(val_int <= 42);
+    assert(val_float < 42.0);
+    assert(42.0 > val_float);
+    
+    sqlite3_stmt* stmt;
+    sqlite3_prepare_v2(db, "SELECT 'hello', x'0102';", -1, &stmt, nullptr);
+    sqlite3_step(stmt);
+    SqliteValueOwned val_str(sqlite3_column_value(stmt, 0));
+    SqliteValueOwned val_blob(sqlite3_column_value(stmt, 1));
+    
+    // Strings
+    SqliteStringOwned str_owned("hello");
+    assert(val_str >= str_owned);
+    assert(val_str <= str_owned);
+    assert(val_str > SqliteStringView("hell"));
+    
+    // Blobs
+    char blob1[] = {0x01, 0x02};
+    char blob2[] = {0x01, 0x03};
+    SqliteBlobView bv1(blob1, 2);
+    SqliteBlobView bv2(blob2, 2);
+    
+    assert(val_blob >= bv1);
+    assert(val_blob <= bv1);
+    assert(bv2 > val_blob);
+    assert(val_blob < bv2);
+    
+    sqlite3_finalize(stmt);
+}
+
+void test_cross_type_relational_operators(sqlite3* db) {
+    SqliteValueOwned val_int(42);
+    SqliteValueOwned val_float(3.14);
+    
+    sqlite3_stmt* stmt;
+    sqlite3_prepare_v2(db, "SELECT 'hello', x'0102';", -1, &stmt, nullptr);
+    sqlite3_step(stmt);
+    SqliteValueOwned val_str(sqlite3_column_value(stmt, 0));
+    SqliteValueOwned val_blob(sqlite3_column_value(stmt, 1));
+    
+    SqliteStringOwned str_owned("hello");
+    char blob_data[] = {0x01, 0x02};
+    SqliteBlobView bv(blob_data, 2);
+    
+    // NULL < NUMERIC < TEXT < BLOB
+    
+    // Numeric vs Text
+    assert(val_int < str_owned);
+    assert(str_owned > val_int);
+    assert(val_float < str_owned);
+    assert(val_str > 42);
+    assert(val_str > 3.14);
+    
+    // Numeric vs Blob
+    assert(val_int < bv);
+    assert(bv > val_int);
+    assert(val_float < bv);
+    assert(val_blob > 42);
+    
+    // Text vs Blob
+    assert(val_str < bv);
+    assert(val_blob > str_owned);
+    
+    sqlite3_finalize(stmt);
+}
+
 int main() {
     sqlite3_initialize();
     
@@ -218,6 +475,27 @@ int main() {
     
     printf("Testing Strict Equality...\n");
     test_value_strict_equality(db);
+    
+    printf("Testing Heterogeneous Lookups...\n");
+    test_heterogeneous_lookups(db);
+    
+    printf("Testing Coverage Edge Cases...\n");
+    test_coverage_edge_cases(db);
+    
+    printf("Testing View Heterogeneous Lookups...\n");
+    test_view_heterogeneous_lookups(db);
+    
+    printf("Testing Relational Operators...\n");
+    test_relational_operators(db);
+    
+    printf("Testing Value Move Semantics...\n");
+    test_value_move_semantics();
+    
+    printf("Testing Primitive Constructors...\n");
+    test_primitive_constructors();
+    
+    printf("Testing Hashing Stability...\n");
+    test_hashing();
     
     printf("Testing Collation Order...\n");
     test_collation(db);

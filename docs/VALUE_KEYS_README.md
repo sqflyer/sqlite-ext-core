@@ -4,8 +4,9 @@ Zero-dependency C++ RAII wrappers for SQLite core data types, engineered specifi
 
 ## Features
 - **Zero-Allocation Lookups**: Provides non-owning `View` wrappers (`SqliteStringView`, `SqliteBlobView`, `SqliteValueView`) to prevent expensive memory allocations during C++ map key lookups.
-- **Heterogeneous Lookups**: Natively supports comparing `View`s against heavy, memory-managed `Owned` classes.
-- **Polymorphic Variants**: Safely store Integer, Float, Text, and Blob payloads inside the exact same `std::map` using the polymorphic `SqliteValueOwned` wrapper.
+- **Small Buffer Optimization (SBO)**: `SqliteValueOwned` utilizes a memory union to store primitives (Integer, Float) completely inline, bypassing heap allocation entirely.
+- **Heterogeneous Lookups**: Natively supports 144+ macro-generated operator overloads for deep heterogeneous lookup support across `String`, `Blob`, and C++ primitives (`int`, `double`, `sqlite3_int64`) using all 6 standard relational operators (`==`, `!=`, `<`, `>`, `<=`, `>=`).
+- **Polymorphic Variants**: Safely store Integer, Float, Text, and Blob payloads inside the exact same `std::map` using the polymorphic `SqliteValueOwned` wrapper. Strict Weak Ordering guarantees flawless type-safety and stable `NaN` sorting.
 - **Ergonomic String Builders**: Easily construct dynamic strings without a database handle using standard `(const char*)` constructors, or safely instantiate them inside User-Defined Functions with `(sqlite3_context*)` wrappers.
 - **SQLite Integration**: Provides `bind()` and `result()` methods directly on wrappers to easily interoperate with `sqlite3_stmt` parameters and `sqlite3_context` returns.
 - **Accurate & Fast Collation**: Follows exact SQLite collation semantics (`NULL < NUMERIC < TEXT < BLOB`) and accelerates lexicographical comparisons using SIMD-optimized `memcmp` routines.
@@ -63,9 +64,32 @@ static void search_poly_udf(sqlite3_context* ctx, int argc, sqlite3_value** argv
         // ...
     }
 }
+
+// You can also instantiate variants from primitives directly (Zero-Allocation via SBO):
+SqliteValueOwned my_int(42);
+SqliteValueOwned my_float(3.14);
+
+// Heterogeneous Primitive Lookups work natively:
+if (my_int == 42) { /* Works! */ }
+if (my_int != 42.0) { /* Strict typing: Int(42) != Float(42.0) */ }
 ```
 
-### 3. Ergonomic String Builders
+### 3. Transparent Map Lookups (C++14 `std::less<>`)
+By implementing a massive suite of 144+ heterogeneous relational operators, `SqliteValueOwned` is fully compatible with C++14 transparent comparators. 
+
+If you define a map like this:
+```cpp
+std::map<SqliteValueOwned, MyData, std::less<>> my_map;
+```
+
+You can query it instantaneously without ever allocating memory:
+```cpp
+my_map.find(5);          // Finds the integer 5 natively via macro overloads
+my_map.find(3.14);       // Finds the float natively via macro overloads
+my_map.find("hello");    // Finds the string (via SqliteStringView implicit conversion)
+```
+
+### 4. Ergonomic String Builders
 Construct strings dynamically and seamlessly without ever managing memory directly.
 
 ```cpp

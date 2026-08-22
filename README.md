@@ -63,9 +63,11 @@ Zero-dependency C++ RAII wrappers for SQLite core data types designed for zero-a
 #### Key Features:
 - **SQLite Integration APIs**: Provides zero-overhead `bind()` and `result()` methods directly on wrappers to easily interoperate with `sqlite3_stmt` parameters and `sqlite3_context` returns.
 - **Zero-Allocation Lookups**: Provides non-owning `View` wrappers (`SqliteStringView`, `SqliteBlobView`, `SqliteValueView`) to prevent expensive memory allocations during C++ map key lookups.
-- **Heterogeneous Lookups**: Natively supports comparing `View`s against heavy, memory-managed `Owned` classes using SIMD-accelerated C `memcmp` comparisons.
-- **Accurate Collation**: Fully conforms to official SQLite collation sorting rules (`NULL < NUMERIC < TEXT < BLOB`).
-- **Polymorphic Variants**: Safely store Integer, Float, Text, and Blob payloads inside the exact same `std::map` using the polymorphic `SqliteValueOwned` wrapper.
+- **Small Buffer Optimization (SBO)**: Uses union-based zero-allocation storage for integers and floats, falling back to `sqlite3_value_dup` only for strings and blobs.
+- **Heterogeneous Lookups**: Natively supports comparing `View`s against heavy, memory-managed `Owned` classes. Includes 144+ macro-generated operator overloads to instantly compare variants against strings, blobs, and C++ primitives (`int`, `double`) using all 6 standard relational operators (`==`, `!=`, `<`, `>`, `<=`, `>=`).
+- **Transparent Map Lookups**: Fully unlocks C++14 `std::less<>` heterogeneous lookup capabilities. Query polymorphic maps using `my_map.find(5)` or `my_map.find("hello")` natively, without ever instantiating a memory-managed wrapper.
+- **Accurate Collation**: Fully conforms to official SQLite collation sorting rules (`NULL < NUMERIC < TEXT < BLOB`), complete with stable `NaN` sorting constraints.
+- **Polymorphic Variants**: Safely store Integer, Float, Text, and Blob payloads inside the exact same `std::map` using the polymorphic `SqliteValueOwned` wrapper. Features Strict Weak Ordering tie-breakers to prevent `Int(5)` colliding with `Float(5.0)`.
 - **Ergonomic String Builders**: Easily construct dynamic strings without a database handle using standard `(const char*)` constructors, or safely instantiate them inside User-Defined Functions with `(sqlite3_context*)` wrappers.
 - **Zero STL Overhead**: Fully implemented using raw C-pointers and SQLite's native memory profilers (`sqlite3_malloc`). No `<string>` or `<vector>` overhead. Perfect for constrained environments like WASM.
 
