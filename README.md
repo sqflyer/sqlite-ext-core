@@ -70,6 +70,20 @@ Zero-dependency C++ RAII wrappers for SQLite core data types designed for zero-a
 - [Value Keys README](docs/VALUE_KEYS_README.md)
 - [Value Keys Internal Architecture](docs/VALUE_KEYS_ARCHITECTURE.md)
 
+### 5. Smart Pointers (`sqlite3_smart_ptr.h` / `.hpp`)
+Zero-dependency, thread-safe, reference-counted memory allocation that integrates directly into SQLite's memory manager (`sqlite3_malloc`). Allows safely sharing dynamic payloads across User-Defined Function (UDF) boundaries.
+
+#### Key Features:
+- **Zero-Dependency**: Mimics `std::shared_ptr`, `std::unique_ptr`, and `std::weak_ptr` perfectly without linking to `<memory>`.
+- **SQLite Memory Profiling**: Allocates exclusively via `sqlite3_malloc` to ensure SQLite accurately tracks heap usage limits (`SQLITE_LIMIT_MEMORY`).
+- **TinyLock Ref-Counting**: Uses `SqliteTinyLock` instead of a heavyweight `sqlite3_mutex` to manage atomic reference counts, completely eliminating the secondary heap allocation penalty of a standard mutex.
+- **Dual Support**: Available as a C++ template suite (`SqliteSharedPtr`, `SqliteUniquePtr`, `SqliteWeakPtr`) and as a C macro generation suite (`SQLITE_SHARED_PTR_DEFINE`) for pure C extensions.
+- **Thread-Safe**: Safely passes memory payloads across concurrent UDF calls without race conditions or memory leaks.
+
+#### Documentation
+- [Smart Pointers README](docs/SMART_PTR_README.md)
+- [Smart Pointers Architecture](docs/SMART_PTR_ARCHITECTURE.md)
+
 ## Building and Testing
 This repository includes a robust test suite to verify the thread-safety and memory-safety of the extensions under immense load.
 

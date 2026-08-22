@@ -1,6 +1,6 @@
-.PHONY: test test-ext-state test-cpp-value-keys test-locks test-allocator leak-check-integration clean
+.PHONY: test test-ext-state test-cpp-value-keys test-locks test-allocator test-smart-ptr leak-check-integration clean
 
-test: test-ext-state test-cpp-value-keys test-locks test-allocator
+test: test-ext-state test-cpp-value-keys test-locks test-allocator test-smart-ptr
 
 test-ext-state:
 	$(MAKE) -C tests/ext_state test-c test-cpp
@@ -14,6 +14,9 @@ test-locks:
 test-allocator:
 	$(MAKE) -C tests/allocator test
 
+test-smart-ptr:
+	$(MAKE) -C tests/smart_ptr test
+
 leak-check-integration:
 	$(MAKE) -C tests/ext_state leak-check
 
@@ -22,3 +25,4 @@ clean:
 	$(MAKE) -C tests/cpp_value_keys clean
 	$(MAKE) -C tests/locks clean
 	$(MAKE) -C tests/allocator clean
+	$(MAKE) -C tests/smart_ptr clean
