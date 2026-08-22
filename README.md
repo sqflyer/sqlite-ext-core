@@ -90,6 +90,21 @@ Zero-dependency, thread-safe, reference-counted memory allocation that integrate
 - [Smart Pointers README](docs/SMART_PTR_README.md)
 - [Smart Pointers Architecture](docs/SMART_PTR_ARCHITECTURE.md)
 
+### 6. C++ User-Defined Function (UDF) Builder (`sqlite3_udf.hpp`)
+A zero-dependency, freestanding C++ framework for registering and executing SQLite User-Defined Functions with zero boilerplate and guaranteed bounds safety.
+
+#### Key Features:
+- **Single-Line Registration**: Register C++ scalar functions or stateless lambdas cleanly via `SqliteUdf::define(db, "name", num_args, func)`.
+- **Bounds-Checked Argument Proxy**: `SqliteUdfArgs` wraps `(int argc, sqlite3_value** argv)` and ensures out-of-bounds indexing returns safe `SQLITE_NULL` views rather than causing segmentation faults.
+- **Zero-Allocation Execution**: Dispatches calls via a lightweight static trampoline proxy using `sqlite3_user_data`, incurring 0 byte heap overhead.
+- **Variadic Function Support**: Register dynamic-arity functions (`num_args = -1`) and query `args.size()` dynamically.
+- **Deep Synergy with Value Keys**: Fully interoperates with `SqliteValueView`, `SqliteStringOwned`, and heterogeneous operator comparisons (`args[0] == 42`).
+- **Deterministic by Default**: Automatically attaches `SQLITE_DETERMINISTIC` to maximize SQLite query optimizer caching.
+
+#### Documentation
+- [UDF Builder README](docs/UDF_README.md)
+- [UDF Builder Architecture](docs/UDF_ARCHITECTURE.md)
+
 ## Building and Testing
 This repository includes a robust test suite to verify the thread-safety and memory-safety of the extensions under immense load.
 
