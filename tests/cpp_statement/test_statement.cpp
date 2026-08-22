@@ -418,6 +418,201 @@ void test_error_handling(sqlite3* db) {
     assert(null_stmt.column_blob_view(0).data() == nullptr);
 }
 
+void test_cached_statement(sqlite3* db) {
+    printf("10. Testing SqliteCachedStatement RAII Wrapper...\n");
+
+    // 1. Manually prepare a raw statement to act as our "cached" statement
+    sqlite3_stmt* raw_stmt = nullptr;
+    assert(sqlite3_prepare_v2(db, "SELECT ? * 2;", -1, &raw_stmt, nullptr) == SQLITE_OK);
+
+    // 2. First Execution Scope
+    {
+        SqliteCachedStatement stmt(raw_stmt);
+        assert(stmt);
+        assert(stmt.get() == raw_stmt);
+        
+        // Bind and execute
+        assert(stmt.bind(1, 21) == SQLITE_OK);
+        assert(stmt.step() == SQLITE_ROW);
+        assert(stmt.column_int(0) == 42);
+        
+        // When stmt goes out of scope, it should NOT finalize raw_stmt.
+        // It should call sqlite3_reset() and sqlite3_clear_bindings().
+    }
+
+    // 3. Second Execution Scope (Proving raw_stmt is still valid and reset)
+    {
+        SqliteCachedStatement stmt(raw_stmt);
+        assert(stmt);
+        
+        // Because clear_bindings() was called by the previous destructor,
+        // stepping immediately should yield NULL for the parameter.
+        assert(stmt.step() == SQLITE_ROW);
+        assert(stmt.column_type(0) == SQLITE_NULL);
+
+        // Reset the statement to execute again
+        assert(stmt.reset() == SQLITE_OK);
+
+        // Bind a new value
+        assert(stmt.bind(1, 100) == SQLITE_OK);
+        assert(stmt.step() == SQLITE_ROW);
+        assert(stmt.column_int(0) == 200);
+    }
+
+    // 4. Move Semantics
+    {
+        SqliteCachedStatement stmt1(raw_stmt);
+        stmt1.bind(1, 5);
+        
+        SqliteCachedStatement stmt2 = static_cast<SqliteCachedStatement&&>(stmt1);
+        assert(!stmt1); // stmt1 is detached
+        assert(stmt2);
+        
+        // stmt2 inherited the active bindings
+        assert(stmt2.step() == SQLITE_ROW);
+        assert(stmt2.column_int(0) == 10);
+        
+        // When stmt2 goes out of scope, it resets raw_stmt.
+    }
+
+    // 5. Finally, we destroy our cached statement
+    assert(sqlite3_finalize(raw_stmt) == SQLITE_OK);
+}
+
+void test_auto_finalize(sqlite3* db) {
+    printf("11. Testing SqliteStatement Auto-Finalization on Destruct...\n");
+
+    // Ensure there are no active statements on the DB right now
+    assert(sqlite3_next_stmt(db, nullptr) == nullptr);
+
+    {
+        // Entering scope, create a statement
+        SqliteStatement stmt(db, "SELECT 'Hello, Auto-Finalize!';");
+        assert(stmt);
+        
+        // Prove it is registered with the database connection
+        sqlite3_stmt* active = sqlite3_next_stmt(db, nullptr);
+        assert(active != nullptr);
+        assert(active == stmt.get());
+        
+        // When we hit this closing brace, ~SqliteStatement() will run
+        // and it should automatically call sqlite3_finalize(active).
+    }
+
+    // Prove that the statement was mathematically finalized and removed from the DB!
+    assert(sqlite3_next_stmt(db, nullptr) == nullptr);
+}
+
+void test_cached_statement_with_owner(sqlite3* db) {
+    printf("12. Testing SqliteCachedStatement leasing from SqliteStatement...\n");
+
+    {
+        // 1. The "Cache" owns the prepared statement (guarantees finalization on shutdown)
+        SqliteStatement owner_stmt(db, "SELECT ? * 10;");
+        assert(owner_stmt);
+
+        // 2. The UDF/Function borrows it by wrapping it in a CachedStatement
+        {
+            SqliteCachedStatement lease_stmt(owner_stmt.get());
+            assert(lease_stmt);
+            
+            lease_stmt.bind(1, 5);
+            assert(lease_stmt.step() == SQLITE_ROW);
+            assert(lease_stmt.column_int(0) == 50);
+
+            // lease_stmt goes out of scope! It calls reset() and clear_bindings(),
+            // but critically DOES NOT finalize the statement.
+        }
+
+        // 3. Prove the owner statement is still alive and was reset!
+        assert(owner_stmt.get() != nullptr); // Not finalized
+        assert(owner_stmt.step() == SQLITE_ROW); // Can step again
+        assert(owner_stmt.column_type(0) == SQLITE_NULL); // Bindings were cleared!
+        
+        // 4. owner_stmt goes out of scope and finalizes the statement cleanly.
+    }
+
+    // Prove finalization happened
+    assert(sqlite3_next_stmt(db, nullptr) == nullptr);
+}
+
+void test_interleaved_execution(sqlite3* db) {
+    printf("13. Testing Interleaved Execution (Nested Loops)...\n");
+
+    SqliteStatement create_stmt(db, "CREATE TABLE colors(id INT, name TEXT);");
+    assert(create_stmt.execute() == SQLITE_DONE);
+    
+    assert(sqlite3_exec(db, "INSERT INTO colors VALUES (1, 'Red'), (2, 'Green'), (3, 'Blue');", nullptr, nullptr, nullptr) == SQLITE_OK);
+
+    SqliteStatement outer(db, "SELECT id FROM colors ORDER BY id ASC;");
+    SqliteStatement inner(db, "SELECT name FROM colors WHERE id != ? ORDER BY id ASC;");
+
+    int total_pairs = 0;
+    while (outer.next()) {
+        int outer_id = outer.column_int(0);
+
+        // Bind the inner loop to the outer loop's value
+        assert(inner.reset() == SQLITE_OK);
+        assert(inner.bind(1, outer_id) == SQLITE_OK);
+        
+        int inner_matches = 0;
+        while (inner.next()) {
+            inner_matches++;
+            total_pairs++;
+        }
+        
+        // Since there are 3 colors, and we filter WHERE id != outer_id, 
+        // each outer loop should see exactly 2 inner matches.
+        assert(inner_matches == 2);
+    }
+    
+    // 3 outer loops * 2 inner matches = 6 total pairs
+    assert(total_pairs == 6);
+}
+
+void test_cached_statement_edge_cases(sqlite3* db) {
+    printf("14. Testing SqliteCachedStatement Edge Cases...\n");
+
+    sqlite3_stmt* raw1 = nullptr;
+    sqlite3_stmt* raw2 = nullptr;
+    assert(sqlite3_prepare_v2(db, "SELECT 1;", -1, &raw1, nullptr) == SQLITE_OK);
+    assert(sqlite3_prepare_v2(db, "SELECT 2;", -1, &raw2, nullptr) == SQLITE_OK);
+
+    {
+        SqliteCachedStatement stmt1(raw1);
+        SqliteCachedStatement stmt2(raw2);
+
+        // 1. Move-Assignment Overwrite
+        // Moving stmt2 into stmt1 should force stmt1 to auto-reset raw1 BEFORE taking ownership of raw2
+        stmt1 = static_cast<SqliteCachedStatement&&>(stmt2);
+        assert(!stmt2); // stmt2 is now empty
+        assert(stmt1.get() == raw2);
+        assert(stmt1.step() == SQLITE_ROW);
+        assert(stmt1.column_int(0) == 2);
+        
+        // 2. Manual release() bypasses auto-reset
+        // If a user calls release(), they steal the pointer back and bypass the destructor's auto-reset.
+        sqlite3_stmt* stolen = stmt1.release();
+        assert(!stmt1);
+        assert(stolen == raw2);
+        
+        // Since we stole it mid-execution, we must manually reset it!
+        sqlite3_reset(stolen);
+
+        // 3. Move-assigning from an empty statement
+        SqliteCachedStatement empty;
+        SqliteCachedStatement stmt3(raw1); // raw1 was reset during the move-assignment above!
+        assert(stmt3.step() == SQLITE_ROW);
+        
+        stmt3 = static_cast<SqliteCachedStatement&&>(empty);
+        assert(!stmt3); // stmt3 is now safely null, and raw1 was auto-reset during the overwrite!
+    }
+
+    // Clean up our raw pointers manually since CachedStatement doesn't finalize!
+    assert(sqlite3_finalize(raw1) == SQLITE_OK);
+    assert(sqlite3_finalize(raw2) == SQLITE_OK);
+}
+
 int main() {
     sqlite3_initialize();
 
@@ -436,10 +631,15 @@ int main() {
     test_explicit_nbyte_prepare(db);
     test_transactions_and_blob_owned(db);
     test_error_handling(db);
+    test_cached_statement(db);
+    test_auto_finalize(db);
+    test_cached_statement_with_owner(db);
+    test_interleaved_execution(db);
+    test_cached_statement_edge_cases(db);
 
     sqlite3_close(db);
     sqlite3_shutdown();
 
-    printf("\nAll 9 SqliteStatement Test Suites (100%% Function Coverage) Passed Successfully!\n");
+    printf("\nAll 14 SqliteStatement Test Suites (100%% Function Coverage) Passed Successfully!\n");
     return 0;
 }

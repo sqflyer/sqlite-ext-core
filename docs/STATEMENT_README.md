@@ -10,6 +10,7 @@ A zero-dependency, freestanding C++ RAII wrapper over SQLite prepared statements
 - **Zero-Allocation Column Extraction**: Access column outputs directly as lightweight `SqliteStringView`, `SqliteBlobView`, or `SqliteValueView` objects without heap copies.
 - **Polymorphic Storage**: Read column values directly into `SqliteValueOwned` objects for insertion into heterogeneous containers or cache layers.
 - **Simple Iteration Loop**: Clean `while (stmt.next())` or `while (stmt.step() == SQLITE_ROW)` loop ergonomics.
+- **Cached Statement Leasing**: Includes `SqliteCachedStatement` to safely auto-reset statements borrowed from a cache pool without finalizing them.
 - **Freestanding & `-nostdlib++` Ready**: Built completely without `<memory>`, `<string>`, or standard exceptions.
 
 ## Setup
@@ -90,6 +91,38 @@ void store_column_in_map(sqlite3* db, std::map<SqliteValueOwned, int, std::less<
         my_map.emplace(std::move(key), 1);
     }
 }
+```
+
+### 6. Caching & Leasing (`SqliteCachedStatement`)
+For massive performance gains in extensions or UDFs, you can cache a `SqliteStatement` globally, and lease it out using `SqliteCachedStatement`. When the lease goes out of scope, it automatically scrubs the bindings and resets the statement for the next caller, completely bypassing finalization!
+
+> [!WARNING]  
+> A cached `sqlite3_stmt*` handle is an active execution state machine. It is **NOT thread-safe** and cannot be used for parallel execution or recursive reads (e.g. self-joining a TVF). Use this strictly in tight, sequential loops.
+
+```cpp
+class MyExtension {
+    // 1. The cache owner (finalizes safely on shutdown)
+    SqliteStatement m_cached_query;
+
+public:
+    MyExtension(sqlite3* db) {
+        m_cached_query.prepare(db, "SELECT fast_lookup(?);");
+    }
+
+    void run_fast_query(int id) {
+        // 2. The lease (borrows the raw pointer)
+        SqliteCachedStatement lease(m_cached_query.get());
+        
+        lease.bind(1, id);
+        if (lease.step() == SQLITE_ROW) {
+            // read data...
+        }
+        
+        // 3. Lease goes out of scope! 
+        // Automatically calls sqlite3_reset() and sqlite3_clear_bindings()
+        // but DOES NOT finalize the handle! It is safely returned to m_cached_query.
+    }
+};
 ```
 
 ---

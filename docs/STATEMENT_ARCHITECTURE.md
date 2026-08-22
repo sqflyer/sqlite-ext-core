@@ -40,6 +40,24 @@ inline SqliteStatement& operator=(SqliteStatement&& other) noexcept {
 }
 ```
 
+### Cached Statement Leasing (Polymorphic Ownership)
+
+To support high-performance, tight-loop execution (like scalar UDFs), the architecture includes `SqliteCachedStatement`. This derived class relies on C++'s static destruction order to fundamentally alter the lifecycle without adding `virtual` overhead:
+
+```cpp
+class SqliteCachedStatement : public SqliteStatement {
+    ~SqliteCachedStatement() {
+        sqlite3_stmt* stmt = release(); // Base class sets m_stmt = nullptr
+        if (stmt) {
+            sqlite3_clear_bindings(stmt);
+            sqlite3_reset(stmt);
+        }
+    }
+};
+```
+
+By intentionally nullifying `m_stmt` in the derived destructor (`release()`), the compiler automatically calls the base `~SqliteStatement()` destructor, which safely observes `m_stmt == nullptr` and **skips finalization**. This cleanly detaches the active bytecode cursor and scrubs it for reuse, perfectly modeling a "Cache Owner → Temporary Lease" architecture.
+
 ---
 
 ## Zero-Allocation Column Extraction Pipeline

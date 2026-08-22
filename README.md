@@ -115,8 +115,11 @@ A zero-dependency, freestanding C++ RAII wrapper over SQLite prepared statements
 - **Zero-Allocation Column Extraction**: Directly extracts result columns into `SqliteStringView`, `SqliteBlobView`, and `SqliteValueView` without heap copies.
 - **Fast Execution Helpers**: Provides `execute()` for atomic step-and-reset on DML/DDL queries, and `next()` for clean multi-row iteration loops.
 - **Polymorphic Storage**: Easily extracts column values directly into `SqliteValueOwned` objects for insertion into maps or cache layers.
+- **Cached Statement Leasing**: Includes `SqliteCachedStatement` to safely auto-reset statements borrowed from a global cache without finalizing them, completely eliminating `SQLITE_MISUSE` bugs in high-performance loops.
 
 #### Documentation
+- [Statement Wrapper README](docs/STATEMENT_README.md)
+- [Statement Wrapper Architecture](docs/STATEMENT_ARCHITECTURE.md)
 ### 8. C++ Aggregate Function Framework (`sqlite3_aggregate.hpp`)
 A zero-dependency, type-safe C++ framework for defining SQLite Aggregate Functions using intuitive, object-oriented structs with zero C-pointer casting.
 

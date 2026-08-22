@@ -18,6 +18,13 @@ private:
     SqliteStatement(const SqliteStatement&) = delete;
     SqliteStatement& operator=(const SqliteStatement&) = delete;
 
+protected:
+    /**
+     * @brief Protected constructor for derived classes (e.g. SqliteCachedStatement) 
+     * to wrap an existing raw statement handle.
+     */
+    inline explicit SqliteStatement(sqlite3_stmt* stmt) noexcept : m_stmt(stmt) {}
+
 public:
     /**
      * @brief Constructs an empty, unprepared statement wrapper.
@@ -544,6 +551,64 @@ public:
      */
     inline SqliteValueOwned column_value_owned(int col) const {
         return SqliteValueOwned(column_value(col));
+    }
+};
+
+// ============================================================================
+// CACHED STATEMENT WRAPPER
+// ============================================================================
+
+/**
+ * @brief RAII wrapper for a borrowed, cached sqlite3_stmt.
+ * 
+ * Unlike SqliteStatement, this does NOT finalize the statement on destruction.
+ * Instead, it calls sqlite3_clear_bindings() and sqlite3_reset(), returning it
+ * to a clean state for the next user of the cache.
+ * 
+ * WARNING: This wrapper (and the underlying sqlite3_stmt handle) is NOT thread-safe
+ * and cannot be safely used for parallel reads or recursive execution. 
+ * It should be exclusively used in tight loops (e.g. executing queries inside a UDF) 
+ * for maximum performance where preparing a statement repeatedly would be a bottleneck.
+ */
+class SqliteCachedStatement : public SqliteStatement {
+public:
+    /**
+     * @brief Constructs a cached statement wrapper from a raw handle.
+     * @param stmt A prepared statement owned by a cache.
+     */
+    explicit SqliteCachedStatement(sqlite3_stmt* stmt = nullptr) noexcept 
+        : SqliteStatement(stmt) {}
+
+    // Delete copy semantics
+    SqliteCachedStatement(const SqliteCachedStatement&) = delete;
+    SqliteCachedStatement& operator=(const SqliteCachedStatement&) = delete;
+
+    // Move semantics
+    inline SqliteCachedStatement(SqliteCachedStatement&& other) noexcept 
+        : SqliteStatement(static_cast<SqliteStatement&&>(other)) {}
+
+    inline SqliteCachedStatement& operator=(SqliteCachedStatement&& other) noexcept {
+        if (this != &other) {
+            release_to_cache();
+            SqliteStatement::operator=(static_cast<SqliteStatement&&>(other));
+        }
+        return *this;
+    }
+
+    /**
+     * @brief Destructor. Resets and clears bindings instead of finalizing.
+     */
+    ~SqliteCachedStatement() {
+        release_to_cache();
+    }
+
+private:
+    inline void release_to_cache() noexcept {
+        sqlite3_stmt* stmt = release(); // Base release() sets m_stmt = nullptr
+        if (stmt) {
+            sqlite3_clear_bindings(stmt);
+            sqlite3_reset(stmt);
+        }
     }
 };
 
