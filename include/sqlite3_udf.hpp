@@ -4,6 +4,7 @@
 #include <sqlite3.h>
 #include "sqlite3_value.hpp"
 #include "sqlite3_aggregate.hpp"
+#include "sqlite3_tvf.hpp"
 
 /**
  * @brief Lightweight registry for mapping C++ stateless functions/lambdas and aggregates to SQLite UDFs.
@@ -69,6 +70,19 @@ public:
     template <typename T>
     static inline int define_aggregate(sqlite3* db, const char* name, int num_args = -1, bool deterministic = true) {
         return SqliteAggregate<T>::define(db, name, num_args, deterministic);
+    }
+
+    /**
+     * @brief Register an Object-Oriented C++ Table-Valued Function (TVF) with SQLite.
+     * 
+     * @tparam T The iterator struct/class inheriting from SqliteTvfIterator.
+     * @param db The SQLite database connection.
+     * @param name The SQL name of the TVF.
+     * @return SQLITE_OK on success, or an error code.
+     */
+    template <typename T>
+    static inline int define_tvf(sqlite3* db, const char* name) {
+        return SqliteTvfModule<T>::define(db, name);
     }
 
 private:

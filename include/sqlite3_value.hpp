@@ -73,6 +73,14 @@ namespace SqliteStringUtil {
     inline unsigned long long hash(const char* val, int len) {
         return SqliteHashUtil::hash(val, len);
     }
+
+    /**
+     * @brief Computes the length of a null-terminated C-string. 
+     * Safely wraps standard `<string.h>` strlen with a nullptr check.
+     */
+    inline int sqlite_strlen(const char* str) {
+        return str ? static_cast<int>(strlen(str)) : 0;
+    }
     
     /**
      * @brief Checks if two character arrays are exactly equal.
@@ -144,7 +152,7 @@ public:
      * @brief Implicitly constructs a view from a null-terminated C-string.
      * Enables zero-allocation heterogeneous map lookups like `my_map.find("hello")`.
      */
-    SqliteStringView(const char* data) : m_data(data), m_size(data ? strlen(data) : 0) {}
+    SqliteStringView(const char* data) : m_data(data), m_size(SqliteStringUtil::sqlite_strlen(data)) {}
     
     SqliteStringView() : m_data(nullptr), m_size(0) {}
     
@@ -1471,7 +1479,7 @@ struct SqliteValueHash {
     // Strings
     inline size_t operator()(const SqliteStringOwned& str) const { return static_cast<size_t>(str.hash()); }
     inline size_t operator()(const SqliteStringView& str) const { return static_cast<size_t>(str.hash()); }
-    inline size_t operator()(const char* str) const { return static_cast<size_t>(SqliteStringUtil::hash(str)); }
+    inline size_t operator()(const char* str) const { return static_cast<size_t>(SqliteStringUtil::hash(str, SqliteStringUtil::sqlite_strlen(str))); }
 
     // Blobs
     inline size_t operator()(const SqliteBlobOwned& blob) const { return static_cast<size_t>(blob.hash()); }

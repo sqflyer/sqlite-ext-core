@@ -135,6 +135,20 @@ A zero-dependency, type-safe C++ framework for defining SQLite Aggregate Functio
 - [Aggregate Functions README](docs/AGGREGATE_README.md)
 - [Aggregate Functions Architecture](docs/AGGREGATE_ARCHITECTURE.md)
 
+### 9. C++ Table-Valued Function (TVF) Framework (`sqlite3_tvf.hpp`)
+A zero-boilerplate, zero-dependency C++ framework for building Eponymous SQLite Virtual Tables (Table-Valued Functions) by simply implementing a C++ Iterator.
+
+#### Key Features:
+- **Zero C-API Boilerplate**: No need to manually define `sqlite3_module` structs or write complex `xConnect`/`xBestIndex`/`xFilter` callbacks. It uses template metaprogramming to build the C-structs statically.
+- **Auto-Routing Arguments**: Hidden columns in your schema are automatically routed directly into your `init(args)` method as bounds-safe `SqliteUdfArgs`.
+- **Query Planner Auto-Tuning**: Automatically handles SQLite's `xBestIndex` constraint logic to guarantee the optimizer passes the maximum number of arguments to your function, enabling perfect Correlated Subqueries.
+- **Custom Cost Override**: Cleanly override the query planner `estimatedCost` heuristic using static C++ name-hiding without any virtual vtable overhead.
+- **Zero VTable Overhead**: The framework intentionally avoids virtual destructors, downcasting in `xClose` to ensure complete `-nostdlib++` safety without requiring a global `operator delete`.
+
+#### Documentation
+- [TVF Framework README](docs/TVF_README.md)
+- [TVF Framework Architecture](docs/TVF_ARCHITECTURE.md)
+
 ## Building and Testing
 This repository includes a robust test suite to verify the thread-safety and memory-safety of the extensions under immense load.
 
