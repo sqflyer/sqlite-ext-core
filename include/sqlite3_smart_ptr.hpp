@@ -3,7 +3,7 @@
 
 #include "sqlite3ext.h"
 #include "sqlite3_allocator.hpp"
-#include "sqlite3_tiny_lock.hpp"
+#include "sqlite3_atomic.h"
 
 /**
  * @brief Default deleter for SqliteSmartPtrs.
@@ -22,7 +22,6 @@ struct SqlitePtrControlBlock {
     T* ptr;
     int strong_count;
     int weak_count;
-    SqliteTinyLock mutex;
     void (*deleter)(T*);
 };
 
@@ -48,22 +47,14 @@ private:
     /** @brief Decrements the strong reference count, destroying the object if it reaches 0. */
     void release() {
         if (m_cb) {
-            int new_strong;
-            int total_refs;
-            
-            m_cb->mutex.lock();
-            new_strong = --m_cb->strong_count;
-            if (new_strong == 0) {
+            if (sqlite_atomic_decrement_32(&m_cb->strong_count) == 0) {
                 if (m_cb->ptr && m_cb->deleter) {
                     m_cb->deleter(m_cb->ptr);
                 }
                 m_cb->ptr = nullptr;
-            }
-            total_refs = m_cb->strong_count + m_cb->weak_count;
-            m_cb->mutex.unlock();
-            
-            if (total_refs == 0) {
-                sqlite3_free(m_cb);
+                SqliteWeakPtr<T> wp;
+                wp.m_cb = m_cb;
+                wp.release();
             }
             m_cb = nullptr;
         }
@@ -72,9 +63,7 @@ private:
     /** @brief Increments the strong reference count. */
     void retain() {
         if (m_cb) {
-            m_cb->mutex.lock();
-            m_cb->strong_count++;
-            m_cb->mutex.unlock();
+            sqlite_atomic_increment_32(&m_cb->strong_count);
         }
     }
 
@@ -95,8 +84,7 @@ public:
         }
         m_cb->ptr = ptr;
         m_cb->strong_count = 1;
-        m_cb->weak_count = 0;
-        sqlite_construct_at(&m_cb->mutex); // Custom placement new
+        m_cb->weak_count = 1; // The strong references collectively hold 1 weak reference
         m_cb->deleter = deleter;
     }
 
@@ -160,13 +148,7 @@ public:
     
     /** @brief Returns the current number of strong references to the managed object. */
     int use_count() const {
-        int count = 0;
-        if (m_cb) {
-            m_cb->mutex.lock();
-            count = m_cb->strong_count;
-            m_cb->mutex.unlock();
-        }
-        return count;
+        return m_cb ? m_cb->strong_count : 0;
     }
 };
 
@@ -185,14 +167,7 @@ private:
     /** @brief Decrements the weak reference count, destroying the control block if total references reach 0. */
     void release() {
         if (m_cb) {
-            int total_refs;
-            
-            m_cb->mutex.lock();
-            m_cb->weak_count--;
-            total_refs = m_cb->strong_count + m_cb->weak_count;
-            m_cb->mutex.unlock();
-            
-            if (total_refs == 0) {
+            if (sqlite_atomic_decrement_32(&m_cb->weak_count) == 0) {
                 sqlite3_free(m_cb);
             }
             m_cb = nullptr;
@@ -202,9 +177,7 @@ private:
     /** @brief Increments the weak reference count. */
     void retain() {
         if (m_cb) {
-            m_cb->mutex.lock();
-            m_cb->weak_count++;
-            m_cb->mutex.unlock();
+            sqlite_atomic_increment_32(&m_cb->weak_count);
         }
     }
 
@@ -266,26 +239,21 @@ public:
     /** @brief Checks if the managed object has already been deleted. */
     bool expired() const {
         if (!m_cb) return true;
-        int count = 0;
-        m_cb->mutex.lock();
-        count = m_cb->strong_count;
-        m_cb->mutex.unlock();
-        return count == 0;
+        return m_cb->strong_count == 0;
     }
 
     /** @brief Upgrades to a strong SqliteSharedPtr if the object is still alive. Returns empty if expired. */
     SqliteSharedPtr<T> lock() const {
         if (!m_cb) return SqliteSharedPtr<T>();
         
-        m_cb->mutex.lock();
-        if (m_cb->strong_count == 0) {
-            m_cb->mutex.unlock();
-            return SqliteSharedPtr<T>();
+        int current = m_cb->strong_count;
+        while (current > 0) {
+            if (sqlite_atomic_cas_weak_32(&m_cb->strong_count, &current, current + 1)) {
+                return SqliteSharedPtr<T>(m_cb);
+            }
         }
-        m_cb->strong_count++;
-        m_cb->mutex.unlock();
         
-        return SqliteSharedPtr<T>(m_cb);
+        return SqliteSharedPtr<T>();
     }
 };
 

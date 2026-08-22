@@ -15,7 +15,7 @@ If you use standard C++ pointers or `std::shared_ptr`, the memory allocation hap
 
 These smart pointers solve this by:
 - Allocating strictly via `sqlite3_malloc` (ensuring SQLite profiles the memory).
-- Guaranteeing fast, 100% thread-safe lifecycle teardown using `SqliteTinyLock`.
+- Guaranteeing fast, 100% thread-safe lifecycle teardown using lock-free atomics.
 - Working cleanly in purely freestanding (`no-std`) environments.
 - Exposing an identical interface for both pure C and C++.
 

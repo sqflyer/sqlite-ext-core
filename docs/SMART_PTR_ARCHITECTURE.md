@@ -5,7 +5,7 @@ The `sqlite3_smart_ptr` suite is engineered to provide identical semantics to th
 ## Core Architectural Differences from STL
 
 1. **Memory Allocation Profiling**: The STL allocates control blocks using the global `new` operator. If an extension allocates vast amounts of memory using `new`, SQLite's internal memory limiters (`pragma mmap_size`, `SQLITE_LIMIT_MEMORY`) are entirely bypassed. `sqlite3_smart_ptr` strictly uses `sqlite3_malloc` to ensure all dynamic payloads are properly tracked by the engine.
-2. **Lock Selection**: STL shared pointers generally use atomic operations for reference counting. While atomics are fast, they are not always available across diverse SQLite compilation targets (e.g., specific WASM environments or older C standard compilers). To guarantee 100% portability while minimizing overhead, we built `SqliteTinyLock`—a custom 4-byte hybrid spinlock. It spins natively on hardware (using CPU pause instructions) and sleeps intelligently on WebAssembly. Crucially, because it is only 4 bytes, it is embedded by value directly into the Control Block, completely eliminating the secondary heap allocation that a native `sqlite3_mutex` would require.
+2. **Lock-Free Ref Counting**: To guarantee 100% portability and maximum performance, the control block relies purely on lock-free atomic operations (`sqlite_atomic_increment`, `sqlite_atomic_cas_weak`). This completely eliminates the need for mutexes, spinlocks, or secondary heap allocations, achieving true lock-free scaling even under extreme thread contention.
 
 ## Zero-Dependency (`no-std`) Engineering
 
@@ -44,7 +44,6 @@ struct SqlitePtrControlBlock {
     T* ptr;
     int strong_count;
     int weak_count;
-    SqliteTinyLock mutex;
     void (*deleter)(T*);
 };
 ```
@@ -95,11 +94,10 @@ A `SqliteUniquePtr` compiles down to exactly the size of a raw C-pointer plus th
 - `T* ptr`: 8 bytes
 - `int strong_count`: 4 bytes
 - `int weak_count`: 4 bytes
-- `SqliteTinyLock mutex`: 4 bytes
 - `void (*deleter)`: 8 bytes
-- **Total Overhead**: 28 Bytes per shared instance (often padded to 32 bytes).
+- **Total Overhead**: 24 Bytes per shared instance.
 
-By embedding `SqliteTinyLock` by value rather than allocating a `sqlite3_mutex`, we reduced the number of heap allocations per `SharedPtr` from 2 down to exactly 1. This drastically reduces memory fragmentation and speeds up the `make_shared` instantiation. This overhead is only paid **once** per payload, regardless of how many `SharedPtr` or `WeakPtr` instances refer to it.
+By using pure lock-free atomics rather than allocating a `sqlite3_mutex`, we reduced the number of heap allocations per `SharedPtr` from 2 down to exactly 1, while shrinking the control block size. This drastically reduces memory fragmentation and speeds up the `make_shared` instantiation. This overhead is only paid **once** per payload, regardless of how many `SharedPtr` or `WeakPtr` instances refer to it.
 
 ---
 

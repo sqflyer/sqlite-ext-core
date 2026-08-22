@@ -2,7 +2,7 @@
 #define SQLITE3_SMART_PTR_H
 
 #include "sqlite3ext.h"
-#include "sqlite3_tiny_lock.h"
+#include "sqlite3_atomic.h"
 
 /**
  * @brief Generates a zero-dependency, thread-safe, SQLite-memory-managed shared pointer for C.
@@ -12,12 +12,11 @@
  * @param Destructor A function pointer or macro to free the data (e.g., sqlite3_free).
  */
 #define SQLITE_SHARED_PTR_DEFINE(Prefix, Type, Destructor) \
-    /** @brief Control block storing the pointer, reference count, and mutex. */ \
+    /** @brief Control block storing the pointer and atomic reference counts. */ \
     typedef struct { \
         Type* ptr; \
-        int ref_count; \
+        int strong_count; \
         int weak_count; \
-        sqlite3_tiny_lock mutex; \
     } Prefix##_ControlBlock; \
     \
     /** @brief The shared pointer struct. */ \
@@ -38,19 +37,16 @@
         Prefix##_ControlBlock* cb = (Prefix##_ControlBlock*)sqlite3_malloc(sizeof(Prefix##_ControlBlock)); \
         if (!cb) return sp; \
         cb->ptr = ptr; \
-        cb->ref_count = 1; \
-        cb->weak_count = 0; \
-        sqlite3_tiny_lock_init(&cb->mutex); \
+        cb->strong_count = 1; \
+        cb->weak_count = 1; /* The strong references collectively hold 1 weak reference */ \
         sp.cb = cb; \
         return sp; \
     } \
     \
-    /** @brief Clones the shared pointer, incrementing the reference count. */ \
+    /** @brief Clones the shared pointer, atomically incrementing the strong reference count. */ \
     static inline Prefix##_SharedPtr Prefix##_clone(Prefix##_SharedPtr sp) { \
         if (sp.cb) { \
-            sqlite3_tiny_lock_lock(&sp.cb->mutex); \
-            sp.cb->ref_count++; \
-            sqlite3_tiny_lock_unlock(&sp.cb->mutex); \
+            sqlite_atomic_increment_32(&sp.cb->strong_count); \
         } \
         return sp; \
     } \
@@ -63,21 +59,23 @@
         return out; \
     } \
     \
+    /** @brief Assigns a shared pointer from a move, safely releasing the destination first. */ \
+    static inline void Prefix##_assign_move(Prefix##_SharedPtr* dst, Prefix##_SharedPtr* src) { \
+        Prefix##_release(dst); \
+        dst->cb = src ? src->cb : 0; \
+        if (src) src->cb = 0; \
+    } \
+    \
     /** @brief Releases the shared pointer, decrementing the reference count and destroying the object if it reaches 0. */ \
     static inline void Prefix##_release(Prefix##_SharedPtr* sp) { \
         if (sp && sp->cb) { \
             Prefix##_ControlBlock* cb = sp->cb; \
-            int new_ref, total_ref; \
-            sqlite3_tiny_lock_lock(&cb->mutex); \
-            new_ref = --cb->ref_count; \
-            if (new_ref == 0) { \
+            if (sqlite_atomic_decrement_32(&cb->strong_count) == 0) { \
                 if (cb->ptr) { Destructor(cb->ptr); } \
                 cb->ptr = 0; \
-            } \
-            total_ref = cb->ref_count + cb->weak_count; \
-            sqlite3_tiny_lock_unlock(&cb->mutex); \
-            if (total_ref == 0) { \
-                sqlite3_free(cb); \
+                Prefix##_WeakPtr wp; \
+                wp.cb = cb; \
+                Prefix##_weak_release(&wp); \
             } \
             sp->cb = 0; \
         } \
@@ -98,9 +96,7 @@
         Prefix##_WeakPtr wp; \
         wp.cb = sp.cb; \
         if (wp.cb) { \
-            sqlite3_tiny_lock_lock(&wp.cb->mutex); \
-            wp.cb->weak_count++; \
-            sqlite3_tiny_lock_unlock(&wp.cb->mutex); \
+            sqlite_atomic_increment_32(&wp.cb->weak_count); \
         } \
         return wp; \
     } \
@@ -108,9 +104,7 @@
     /** @brief Clones the weak pointer, incrementing the weak count. */ \
     static inline Prefix##_WeakPtr Prefix##_weak_clone(Prefix##_WeakPtr wp) { \
         if (wp.cb) { \
-            sqlite3_tiny_lock_lock(&wp.cb->mutex); \
-            wp.cb->weak_count++; \
-            sqlite3_tiny_lock_unlock(&wp.cb->mutex); \
+            sqlite_atomic_increment_32(&wp.cb->weak_count); \
         } \
         return wp; \
     } \
@@ -126,14 +120,8 @@
     /** @brief Releases the weak pointer, decrementing the weak count. */ \
     static inline void Prefix##_weak_release(Prefix##_WeakPtr* wp) { \
         if (wp && wp->cb) { \
-            Prefix##_ControlBlock* cb = wp->cb; \
-            int total_ref; \
-            sqlite3_tiny_lock_lock(&cb->mutex); \
-            cb->weak_count--; \
-            total_ref = cb->ref_count + cb->weak_count; \
-            sqlite3_tiny_lock_unlock(&cb->mutex); \
-            if (total_ref == 0) { \
-                sqlite3_free(cb); \
+            if (sqlite_atomic_decrement_32(&wp->cb->weak_count) == 0) { \
+                sqlite3_free(wp->cb); \
             } \
             wp->cb = 0; \
         } \
@@ -147,11 +135,7 @@
     /** @brief Checks if the managed object has already been deleted. */ \
     static inline int Prefix##_weak_expired(Prefix##_WeakPtr wp) { \
         if (!wp.cb) return 1; \
-        int count = 0; \
-        sqlite3_tiny_lock_lock(&wp.cb->mutex); \
-        count = wp.cb->ref_count; \
-        sqlite3_tiny_lock_unlock(&wp.cb->mutex); \
-        return count == 0; \
+        return wp.cb->strong_count == 0; \
     } \
     \
     /** @brief Upgrades to a strong shared pointer if the object is still alive. */ \
@@ -159,12 +143,13 @@
         Prefix##_SharedPtr sp; \
         sp.cb = 0; \
         if (!wp.cb) return sp; \
-        sqlite3_tiny_lock_lock(&wp.cb->mutex); \
-        if (wp.cb->ref_count > 0) { \
-            wp.cb->ref_count++; \
-            sp.cb = wp.cb; \
+        int current = wp.cb->strong_count; \
+        while (current > 0) { \
+            if (sqlite_atomic_cas_weak_32(&wp.cb->strong_count, &current, current + 1)) { \
+                sp.cb = wp.cb; \
+                break; \
+            } \
         } \
-        sqlite3_tiny_lock_unlock(&wp.cb->mutex); \
         return sp; \
     }
 

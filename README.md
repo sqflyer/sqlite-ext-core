@@ -80,7 +80,8 @@ Zero-dependency, thread-safe, reference-counted memory allocation that integrate
 - **Zero-Dependency**: Mimics `std::shared_ptr`, `std::unique_ptr`, and `std::weak_ptr` perfectly without linking to `<memory>`.
 - **SQLite Memory Profiling**: Allocates exclusively via `sqlite3_malloc` to ensure SQLite accurately tracks heap usage limits (`SQLITE_LIMIT_MEMORY`).
 - **100% Lock-Free Ref-Counting**: Utilizes raw explicit memory-barrier atomics (`sqlite3_atomic.h`) to manage strong and weak reference counts. This completely eliminates the heap allocation overhead of a standard `sqlite3_mutex`, resulting in a blistering fast, cache-friendly, 24-byte control block.
-- **Dual Support**: Available as a C++ template suite (`SqliteSharedPtr`, `SqliteUniquePtr`, `SqliteWeakPtr`) and as a C macro generation suite (`SQLITE_SHARED_PTR_DEFINE`) for pure C extensions.
+- **Custom Deleters**: Natively supports custom destructor callbacks for both the C macro (`Destructor` arg) and the C++ template (`void (*deleter)(T*)`), allowing it to seamlessly manage external memory like `sqlite3_free` or OS-level handles.
+- **Dual Support**: Available as a C++ template suite (`SqliteSharedPtr`, `SqliteUniquePtr`, `SqliteWeakPtr`) and as a C macro generation suite (`SQLITE_SHARED_PTR_DEFINE`, `SQLITE_UNIQUE_PTR_DEFINE`) for pure C extensions.
 - **Thread-Safe**: Safely passes memory payloads across concurrent UDF calls without race conditions or memory leaks.
 
 #### Documentation
