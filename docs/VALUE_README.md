@@ -89,7 +89,25 @@ my_map.find(3.14);       // Finds the float natively via macro overloads
 my_map.find("hello");    // Finds the string (via SqliteStringView implicit conversion)
 ```
 
-### 4. Ergonomic String Builders
+### 4. Transparent Hash Maps (C++20 `std::unordered_map`)
+Because `SqliteValueOwned` avoids mixing type-IDs into its hashes for primitives and strings, you can easily implement **Zero-Allocation Heterogeneous Lookups** in hash maps using the built-in transparent functors: `SqliteValueHash` and `SqliteValueEqual`.
+
+```cpp
+#include <unordered_map>
+
+// Create a map using the built-in transparent hash and equality functors
+std::unordered_map<SqliteValueOwned, int, SqliteValueHash, SqliteValueEqual> my_hash_map;
+
+// Insert data
+my_hash_map.emplace("hello", 100);
+my_hash_map.emplace(42, 200);
+
+// Lookups require ZERO memory allocation and construct NO temporary objects!
+my_hash_map.find("hello"); // Native string lookup
+my_hash_map.find(42);      // Native integer lookup
+```
+
+### 5. Ergonomic String Builders
 Construct strings dynamically and seamlessly without ever managing memory directly.
 
 ```cpp
@@ -104,7 +122,7 @@ builder.appendchar(1, ']');
 builder.result(ctx); // Outputs: "Hello [42]"
 ```
 
-### 5. Fast Binding & Result Wrappers
+### 6. Fast Binding & Result Wrappers
 ```cpp
 static void bind_example(sqlite3_stmt* stmt, sqlite3_value** argv) {
     // Bind incoming SQLite values directly to a prepared statement

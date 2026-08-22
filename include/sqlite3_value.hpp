@@ -22,6 +22,28 @@ namespace SqliteMemoryUtil {
     }
 }
 
+namespace SqliteHashUtil {
+    /**
+     * @brief Shared FNV-1a hash utility for fast, inline hashing.
+     */
+    static const unsigned long long FNV_OFFSET_BASIS = 0xcbf29ce484222325ULL;
+    static const unsigned long long FNV_PRIME = 0x100000001b3ULL;
+
+    inline unsigned long long mix(unsigned long long h, const void* ptr, int len) {
+        if (!ptr || len <= 0) return h;
+        const unsigned char* p = static_cast<const unsigned char*>(ptr);
+        for (int i = 0; i < len; ++i) {
+            h ^= p[i];
+            h *= FNV_PRIME;
+        }
+        return h;
+    }
+
+    inline unsigned long long hash(const void* ptr, int len) {
+        return mix(FNV_OFFSET_BASIS, ptr, len);
+    }
+}
+
 /**
  * @file sqlite3_value.hpp
  * @brief Zero-dependency C++ RAII wrappers for SQLite types (String, Blob, Value).
@@ -49,19 +71,7 @@ namespace SqliteStringUtil {
      * @return 64-bit hash value.
      */
     inline unsigned long long hash(const char* val, int len) {
-        static const unsigned long long FNV_OFFSET_BASIS = 0xcbf29ce484222325ULL;
-        static const unsigned long long FNV_PRIME = 0x100000001b3ULL;
-
-        if (!val || len == 0) {
-            return FNV_OFFSET_BASIS;
-        }
-
-        unsigned long long h = FNV_OFFSET_BASIS;
-        for (int i = 0; i < len; ++i) {
-            h ^= (unsigned char)val[i];
-            h *= FNV_PRIME;
-        }
-        return h;
+        return SqliteHashUtil::hash(val, len);
     }
     
     /**
@@ -182,12 +192,12 @@ class SqliteStringOwned {
 
 public:
     /** @brief Sets this object as the return result of a SQLite UDF context. */
-    void result(sqlite3_context* ctx) const {
-        sqlite3_result_text(ctx, value(), length(), SQLITE_TRANSIENT);
+    void result(sqlite3_context* ctx, void(*dtor)(void*) = SQLITE_TRANSIENT) const {
+        sqlite3_result_text(ctx, value(), length(), dtor);
     }
     /** @brief Binds this object to a prepared SQLite statement at the given 1-based column index. */
-    int bind(sqlite3_stmt* stmt, int col) const {
-        return sqlite3_bind_text(stmt, col, value(), length(), SQLITE_TRANSIENT);
+    int bind(sqlite3_stmt* stmt, int col, void(*dtor)(void*) = SQLITE_TRANSIENT) const {
+        return sqlite3_bind_text(stmt, col, value(), length(), dtor);
     }
     /**
      * @brief Creates a new string builder tied to a specific database connection.
@@ -390,20 +400,7 @@ namespace SqliteBlobUtil {
      * @brief Computes a 64-bit FNV-1a hash of a binary buffer.
      */
     inline unsigned long long hash(const void* val, int len) {
-        static const unsigned long long FNV_OFFSET_BASIS = 0xcbf29ce484222325ULL;
-        static const unsigned long long FNV_PRIME = 0x100000001b3ULL;
-
-        if (!val || len == 0) {
-            return FNV_OFFSET_BASIS;
-        }
-
-        unsigned long long h = FNV_OFFSET_BASIS;
-        const char* ptr = static_cast<const char*>(val);
-        for (int i = 0; i < len; ++i) {
-            h ^= (unsigned char)ptr[i];
-            h *= FNV_PRIME;
-        }
-        return h;
+        return SqliteHashUtil::hash(val, len);
     }
     
     /**
@@ -518,33 +515,32 @@ class SqliteBlobOwned {
 
 public:
     /** @brief Sets this object as the return result of a SQLite UDF context. */
-    void result(sqlite3_context* ctx) const {
-        sqlite3_result_blob(ctx, data(), size(), SQLITE_TRANSIENT);
+    void result(sqlite3_context* ctx, void(*dtor)(void*) = SQLITE_TRANSIENT) const {
+        sqlite3_result_blob(ctx, data(), size(), dtor);
     }
     /** @brief Binds this object to a prepared SQLite statement at the given 1-based column index. */
-    int bind(sqlite3_stmt* stmt, int col) const {
-        return sqlite3_bind_blob(stmt, col, data(), size(), SQLITE_TRANSIENT);
+    int bind(sqlite3_stmt* stmt, int col, void(*dtor)(void*) = SQLITE_TRANSIENT) const {
+        return sqlite3_bind_blob(stmt, col, data(), size(), dtor);
     }
+    /**
+     * @brief Constructs an empty binary blob.
+     */
+    SqliteBlobOwned() : m_data(nullptr), m_size(0) {}
+
     /**
      * @brief Allocates memory and copies the provided binary data.
      * @param data Pointer to the binary payload to copy.
      * @param size Length of the payload in bytes.
      */
-    SqliteBlobOwned(const void* data, int size) {
-        m_size = size;
-        if (size > 0 && data) {
+    SqliteBlobOwned(const void* data, int size) : m_data(nullptr), m_size(0) {
+        if (size > 0) {
             m_data = sqlite3_malloc(size);
             if (m_data) {
-                const char* src = static_cast<const char*>(data);
-                char* dst = static_cast<char*>(m_data);
-                for (int i = 0; i < size; ++i) {
-                    dst[i] = src[i];
+                m_size = size;
+                if (data) {
+                    memcpy(m_data, data, size);
                 }
-            } else {
-                m_size = 0;
             }
-        } else {
-            m_data = nullptr;
         }
     }
     
@@ -654,60 +650,33 @@ namespace SqliteValueUtil {
      * Hashes the type ID first to guarantee no collisions between Ints, Floats, and Strings.
      */
     inline unsigned long long hash(const sqlite3_value* val) {
-        static const unsigned long long FNV_OFFSET_BASIS = 0xcbf29ce484222325ULL;
-        static const unsigned long long FNV_PRIME = 0x100000001b3ULL;
-
         if (!val) {
-            return FNV_OFFSET_BASIS;
+            return SqliteHashUtil::FNV_OFFSET_BASIS;
         }
         
         sqlite3_value* mut_val = const_cast<sqlite3_value*>(val);
         int t = sqlite3_value_type(mut_val);
-        unsigned long long h = FNV_OFFSET_BASIS;
         
-        h ^= (unsigned char)t;
-        h *= FNV_PRIME;
+        unsigned long long h = SqliteHashUtil::FNV_OFFSET_BASIS;
         
         switch (t) {
             case SQLITE_INTEGER: {
                 sqlite3_int64 i_val = sqlite3_value_int64(mut_val);
-                const char* ptr = reinterpret_cast<const char*>(&i_val);
-                for (unsigned int i = 0; i < sizeof(sqlite3_int64); ++i) {
-                    h ^= (unsigned char)ptr[i];
-                    h *= FNV_PRIME;
-                }
+                h = SqliteHashUtil::mix(h, &i_val, sizeof(i_val));
                 break;
             }
             case SQLITE_FLOAT: {
                 double d_val = sqlite3_value_double(mut_val);
                 if (d_val == 0.0) d_val = 0.0; // Forces -0.0 to +0.0
-                const char* ptr = reinterpret_cast<const char*>(&d_val);
-                for (unsigned int i = 0; i < sizeof(double); ++i) {
-                    h ^= (unsigned char)ptr[i];
-                    h *= FNV_PRIME;
-                }
+                h = SqliteHashUtil::mix(h, &d_val, sizeof(d_val));
                 break;
             }
             case SQLITE_TEXT: {
-                const char* txt = reinterpret_cast<const char*>(sqlite3_value_text(mut_val));
-                int bytes = sqlite3_value_bytes(mut_val);
-                if (txt) {
-                    for (int i = 0; i < bytes; ++i) {
-                        h ^= (unsigned char)txt[i];
-                        h *= FNV_PRIME;
-                    }
-                }
+                h = SqliteHashUtil::mix(h, sqlite3_value_text(mut_val), sqlite3_value_bytes(mut_val));
                 break;
             }
             case SQLITE_BLOB: {
-                const char* blob = reinterpret_cast<const char*>(sqlite3_value_blob(mut_val));
-                int bytes = sqlite3_value_bytes(mut_val);
-                if (blob) {
-                    for (int i = 0; i < bytes; ++i) {
-                        h ^= (unsigned char)blob[i];
-                        h *= FNV_PRIME;
-                    }
-                }
+                h = SqliteHashUtil::mix(h, sqlite3_value_blob(mut_val), sqlite3_value_bytes(mut_val));
                 break;
             }
             case SQLITE_NULL:
@@ -1085,26 +1054,13 @@ public:
      * Seamlessly hashes inline SBO types or delegates to `SqliteValueUtil` for heap types.
      */
     unsigned long long hash() const {
-        static const unsigned long long FNV_OFFSET_BASIS = 0xcbf29ce484222325ULL;
-        static const unsigned long long FNV_PRIME = 0x100000001b3ULL;
-
-        unsigned long long h = FNV_OFFSET_BASIS;
-        h ^= (unsigned char)m_type;
-        h *= FNV_PRIME;
+        unsigned long long h = SqliteHashUtil::FNV_OFFSET_BASIS;
 
         if (m_type == SQLITE_INTEGER) {
-            const char* ptr = reinterpret_cast<const char*>(&m_data.iValue);
-            for (unsigned int i = 0; i < sizeof(sqlite3_int64); ++i) {
-                h ^= (unsigned char)ptr[i];
-                h *= FNV_PRIME;
-            }
+            h = SqliteHashUtil::mix(h, &m_data.iValue, sizeof(m_data.iValue));
         } else if (m_type == SQLITE_FLOAT) {
             double d = m_data.dValue == 0.0 ? 0.0 : m_data.dValue;
-            const char* ptr = reinterpret_cast<const char*>(&d);
-            for (unsigned int i = 0; i < sizeof(double); ++i) {
-                h ^= (unsigned char)ptr[i];
-                h *= FNV_PRIME;
-            }
+            h = SqliteHashUtil::mix(h, &d, sizeof(d));
         } else if (m_type == SQLITE_TEXT || m_type == SQLITE_BLOB) {
             return SqliteValueUtil::hash(m_data.pValue);
         }
@@ -1182,7 +1138,7 @@ public:
         return false;
     }
 
-    // Heterogeneous lookups
+    // Heterogeneous lookups for SqliteValueView
     /** @brief Heterogeneous equality check against a transient SqliteValueView. */
     bool operator==(const SqliteValueView& other) const;
     /** @brief Heterogeneous inequality check against a transient SqliteValueView. */
@@ -1496,5 +1452,49 @@ SQLITE_DEF_VAL_BLOB_OPS(SqliteValueView, get, SqliteBlobOwned, data, size)
 
 SQLITE_DEF_VAL_PRIM_OPS(SqliteValueOwned)
 SQLITE_DEF_VAL_PRIM_OPS(SqliteValueView)
+
+// ============================================================================
+// TRANSPARENT HASH MAP FUNCTORS (C++20 Heterogeneous Lookups)
+// ============================================================================
+
+/**
+ * @brief A transparent Hash functor for std::unordered_map.
+ * Enables zero-allocation heterogeneous lookups across Strings, Blobs, and Primitives.
+ */
+struct SqliteValueHash {
+    using is_transparent = void;
+
+    // Polymorphic Values
+    inline size_t operator()(const SqliteValueOwned& val) const { return static_cast<size_t>(val.hash()); }
+    inline size_t operator()(const SqliteValueView& val) const { return static_cast<size_t>(val.hash()); }
+
+    // Strings
+    inline size_t operator()(const SqliteStringOwned& str) const { return static_cast<size_t>(str.hash()); }
+    inline size_t operator()(const SqliteStringView& str) const { return static_cast<size_t>(str.hash()); }
+    inline size_t operator()(const char* str) const { return static_cast<size_t>(SqliteStringUtil::hash(str)); }
+
+    // Blobs
+    inline size_t operator()(const SqliteBlobOwned& blob) const { return static_cast<size_t>(blob.hash()); }
+    inline size_t operator()(const SqliteBlobView& blob) const { return static_cast<size_t>(blob.hash()); }
+
+    // Primitives
+    inline size_t operator()(sqlite3_int64 i) const { return static_cast<size_t>(SqliteHashUtil::hash(&i, sizeof(i))); }
+    inline size_t operator()(int i) const { sqlite3_int64 val = i; return static_cast<size_t>(SqliteHashUtil::hash(&val, sizeof(val))); }
+    inline size_t operator()(double d) const { return static_cast<size_t>(SqliteHashUtil::hash(&d, sizeof(d))); }
+};
+
+/**
+ * @brief A transparent Equality functor for std::unordered_map.
+ * Enables zero-allocation heterogeneous lookups across Strings, Blobs, and Primitives.
+ */
+struct SqliteValueEqual {
+    using is_transparent = void;
+
+    // The core polymorphic equality relies on the heavily overloaded operator== macros.
+    template <typename T, typename U>
+    inline bool operator()(const T& a, const U& b) const {
+        return a == b;
+    }
+};
 
 #endif // SQLITE3_VALUE_HPP

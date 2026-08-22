@@ -65,7 +65,7 @@ Zero-dependency C++ RAII wrappers for SQLite core data types designed for zero-a
 - **Zero-Allocation Lookups**: Provides non-owning `View` wrappers (`SqliteStringView`, `SqliteBlobView`, `SqliteValueView`) to prevent expensive memory allocations during C++ map key lookups.
 - **Small Buffer Optimization (SBO)**: Uses union-based zero-allocation storage for integers and floats, falling back to `sqlite3_value_dup` only for strings and blobs.
 - **Heterogeneous Lookups**: Natively supports comparing `View`s against heavy, memory-managed `Owned` classes. Includes 144+ macro-generated operator overloads to instantly compare variants against strings, blobs, and C++ primitives (`int`, `double`) using all 6 standard relational operators (`==`, `!=`, `<`, `>`, `<=`, `>=`).
-- **Transparent Map Lookups**: Fully unlocks C++14 `std::less<>` heterogeneous lookup capabilities. Query polymorphic maps using `my_map.find(5)` or `my_map.find("hello")` natively, without ever instantiating a memory-managed wrapper.
+- **Transparent Map Lookups**: Fully unlocks C++14 `std::less<>` and C++20 `std::unordered_map` heterogeneous lookup capabilities. Query polymorphic maps or hash tables using `my_map.find(5)` or `my_map.find("hello")` natively, without ever instantiating a memory-managed wrapper, thanks to the built-in `SqliteValueHash` and `SqliteValueEqual` functors.
 - **Accurate Collation**: Fully conforms to official SQLite collation sorting rules (`NULL < NUMERIC < TEXT < BLOB`), complete with stable `NaN` sorting constraints.
 - **Polymorphic Variants**: Safely store Integer, Float, Text, and Blob payloads inside the exact same `std::map` using the polymorphic `SqliteValueOwned` wrapper. Features Strict Weak Ordering tie-breakers to prevent `Int(5)` colliding with `Float(5.0)`.
 - **Ergonomic String Builders**: Easily construct dynamic strings without a database handle using standard `(const char*)` constructors, or safely instantiate them inside User-Defined Functions with `(sqlite3_context*)` wrappers.
@@ -117,8 +117,20 @@ A zero-dependency, freestanding C++ RAII wrapper over SQLite prepared statements
 - **Polymorphic Storage**: Easily extracts column values directly into `SqliteValueOwned` objects for insertion into maps or cache layers.
 
 #### Documentation
-- [Statement Wrapper README](docs/STATEMENT_README.md)
-- [Statement Wrapper Architecture](docs/STATEMENT_ARCHITECTURE.md)
+### 8. C++ Aggregate Function Framework (`sqlite3_aggregate.hpp`)
+A zero-dependency, type-safe C++ framework for defining SQLite Aggregate Functions using intuitive, object-oriented structs with zero C-pointer casting.
+
+#### Key Features:
+- **Object-Oriented Aggregate Structs**: Define aggregation state cleanly as C++ structs with `step()` and `finalize()` methods.
+- **Single-Line Registration**: Register aggregates via `SqliteUdf::define_aggregate<T>(db, "name", num_args)` or `SqliteAggregate<T>::define(db, "name", num_args)`.
+- **Automatic Return Type Dispatching**: Return primitives (`int`, `sqlite3_int64`, `double`, `bool`), `const char*`, or zero-overhead SQLite wrappers (`SqliteStringOwned`, `SqliteBlobOwned`, `SqliteValueOwned`) directly from `finalize()`.
+- **RAII Lifecycle Management**: Employs `sqlite3_aggregate_context` for zero-allocation state tracking with placement construction on the first row and deterministic `~T()` destructor execution upon finalization.
+- **Bounds-Safe Parameter Access**: `step(SqliteUdfArgs args)` provides zero-allocation `SqliteValueView` argument access.
+- **Empty Set Safety**: Safely finalizes default-constructed instances when aggregating over 0 rows.
+
+#### Documentation
+- [Aggregate Functions README](docs/AGGREGATE_README.md)
+- [Aggregate Functions Architecture](docs/AGGREGATE_ARCHITECTURE.md)
 
 ## Building and Testing
 This repository includes a robust test suite to verify the thread-safety and memory-safety of the extensions under immense load.

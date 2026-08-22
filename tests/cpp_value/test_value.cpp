@@ -244,6 +244,31 @@ void test_heterogeneous_lookups(sqlite3* db) {
     
     assert(val_float < 50.0);
     assert(val_float > 10.0);
+
+    // 4. Hash consistency (Important for unordered_map heterogeneous lookups)
+    // - Value vs String hashes must match for identical strings
+    assert(val_text.hash() == str_view.hash());
+    assert(val_text.hash() == str_owned.hash());
+    // - Value vs Blob hashes must match for identical binary payloads
+    assert(val_blob.hash() == blob_view.hash());
+    // - View and Owned versions of Values must produce identical hashes
+    SqliteValueView val_text_view(sqlite3_column_value(stmt, 2));
+    assert(val_text.hash() == val_text_view.hash());
+    
+    // - Primitive hash predictability (Allows map.find(42))
+    sqlite3_int64 expected_i = 42;
+    assert(val_int.hash() == SqliteHashUtil::hash(&expected_i, sizeof(expected_i)));
+    
+    double expected_d = 42.0;
+    assert(val_float.hash() == SqliteHashUtil::hash(&expected_d, sizeof(expected_d)));
+    
+    // - Collision protections: ensure different types and different payloads differ
+    assert(val_int.hash() != str_view.hash()); // int vs string
+    assert(val_float.hash() != str_view.hash()); // float vs string
+    assert(val_int.hash() != val_float.hash()); // 42 vs 42.0
+    
+    SqliteStringView diff_str("world", 5);
+    assert(val_text.hash() != diff_str.hash()); // "hello" vs "world"
     
     sqlite3_finalize(stmt);
 }

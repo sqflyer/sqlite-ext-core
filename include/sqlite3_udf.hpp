@@ -3,43 +3,26 @@
 
 #include <sqlite3.h>
 #include "sqlite3_value.hpp"
+#include "sqlite3_aggregate.hpp"
 
 /**
- * @brief Bounds-safe C++ wrapper over SQLite's raw (int argc, sqlite3_value** argv)
- */
-class SqliteUdfArgs {
-private:
-    int m_argc;
-    sqlite3_value** m_argv;
-
-public:
-    inline SqliteUdfArgs(int argc, sqlite3_value** argv) : m_argc(argc), m_argv(argv) {}
-
-    /**
-     * @brief Get the number of arguments passed to the UDF.
-     */
-    inline int size() const { return m_argc; }
-
-    /**
-     * @brief Safely access an argument as a zero-allocation SqliteValueView.
-     * 
-     * If the index is out of bounds, returns a SQLITE_NULL view to prevent segfaults.
-     */
-    inline SqliteValueView operator[](int index) const {
-        if (index < 0 || index >= m_argc) {
-            return SqliteValueView(nullptr);
-        }
-        return SqliteValueView(m_argv[index]);
-    }
-};
-
-/**
- * @brief Lightweight registry for mapping C++ stateless functions/lambdas to SQLite UDFs.
+ * @brief Lightweight registry for mapping C++ stateless functions/lambdas and aggregates to SQLite UDFs.
  */
 class SqliteUdf {
 public:
     /**
      * @brief The C++ scalar function signature.
+     * 
+     * BEST PRACTICE FOR RESULTS:
+     * When writing scalar functions, you must explicitly set the result on the `ctx` before returning.
+     * While you can use the raw C-APIs (`sqlite3_result_int`, `sqlite3_result_text`), it is highly 
+     * recommended to use the wrapper types' `.result(ctx)` method when dealing with dynamic memory 
+     * (Strings and Blobs). This prevents memory leaks and simplifies ownership.
+     * 
+     * Example:
+     *   SqliteStringOwned str(ctx);
+     *   str.appendall("hello");
+     *   str.result(ctx); // Automatically calls sqlite3_result_text and safely transfers memory ownership!
      */
     typedef void (*ScalarFunc)(sqlite3_context* ctx, SqliteUdfArgs args);
 
@@ -71,6 +54,21 @@ public:
             nullptr, // xFinal
             nullptr  // xDestroy
         );
+    }
+
+    /**
+     * @brief Register an Object-Oriented C++ Aggregate Function struct with SQLite.
+     * 
+     * @tparam T The aggregate struct/class implementing step() and finalize().
+     * @param db The SQLite database connection.
+     * @param name The SQL name of the aggregate function.
+     * @param num_args Expected argument count (-1 for variadic).
+     * @param deterministic Whether the aggregate is deterministic (default true).
+     * @return SQLITE_OK on success, or an error code.
+     */
+    template <typename T>
+    static inline int define_aggregate(sqlite3* db, const char* name, int num_args = -1, bool deterministic = true) {
+        return SqliteAggregate<T>::define(db, name, num_args, deterministic);
     }
 
 private:

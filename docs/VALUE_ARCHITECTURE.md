@@ -36,11 +36,18 @@ To ensure maximum ergonomics, `SqliteStringOwned` provides specialized construct
 Use these `Owned` classes as the actual values or keys stored inside your maps and long-lived structures.
 
 ### The `Util` Namespaces
+- `SqliteHashUtil`
 - `SqliteStringUtil`
 - `SqliteBlobUtil`
 - `SqliteValueUtil`
 
-These hold the shared logic for computing `FNV-1a` hashes, equality, and lexicographical less-than comparisons. To guarantee optimal performance, these comparisons replace manual byte-loops with `SqliteMemoryUtil::memcmp_less` which relies on SIMD-accelerated C `memcmp`. Furthermore, `SqliteValueUtil` implements the official SQLite collation order (`NULL < NUMERIC < TEXT < BLOB`). By centralizing this logic, we enable **Heterogeneous Lookups**, allowing a `View` object to directly search and compare against an `Owned` object natively.
+These hold the shared logic for computing `FNV-1a` hashes, equality, and lexicographical less-than comparisons. `SqliteHashUtil` provides a centralized, high-performance inline FNV-1a mixer. To enable seamless `std::unordered_map` heterogeneous lookups, `SqliteValueUtil` explicitly avoids mixing type-IDs into the hash algorithm. This guarantees that the hash of a polymorphic variant perfectly matches the hashes of native C++ primitives and standalone strings. 
+
+This architecture allows developers to instantly achieve zero-allocation heterogeneous hash-map lookups using the two built-in C++20 transparent functors:
+- **`SqliteValueHash`**: A transparent hasher for all wrappers and primitives.
+- **`SqliteValueEqual`**: A transparent equality struct leveraging the massive `operator==` suite.
+
+To guarantee optimal performance, these comparisons replace manual byte-loops with `SqliteMemoryUtil::memcmp_less` which relies on SIMD-accelerated C `memcmp`. Furthermore, `SqliteValueUtil` implements the official SQLite collation order (`NULL < NUMERIC < TEXT < BLOB`). By centralizing this logic, we enable **Heterogeneous Lookups**, allowing a `View` object to directly search and compare against an `Owned` object natively.
 
 ## SQLite Integration Helpers
 All `View` and `Owned` wrappers provide `bind(sqlite3_stmt*, int col)` and `result(sqlite3_context*)` helper methods. These methods abstract away the `sqlite3_bind_*` and `sqlite3_result_*` C-APIs, making it effortless to return custom payloads from UDFs or bind data into prepared statements using `SQLITE_TRANSIENT` memory lifetimes.

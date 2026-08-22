@@ -4,6 +4,22 @@
 #include <sqlite3.h>
 
 /**
+ * @brief Cross-platform, zero-dependency optimized memory copy.
+ */
+#if defined(__GNUC__) || defined(__clang__)
+    #define SQLITE_FAST_MEMCPY(dst, src, size) __builtin_memcpy((dst), (src), (size))
+#elif defined(_MSC_VER)
+    #include <intrin.h>
+    #define SQLITE_FAST_MEMCPY(dst, src, size) __movsb(static_cast<unsigned char*>(dst), static_cast<const unsigned char*>(src), (size))
+#else
+    #define SQLITE_FAST_MEMCPY(dst, src, size) do { \
+        char* d = static_cast<char*>(dst); \
+        const char* s = static_cast<const char*>(src); \
+        for (int _i = 0; _i < (size); ++_i) d[_i] = s[_i]; \
+    } while(0)
+#endif
+
+/**
  * @brief Utility templates to enable zero-dependency move semantics.
  */
 template<typename T> struct sqlite_remove_reference { typedef T type; };
