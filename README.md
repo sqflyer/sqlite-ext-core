@@ -149,6 +149,30 @@ A zero-boilerplate, zero-dependency C++ framework for building Eponymous SQLite 
 - [TVF Framework README](docs/TVF_README.md)
 - [TVF Framework Architecture](docs/TVF_ARCHITECTURE.md)
 
+### 10. Exception-Safe Transactions (`sqlite3_transaction.hpp`)
+A zero-dependency C++ RAII wrapper for SQLite Transactions and Savepoints that prevents database locking bugs by guaranteeing automatic rollbacks on scope exit.
+
+#### Key Features:
+- **Strict RAII Lifecycle**: Destructors automatically execute `ROLLBACK` if the transaction is still active, protecting against C++ exceptions and early returns.
+- **Nested Transactions**: Full support for nested SQLite transactions using the `SqliteSavepoint` wrapper (`SAVEPOINT`, `RELEASE`, `ROLLBACK TO`).
+- **Zero Allocations**: Uses `sqlite3_mprintf` to safely construct queries and escape savepoint identifiers without pulling in `<string>`.
+- **Multiple Behaviors**: Supports `DEFERRED` (default), `IMMEDIATE`, and `EXCLUSIVE` transaction locks.
+
+#### Documentation
+- [Transaction Wrapper README](docs/TRANSACTION_README.md)
+- [Transaction Architecture Guide](docs/TRANSACTION_ARCHITECTURE.md)
+
+### 11. Database Connection Lifecycle (`sqlite3_db.hpp`)
+A clean, object-oriented RAII wrapper for managing SQLite connection handles and rapidly building query statements.
+
+#### Key Features:
+- **Owned vs View Patterns**: `SqliteDatabaseOwned` safely manages `sqlite3_open_v2` and `sqlite3_close_v2`, while `SqliteDatabaseView` provides zero-cost C++ wrappers over existing C-API handles.
+- **Statement Builders**: Integrates seamlessly with Statements, Transactions, and Savepoints. You can directly call `.prepare()` or `.prepare_cached()` on any Database, Transaction, or Savepoint object to instantly generate a safe `SqliteStatement` without juggling raw pointers.
+
+#### Documentation
+- [Database Wrapper README](docs/DB_README.md)
+- [Database Architecture Guide](docs/DB_ARCHITECTURE.md)
+
 ## Building and Testing
 This repository includes a robust test suite to verify the thread-safety and memory-safety of the extensions under immense load.
 
