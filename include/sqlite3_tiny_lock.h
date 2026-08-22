@@ -12,9 +12,13 @@ extern "C" {
 // ============================================================================
 // Pauses the CPU to prevent 100% core starvation during a spin loop.
 
-#if defined(_MSC_VER)
+#if defined(__wasm__)
+    #define SQLITE_CPU_RELAX(ptr) __builtin_wasm_memory_atomic_wait32((int*)(ptr), 1, -1)
+    #define SQLITE_CPU_NOTIFY(ptr) __builtin_wasm_memory_atomic_notify((int*)(ptr), 1)
+#elif defined(_MSC_VER)
     #include <intrin.h>
-    #define SQLITE_CPU_RELAX() _mm_pause()
+    #define SQLITE_CPU_RELAX(ptr) _mm_pause()
+    #define SQLITE_CPU_NOTIFY(ptr)
 #else
     static inline void _sqlite_gcc_cpu_relax() {
     #if defined(__i386__) || defined(__x86_64__)
@@ -27,7 +31,8 @@ extern "C" {
         __asm__ volatile("" ::: "memory");
     #endif
     }
-    #define SQLITE_CPU_RELAX() _sqlite_gcc_cpu_relax()
+    #define SQLITE_CPU_RELAX(ptr) _sqlite_gcc_cpu_relax()
+    #define SQLITE_CPU_NOTIFY(ptr)
 #endif
 
 // ============================================================================
@@ -39,15 +44,23 @@ extern "C" {
  * 
  * - Native Architecture: Acts as a blistering-fast, CPU-yielding Spinlock.
  * - WebAssembly: Acts as a true 0% CPU sleeping Mutex.
- * 
- * The struct is exactly 4 bytes, allowing it to be embedded by-value into 
- * other structures without triggering heap allocations.
  */
+#if defined(__wasm__)
+    typedef int sqlite3_tiny_lock_state_t;
+    #define SQLITE_TINY_LOCK_CAS_WEAK(ptr, exp, des)   SQLITE_ATOMIC_CAS_WEAK_32(ptr, exp, des)
+    #define SQLITE_TINY_LOCK_CAS_STRONG(ptr, exp, des) SQLITE_ATOMIC_CAS_STRONG_32(ptr, exp, des)
+    #define SQLITE_TINY_LOCK_STORE(ptr, val)           SQLITE_ATOMIC_STORE_32(ptr, val)
+#else
+    typedef char sqlite3_tiny_lock_state_t;
+    #define SQLITE_TINY_LOCK_CAS_WEAK(ptr, exp, des)   SQLITE_ATOMIC_CAS_WEAK_8(ptr, exp, des)
+    #define SQLITE_TINY_LOCK_CAS_STRONG(ptr, exp, des) SQLITE_ATOMIC_CAS_STRONG_8(ptr, exp, des)
+    #define SQLITE_TINY_LOCK_STORE(ptr, val)           SQLITE_ATOMIC_STORE_8(ptr, val)
+#endif
+
 typedef struct {
     // 0 = Unlocked, 1 = Locked.
-    // Note: Forced to be 32-bit (int) because WebAssembly's 
-    // memory.atomic.wait32 instruction strictly requires 32-bit memory.
-    int state;
+    // 4 bytes on WASM (for memory.atomic.wait32), 1 byte on native architectures.
+    sqlite3_tiny_lock_state_t state;
 } sqlite3_tiny_lock;
 
 /** 
@@ -61,23 +74,12 @@ static inline void sqlite3_tiny_lock_init(sqlite3_tiny_lock* lock) {
  * @brief Blocks the current thread until the lock is successfully acquired. 
  */
 static inline void sqlite3_tiny_lock_lock(sqlite3_tiny_lock* lock) {
-    int expected = 0;
+    sqlite3_tiny_lock_state_t expected = 0;
     
     // Attempt to swap 0 (Unlocked) with 1 (Locked)
-    while (!SQLITE_ATOMIC_CAS_WEAK_32(&lock->state, &expected, 1)) {
-        // If CAS fails, 'expected' is updated to the current state (1).
-        // Reset it back to 0 for the next attempt.
+    while (!SQLITE_TINY_LOCK_CAS_WEAK(&lock->state, &expected, 1)) {
         expected = 0;
-
-#if defined(__wasm__)
-        // WEBASSEMBLY: Put the thread completely to sleep (0% CPU) until 
-        // the state changes. The loop handles spurious wakeups safely.
-        __builtin_wasm_memory_atomic_wait32(&lock->state, 1, -1);
-#else
-        // NATIVE CPU: Throttle the hardware pipeline to save power and 
-        // allow other threads on this core to execute.
-        SQLITE_CPU_RELAX();
-#endif
+        SQLITE_CPU_RELAX(&lock->state);
     }
 }
 
@@ -86,9 +88,9 @@ static inline void sqlite3_tiny_lock_lock(sqlite3_tiny_lock* lock) {
  * @return 1 (True) if successful, 0 (False) if already locked by another thread.
  */
 static inline int sqlite3_tiny_lock_try_lock(sqlite3_tiny_lock* lock) {
-    int expected = 0;
+    sqlite3_tiny_lock_state_t expected = 0;
     // We use STRONG CAS here because there is no retry loop.
-    return SQLITE_ATOMIC_CAS_STRONG_32(&lock->state, &expected, 1);
+    return SQLITE_TINY_LOCK_CAS_STRONG(&lock->state, &expected, 1);
 }
 
 /** 
@@ -96,13 +98,11 @@ static inline int sqlite3_tiny_lock_try_lock(sqlite3_tiny_lock* lock) {
  */
 static inline void sqlite3_tiny_lock_unlock(sqlite3_tiny_lock* lock) {
     // Atomically reset the state back to 0 (Unlocked)
-    SQLITE_ATOMIC_STORE_32(&lock->state, 0);
+    SQLITE_TINY_LOCK_STORE(&lock->state, 0);
 
-#if defined(__wasm__)
     // WEBASSEMBLY: Signal the engine to wake up any threads that went 
-    // to sleep during `__builtin_wasm_memory_atomic_wait32`.
-    __builtin_wasm_memory_atomic_notify(&lock->state, 1);
-#endif
+    // to sleep during wait32. (No-op on native CPUs).
+    SQLITE_CPU_NOTIFY(&lock->state);
 }
 
 #ifdef __cplusplus

@@ -25,7 +25,7 @@ A zero-dependency, freestanding suite of cross-platform atomics and locks design
 
 #### Key Features:
 - **`sqlite3_atomic.h`**: Explicitly sized (8, 16, 32, 64-bit) atomics wrapping GCC/Clang built-ins and MSVC intrinsics to guarantee perfectly typed cross-platform memory operations without `<stdatomic.h>`.
-- **`sqlite3_tiny_lock`**: A microscopic (4-byte) hybrid spinlock. On native hardware, it acts as a blistering-fast CPU-yielding spinlock (`PAUSE`/`YIELD`). On WebAssembly, it dynamically transforms into a true 0% CPU sleeping mutex via `memory.atomic.wait32`.
+- **`sqlite3_tiny_lock`**: A microscopic (1-byte) hybrid spinlock. On native hardware, it acts as a blistering-fast CPU-yielding spinlock (`PAUSE`/`YIELD`). On WebAssembly, it dynamically scales to 4-bytes and transforms into a true 0% CPU sleeping mutex via `memory.atomic.wait32`.
 - **`sqlite3_mutex_lock`**: An owning C++ wrapper over SQLite's native `sqlite3_mutex_alloc`. Mimics `std::mutex` and `std::lock_guard` perfectly, while safely handling `nullptr` mutexes in single-threaded SQLite compilations.
 - **`sqlite3_rw_lock`**: A cross-platform Read/Write lock that seamlessly maps to Windows `SRWLOCK`, POSIX `pthread_rwlock_t`, and WASM `memory.atomic.wait32` (via `TinyLock`). Includes zero-overhead C++ RAII wrappers (`SqliteReadGuard` / `SqliteWriteGuard`) to maximize read concurrency while guaranteeing exception-safe locking.
 

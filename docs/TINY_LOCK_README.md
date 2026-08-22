@@ -1,12 +1,12 @@
 # TinyLock (`sqlite3_tiny_lock`)
 
-TinyLock is a blisteringly fast, 4-byte, zero-dependency hybrid spinlock for C and C++. 
+TinyLock is a blisteringly fast, 1-byte, zero-dependency hybrid spinlock for C and C++. 
 
 It was built specifically for `c-sqlite-ext-core` to provide a portable thread-safety primitive without relying on `<atomic>`, `libstdc++`, or bulky OS-level mutexes like `pthread_mutex_t` or `CRITICAL_SECTION`. 
 
 ## Features
 - **Zero Dependencies**: Requires absolutely no OS headers or standard library files.
-- **Microscopic Size**: Exactly 4 bytes in size.
+- **Microscopic Size**: Exactly 1 byte in size on native hardware (4 bytes on WASM).
 - **Cross-Platform**: Natively detects and optimizes for MSVC (Windows), GCC, and Clang (macOS, Linux, iOS, Android).
 - **Hybrid Behavior**: Runs as a highly optimized CPU-yielding spinlock on native hardware, and automatically transforms into a true 0% CPU sleeping mutex on WebAssembly.
 - **Dual API**: Provides a pure C struct and a modern C++ RAII class.
@@ -15,12 +15,12 @@ It was built specifically for `c-sqlite-ext-core` to provide a portable thread-s
 
 ## Usage in C (`sqlite3_tiny_lock.h`)
 
-The C API is lightweight and relies on standard function calls passing a pointer to the 4-byte struct.
+The C API is lightweight and relies on standard function calls passing a pointer to the lock struct.
 
 ```c
 #include "sqlite3_tiny_lock.h"
 
-// 1. Declare the struct (4 bytes)
+// 1. Declare the struct (1 byte on native, 4 bytes on WASM)
 sqlite3_tiny_lock my_lock;
 
 void do_work() {
@@ -44,7 +44,7 @@ The C++ API provides a zero-overhead class wrapper and a standard RAII `LockGuar
 ```cpp
 #include "sqlite3_tiny_lock.hpp"
 
-// 1. Declare the C++ class (still exactly 4 bytes!)
+// 1. Declare the C++ class (still exactly 1 byte on native!)
 SqliteTinyLock my_lock;
 
 void do_work() {
