@@ -101,6 +101,7 @@ static void test_counter_func(sqlite3_context *ctx, int argc, sqlite3_value **ar
 
 ## Features
 - **Cross-Platform**: Uses native Read/Write locks on Windows (`SRWLOCK`), macOS/Linux (`pthread_rwlock_t`), and WebAssembly (`sqlite3_mutex`).
+- **Lock-Free Ref Counting**: The registry's internal reference counter is entirely lock-free, managed via `sqlite3_atomic.h`.
 - **Zero-Overhead Hot Path**: Caches state lookups in SQLite's O(1) auxdata.
 - **Memory Safe**: Automatically manages memory via SQLite's `xDestroy` hooks. No leaks.
 

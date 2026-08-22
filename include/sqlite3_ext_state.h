@@ -140,7 +140,6 @@
     typedef struct StateType##_Entry { \
         char *db_path; \
         int refcount; \
-        sqlite3_tiny_lock ref_mutex; \
         sqlite3_rw_lock state_mutex; \
         void (*free_fn)(StateType*); \
         struct StateType##_Entry *next; \
@@ -201,9 +200,7 @@
      */ \
     static StateType##_Entry* __##StateType##_entry_retain(StateType##_Entry *entry) { \
         if (!entry) return NULL; \
-        sqlite3_tiny_lock_lock(&entry->ref_mutex); \
-        entry->refcount++; \
-        sqlite3_tiny_lock_unlock(&entry->ref_mutex); \
+        sqlite_atomic_increment_32(&entry->refcount); \
         return entry; \
     } \
     \
@@ -223,13 +220,10 @@
          * the global registry_mutex here, another thread could have searched the \
          * registry, found this entry, and retained it! If so, we MUST abort the free. \
          */ \
-        sqlite3_tiny_lock_lock(&entry->ref_mutex); \
-        if (entry->refcount > 0) { \
-            sqlite3_tiny_lock_unlock(&entry->ref_mutex); \
+        if (sqlite_atomic_load_32(&entry->refcount) > 0) { \
             sqlite3_mutex_leave(StateType##_registry_mutex); \
             return; \
         } \
-        sqlite3_tiny_lock_unlock(&entry->ref_mutex); \
         \
         /* Step 2: Safe to remove the entry from the global linked list */ \
         StateType##_Entry **curr = &StateType##_registry_head; \
@@ -252,7 +246,6 @@
         \
         /* Step 4: Free the deep-copied strings and internal SQLite mutexes */ \
         if (entry->db_path) sqlite3_free(entry->db_path); \
-        /* ref_mutex is inline TinyLock, no free needed */ \
         sqlite3_free(entry); \
     } \
     \
@@ -262,12 +255,7 @@
      */ \
     static void __##StateType##_entry_release(StateType##_Entry *entry) { \
         if (!entry) return; \
-        sqlite3_tiny_lock_lock(&entry->ref_mutex); \
-        entry->refcount--; \
-        int count = entry->refcount; \
-        sqlite3_tiny_lock_unlock(&entry->ref_mutex); \
-        \
-        if (count == 0) { \
+        if (sqlite_atomic_decrement_32(&entry->refcount) == 0) { \
             __##StateType##_entry_free(entry); \
         } \
     } \
@@ -291,10 +279,6 @@
                 sqlite3_free(entry); \
                 entry = NULL; \
             } \
-        } \
-        if (entry) { \
-            /* Step 3: Initialize the inline tiny lock for protecting the refcount */ \
-            sqlite3_tiny_lock_init(&entry->ref_mutex); \
         } \
         if (entry) { \
             /* Step 4: Initialize the cross-platform state R/W lock */ \

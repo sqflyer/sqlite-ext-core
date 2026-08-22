@@ -52,7 +52,6 @@ private:
     struct Entry {
         char *db_path = nullptr;
         int refcount = 0;
-        SqliteTinyLock ref_mutex;
         SqliteRwLock state_mutex;
         Entry *next = nullptr;
         T state;
@@ -98,9 +97,7 @@ private:
      */
     static Entry* entry_retain(Entry *entry) {
         if (!entry) return nullptr;
-        entry->ref_mutex.lock();
-        entry->refcount++;
-        entry->ref_mutex.unlock();
+        sqlite_atomic_increment_32(&entry->refcount);
         return entry;
     }
 
@@ -114,13 +111,10 @@ private:
         ensure_mutex_init();
         registry_mutex->lock();
         
-        entry->ref_mutex.lock();
-        if (entry->refcount > 0) {
-            entry->ref_mutex.unlock();
+        if (sqlite_atomic_load_32(&entry->refcount) > 0) {
             registry_mutex->unlock();
             return;
         }
-        entry->ref_mutex.unlock();
         
         Entry **curr = &registry_head;
         while (*curr) {
@@ -141,12 +135,7 @@ private:
      */
     static void entry_release(Entry *entry) {
         if (!entry) return;
-        entry->ref_mutex.lock();
-        entry->refcount--;
-        int count = entry->refcount;
-        entry->ref_mutex.unlock();
-        
-        if (count == 0) {
+        if (sqlite_atomic_decrement_32(&entry->refcount) == 0) {
             entry_free(entry);
         }
     }

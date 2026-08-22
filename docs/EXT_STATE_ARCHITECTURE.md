@@ -43,8 +43,8 @@ A critical race condition exists during garbage collection if two connections to
 - Connection B (a new connection) sneaks in, finds the registry entry in the linked list, and increments the refcount to 1.
 - Connection A finishes freeing the memory, leaving Connection B with a dangling pointer (Use-After-Free).
 
-**The Fix (Double-Checked Locking):**
-The architecture uses strict double-checked locking using a secondary, microscopic lock (`entry->ref_mutex`, implemented as a `sqlite3_tiny_lock` to avoid an 8-byte heap allocation). During destruction, the extension holds *both* the global registry lock and the entry's ref lock. It verifies the refcount is still exactly `0` before committing to the memory deallocation, perfectly preventing the ghost removal race condition.
+**The Fix (Lock-Free Double-Checked Locking):**
+The architecture uses strict double-checked locking, but entirely without mutexes for the reference count. The reference count itself is managed via lock-free atomics (`sqlite_atomic_increment_32`). During destruction, the extension holds the global registry lock and verifies that the reference count is still exactly `0` using `sqlite_atomic_load_32` before committing to the memory deallocation. This perfectly prevents the ghost removal race condition while eliminating all thread-contention on the reference counter.
 
 ## 5. In-Memory Isolation
 In-memory databases (`:memory:`) all share the exact same filepath string (`:memory:`). If the registry relied strictly on filepaths, all in-memory databases would accidentally share the same state.

@@ -49,7 +49,7 @@ The state manager solves this by automatically generating a thread-safe, garbage
 - **3-Layer Caching Architecture**: Implements O(1) nanosecond-fast state retrieval using SQLite's `sqlite3_set_auxdata` cache, falling back to a global registry.
 - **Automated Garbage Collection**: Integrates directly with SQLite's `xDestroy` connection hooks to automatically free memory when the last connection to a database closes.
 - **Embedded C++ Objects**: The C++ template seamlessly manages memory lifecycles via `sqlite_new` and `sqlite_delete` (fully relying on standard C++ destructors without needing custom `free_fn` callbacks) to support nested C++ objects (like `std::string`).
-- **Ghost-Removal Protection**: Features bullet-proof Double-Checked Locking to prevent Use-After-Free race conditions during concurrent connection teardowns.
+- **Lock-Free Ghost Protection**: Uses lock-free atomics (`sqlite_atomic_load`) to power the Double-Checked Locking teardown logic, completely preventing Use-After-Free race conditions during concurrent connection teardowns while avoiding reference counting contention.
 - **Cross-Platform Thread Safety**: Native Read/Write locks for Windows (`SRWLOCK`), macOS/Linux (`pthread_rwlock_t`), and WebAssembly (`memory.atomic.wait32` via `TinyLock`).
 - **C++ RAII Lock Guards**: The C++ template natively provides `ReadGuard` and `WriteGuard` classes to guarantee exception-safe, scope-based locking.
 
