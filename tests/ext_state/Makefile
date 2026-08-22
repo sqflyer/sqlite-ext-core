@@ -4,7 +4,7 @@ ROOT_DIR := $(shell pwd)
 C_EXT_DIR := $(ROOT_DIR)/c_extension
 CPP_EXT_DIR := $(ROOT_DIR)/cpp_extension
 GO_LOADER_DIR := $(ROOT_DIR)/go_loader
-BIN_DIR := $(ROOT_DIR)/../../bin
+BIN_DIR := $(ROOT_DIR)/bin
 
 # OS-specific extension suffix
 ifeq ($(OS),Windows_NT)

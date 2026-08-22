@@ -21,6 +21,7 @@ leak-check-integration:
 	$(MAKE) -C tests/ext_state leak-check
 
 clean:
+	rm -rf bin
 	$(MAKE) -C tests/ext_state clean
 	$(MAKE) -C tests/cpp_value_keys clean
 	$(MAKE) -C tests/locks clean
