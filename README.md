@@ -44,7 +44,8 @@ Maintaining state (like connection pools, LRU caches, or simple counters) inside
 The state manager solves this by automatically generating a thread-safe, garbage-collected, **Per-Database Shared State Registry**.
 
 #### Key Features:
-- **Zero-Boilerplate APIs**: Available as a C macro (`SQLITE_EXTENSION_STATE`) for pure C extensions, and a C++ template (`SqliteExtState<T>`) for C++ extensions. (Strict compile-time boundaries prevent accidental cross-language misuse).
+- **ODR-Safe C API**: Available as a split macro suite (`SQLITE_EXTENSION_STATE_DECLARE` / `DEFINE`) for pure C extensions to perfectly prevent One-Definition Rule violations across multiple translation units.
+- **C++ Template API**: Available as a pure C++ template (`SqliteExtState<T>`) for C++ extensions. (Strict compile-time boundaries prevent accidental cross-language misuse).
 - **3-Layer Caching Architecture**: Implements O(1) nanosecond-fast state retrieval using SQLite's `sqlite3_set_auxdata` cache, falling back to a global registry.
 - **Automated Garbage Collection**: Integrates directly with SQLite's `xDestroy` connection hooks to automatically free memory when the last connection to a database closes.
 - **Embedded C++ Objects**: The C++ template seamlessly manages memory lifecycles via `sqlite_new` and `sqlite_delete` (fully relying on standard C++ destructors without needing custom `free_fn` callbacks) to support nested C++ objects (like `std::string`).

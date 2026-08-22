@@ -136,7 +136,7 @@
     static_assert(false, "Do not use SQLITE_EXTENSION_STATE macro in C++. Include sqlite3_ext_state.hpp and use SqliteExtState<T> instead.");
 #else
 
-#define SQLITE_EXTENSION_STATE(StateType) \
+#define SQLITE_EXTENSION_STATE_DECLARE(StateType) \
     typedef struct StateType##_Entry { \
         char *db_path; \
         int refcount; \
@@ -147,8 +147,22 @@
         StateType state; \
     } StateType##_Entry; \
     \
-    static StateType##_Entry *StateType##_registry_head = NULL; \
-    static sqlite3_mutex *StateType##_registry_mutex = NULL; \
+    extern StateType##_Entry *StateType##_registry_head; \
+    extern sqlite3_mutex *StateType##_registry_mutex; \
+    \
+    /* Function declarations for external visibility */ \
+    static void* StateType##_init(sqlite3 *db, void (*init_fn)(StateType*), void (*free_fn)(StateType*)); \
+    static StateType* StateType##_from_db(sqlite3_context *ctx, sqlite3 *db); \
+    static StateType* StateType##_from_context(sqlite3_context *ctx); \
+    static void StateType##_read_acquire(StateType *state); \
+    static void StateType##_read_release(StateType *state); \
+    static void StateType##_write_acquire(StateType *state); \
+    static void StateType##_write_release(StateType *state); \
+    static void StateType##_destructor(void *p);
+
+#define SQLITE_EXTENSION_STATE_DEFINE(StateType) \
+    StateType##_Entry *StateType##_registry_head = NULL; \
+    sqlite3_mutex *StateType##_registry_mutex = NULL; \
     \
     static const char* __##StateType##_get_db_path(sqlite3 *db, char *resolved_path_buf) { \
         const char *raw_path = sqlite3_db_filename(db, "main"); \
@@ -446,6 +460,11 @@
         StateType##_Entry *entry = (StateType##_Entry *)((char *)state - offsetof(StateType##_Entry, state)); \
         sqlite3_rw_lock_write_release(&entry->state_mutex); \
     }
+
+// For backwards compatibility
+#define SQLITE_EXTENSION_STATE(StateType) \
+    SQLITE_EXTENSION_STATE_DECLARE(StateType) \
+    SQLITE_EXTENSION_STATE_DEFINE(StateType)
 
 #endif /* __cplusplus */
 

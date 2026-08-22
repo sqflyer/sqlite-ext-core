@@ -8,20 +8,12 @@ typedef struct {
 } SharedState;
 
 /*
- * The macro below automatically expands into the following thread-safe internal API:
+ * The macros below automatically expand into the following thread-safe internal API:
  * 
+ * DECLARE (Safe for headers):
  *   typedef struct SharedState_Entry { ... } SharedState_Entry;
- *   
- *   static SharedState_Entry *SharedState_registry_head = NULL;
- *   static sqlite3_mutex     *SharedState_registry_mutex = NULL;
- * 
- *   // Internal helpers (prefixed with __ to hide from autocomplete)
- *   static const char*        __SharedState_get_db_path(sqlite3 *db, char *buf);
- *   static void               __SharedState_ensure_mutex_init(void);
- *   static SharedState_Entry* __SharedState_entry_retain(SharedState_Entry *entry);
- *   static void               __SharedState_entry_release(SharedState_Entry *entry);
- *   static void               __SharedState_entry_free(SharedState_Entry *entry);
- *   // ... and other internal memory/mutex lifecycle helpers
+ *   extern SharedState_Entry *SharedState_registry_head;
+ *   extern sqlite3_mutex     *SharedState_registry_mutex;
  * 
  *   // The 8 user-facing API functions:
  *   static void*         SharedState_init(sqlite3 *db, void (*init_fn)(SharedState*), void (*free_fn)(SharedState*));
@@ -32,8 +24,14 @@ typedef struct {
  *   static void          SharedState_read_release(SharedState *state);
  *   static void          SharedState_write_acquire(SharedState *state);
  *   static void          SharedState_write_release(SharedState *state);
+ * 
+ * DEFINE (Must be in exactly ONE .c file):
+ *   SharedState_Entry *SharedState_registry_head = NULL;
+ *   sqlite3_mutex     *SharedState_registry_mutex = NULL;
+ *   // ... and internal memory/mutex lifecycle helpers
  */
-SQLITE_EXTENSION_STATE(SharedState)
+SQLITE_EXTENSION_STATE_DECLARE(SharedState)
+SQLITE_EXTENSION_STATE_DEFINE(SharedState)
 
 static void test_counter_func(sqlite3_context *ctx, int argc, sqlite3_value **argv) {
     SharedState *state = SharedState_from_context(ctx);

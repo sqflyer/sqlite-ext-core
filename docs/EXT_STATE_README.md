@@ -17,8 +17,11 @@ typedef struct {
     int counter;
 } SharedState;
 
-// Generate the registry!
-SQLITE_EXTENSION_STATE(SharedState)
+// In your header file (or at the top of your .c file)
+SQLITE_EXTENSION_STATE_DECLARE(SharedState)
+
+// In exactly ONE .c file (to avoid ODR violations)
+SQLITE_EXTENSION_STATE_DEFINE(SharedState)
 ```
 
 ### 2. Initialize in your Extension Hook
@@ -47,7 +50,7 @@ int sqlite3_myext_init(sqlite3 *db, char **pzErrMsg, const sqlite3_api_routines 
 ```
 
 ### 3. Use it in your Functions (C++)
-If you compile with a C++ compiler (`g++`, `clang++`, MSVC), you **must** use the `SqliteExtState<T>` template from `sqlite3_ext_state.hpp`. (Attempting to use the pure C `SQLITE_EXTENSION_STATE` macro in C++ will trigger a strict compile-time error). It automatically generates RAII lock guards and safely manages embedded C++ objects via `sqlite_construct_at` and `sqlite_destroy_at` (fully relying on standard C++ destructors without needing custom `free_fn` callbacks).
+If you compile with a C++ compiler (`g++`, `clang++`, MSVC), you **must** use the `SqliteExtState<T>` template from `sqlite3_ext_state.hpp`. (Attempting to use the pure C `SQLITE_EXTENSION_STATE_DECLARE` macro in C++ will trigger a strict compile-time error). It automatically generates RAII lock guards and safely manages embedded C++ objects via `sqlite_construct_at` and `sqlite_destroy_at` (fully relying on standard C++ destructors without needing custom `free_fn` callbacks).
 
 ```cpp
 #include "sqlite3_ext_state.hpp"

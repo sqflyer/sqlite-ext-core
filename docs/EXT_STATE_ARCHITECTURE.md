@@ -11,6 +11,12 @@ Conversely, if you allocate state per-connection (using `sqlite3_set_auxdata` na
 
 **The Solution:** State must be instantiated exactly once per *database file*, shared across all connections to that file, and cleaned up when the last connection closes.
 
+## 2. The Translation Unit (ODR) Trap
+If the internal registry variables were defined using `static` directly inside a header macro, including that header in two different `.c` files would cause the compiler to silently generate two completely independent registries.
+To solve this, the architecture splits the registry generation into two explicit macros:
+1. `SQLITE_EXTENSION_STATE_DECLARE(T)`: Emits `extern` declarations safe for headers.
+2. `SQLITE_EXTENSION_STATE_DEFINE(T)`: Emits the actual variables and is strictly enforced to exist in exactly ONE `.c` source file.
+
 ## 2. The 3-Layer Lookup (The Hot Path)
 To achieve extreme performance without lock contention, the state manager uses a 3-layer caching architecture:
 
@@ -44,10 +50,10 @@ The architecture uses strict double-checked locking using a secondary, microscop
 In-memory databases (`:memory:`) all share the exact same filepath string (`:memory:`). If the registry relied strictly on filepaths, all in-memory databases would accidentally share the same state.
 To prevent this, the architecture intercepts `:memory:` filepaths and dynamically concatenates the raw memory address of the SQLite connection pointer (e.g., `:memory:0x1234abcd`). This guarantees perfect isolation for in-memory databases.
 
-## 6. Language Boundaries
-The architecture enforces a strict compile-time boundary between C and C++. If a developer attempts to use the pure C `SQLITE_EXTENSION_STATE` macro inside a C++ compiler, it evaluates to a `static_assert(false)` halting compilation. This forces developers to use the `SqliteExtState<T>` C++ template, preventing memory leaks for embedded C++ objects.
+## 7. Language Boundaries
+The architecture enforces a strict compile-time boundary between C and C++. If a developer attempts to use the pure C `SQLITE_EXTENSION_STATE_DECLARE` macro inside a C++ compiler, it evaluates to a `static_assert(false)` halting compilation. This forces developers to use the `SqliteExtState<T>` C++ template, preventing memory leaks for embedded C++ objects.
 
-## 7. C++ Memory Lifecycle (`sqlite3_ext_state.hpp`)
+## 8. C++ Memory Lifecycle (`sqlite3_ext_state.hpp`)
 While C simply allocates structs using `sqlite3_malloc`, the C++ template (`SqliteExtState<T>`) must seamlessly support embedding complex C++ objects (like `std::string` or `std::vector`) directly inside the state without causing memory leaks or constructor bypassing.
 
 1. **sqlite_new**: During the Cold Path initialization, the template allocates the entire state entry using `sqlite_new<Entry>()`. This forces the C++ compiler to automatically run the default constructors for all embedded objects (like the C++ state `T`, and the RAII locks), while bypassing the standard `<new>` header.
