@@ -101,6 +101,42 @@ void test_buffer() {
     SqliteBuffer moved_buf = std::move(moving_buf);
     assert(moved_buf.hash() == expected_move_hash);
     assert(moving_buf.hash() == empty_buf.hash()); // Moved-from is empty
+    
+    // Slice test
+    SqliteBuffer slice_target;
+    slice_target.append("HelloWorld", 10);
+    
+    SqliteBufferSlice slice1 = slice_target.bufferSlice(0, 5);
+    assert(slice1.bytes() == 5);
+    assert(memcmp(slice1.data(), "Hello", 5) == 0);
+    
+    SqliteBufferSlice slice2 = slice_target.bufferSlice(5, 100); // Out of bounds length
+    assert(slice2.bytes() == 5);
+    assert(memcmp(slice2.data(), "World", 5) == 0);
+    
+    SqliteBufferSlice slice3 = slice_target.bufferSlice(20, 5); // Invalid offset
+    assert(slice3.bytes() == 0);
+    
+    // Test Slice Comparisons
+    assert(slice1 == "Hello");
+    assert(slice1 != "World");
+    assert(slice1 < SqliteBufferSlice("World", 5)); // 'H' < 'W'
+    assert(slice2 > SqliteBufferSlice("Hello", 5)); // 'W' > 'H'
+    
+    // Test Slice vs Buffer Comparisons
+    SqliteBuffer target_clone;
+    target_clone.append("Hello", 5);
+    assert(slice1 == target_clone); // Slice == Buffer
+    assert(target_clone == slice1); // Buffer == Slice
+    assert(slice2 != target_clone);
+    
+    // Test Slice Hashing matches Buffer Hashing
+    assert(slice1.hash() == target_clone.hash());
+    
+    // Test Nullptr comparisons
+    SqliteBufferSlice empty_slice;
+    assert(empty_slice == nullptr);
+    assert(slice1 != nullptr);
 }
 
 void test_string() {

@@ -27,6 +27,18 @@ template<typename T> struct sqlite_remove_reference<T&> { typedef T type; };
 template<typename T> struct sqlite_remove_reference<T&&> { typedef T type; };
 
 /**
+ * @brief Zero-dependency type trait to detect if a type is trivially copyable.
+ * 
+ * Natively leverages compiler intrinsics (`__is_trivially_copyable`) without requiring `<type_traits>`.
+ * This allows containers to safely optimize C++ object lifecycles down to raw `memcpy` or `realloc`
+ * only when mathematically proven to be safe by the compiler.
+ */
+template <typename T>
+struct sqlite_is_trivially_copyable {
+    static const bool value = __is_trivially_copyable(T);
+};
+
+/**
  * @brief Performs a zero-dependency move cast, equivalent to `std::move`.
  * 
  * Casts an lvalue to an rvalue reference, allowing the compiler to invoke move constructors

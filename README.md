@@ -182,6 +182,14 @@ Provides `SqliteString` and `SqliteBuffer` as `-nostdlib++` compliant drop-in re
 - **Heterogeneous Lookups**: Natively plugs into `SqliteValue`'s FNV-1a hashing and `memcmp_equal` engines. This guarantees identical hashes and allows `SqliteString` and `SqliteBuffer` to be used dynamically as zero-allocation lookup keys into `std::unordered_map<SqliteValueOwned, T>`!
 - **Zero-Copy Potential**: Because the memory is owned by SQLite, you can pass ownership of a built string directly to SQLite without making secondary copies.
 
+### 13. Blob Stream (`sqlite3_blob_stream.hpp`)
+A specialized streaming API for reading and writing potentially massive BLOB data without loading the entire object into memory.
+
+#### Key Features:
+- **Chunked Access**: Process multi-gigabyte blobs in fixed-size buffers, preventing RAM exhaustion in constrained environments like WASM.
+- **Exception-Safe**: Full RAII support ensures that BLOB handles are correctly closed even if an exception occurs during streaming.
+- **Zero-Copy Potential**: Direct access to the underlying SQLite BLOB handle provides the highest possible I/O performance.
+
 #### Documentation
 - [Buffer README](docs/BUFFER_README.md)
 - [Buffer Architecture Guide](docs/BUFFER_ARCHITECTURE.md)

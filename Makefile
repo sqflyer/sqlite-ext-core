@@ -33,6 +33,9 @@ test-cpp-db:
 test-cpp-buffer:
 	$(MAKE) -C tests/cpp_buffer test
 
+test-blob-stream:
+	@$(MAKE) -C tests/cpp_blob_stream test
+
 test-locks:
 	$(MAKE) -C tests/locks test
 

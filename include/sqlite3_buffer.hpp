@@ -7,6 +7,63 @@
 #include "sqlite3_value.hpp"
 
 /**
+ * @brief A non-owning view over a raw memory buffer.
+ * 
+ * Replaces std::span<const uint8_t> or std::string_view in a -nostdlib++ environment.
+ * Costs zero heap allocations.
+ */
+class SqliteBufferSlice {
+    const void* m_data;
+    sqlite3_int64 m_size;
+
+public:
+    inline SqliteBufferSlice() : m_data(nullptr), m_size(0) {}
+    inline SqliteBufferSlice(const void* data, sqlite3_int64 size) : m_data(data), m_size(size) {}
+
+    inline const void* data() const { return m_data; }
+    inline sqlite3_int64 bytes() const { return m_size; }
+    
+    inline unsigned long long hash() const {
+        return SqliteHashUtil::hash(m_data, static_cast<int>(m_size));
+    }
+    
+    inline bool operator==(const SqliteBufferSlice& other) const {
+        return SqliteMemoryUtil::memcmp_equal(m_data, static_cast<int>(m_size), other.m_data, static_cast<int>(other.m_size));
+    }
+    inline bool operator!=(const SqliteBufferSlice& other) const { return !(*this == other); }
+    
+    inline bool operator<(const SqliteBufferSlice& other) const {
+        int min_len = (m_size < other.m_size) ? static_cast<int>(m_size) : static_cast<int>(other.m_size);
+        int cmp = 0;
+        if (min_len > 0) cmp = memcmp(m_data, other.m_data, min_len);
+        return (cmp != 0) ? (cmp < 0) : (m_size < other.m_size);
+    }
+    inline bool operator>(const SqliteBufferSlice& other) const { return other < *this; }
+    inline bool operator<=(const SqliteBufferSlice& other) const { return !(*this > other); }
+    inline bool operator>=(const SqliteBufferSlice& other) const { return !(*this < other); }
+    
+    inline bool operator==(const SqliteValueView& other) const {
+        if (other.type() != SQLITE_BLOB && other.type() != SQLITE_TEXT) return false;
+        sqlite3_value* v = const_cast<sqlite3_value*>(other.get());
+        if (!v) return false;
+        const void* val_data = (other.type() == SQLITE_BLOB) ? sqlite3_value_blob(v) : sqlite3_value_text(v);
+        return SqliteMemoryUtil::memcmp_equal(m_data, static_cast<int>(m_size), val_data, sqlite3_value_bytes(v));
+    }
+    inline bool operator!=(const SqliteValueView& other) const { return !(*this == other); }
+    
+    // Compare against C-strings
+    inline bool operator==(const char* str) const {
+        if (!str) return m_size == 0 && m_data == nullptr;
+        return SqliteMemoryUtil::memcmp_equal(m_data, static_cast<int>(m_size), str, static_cast<int>(strlen(str)));
+    }
+    inline bool operator!=(const char* str) const { return !(*this == str); }
+    
+    // Compare against nullptr
+    inline bool operator==(decltype(nullptr)) const { return m_size == 0 && m_data == nullptr; }
+    inline bool operator!=(decltype(nullptr)) const { return !(*this == nullptr); }
+};
+
+/**
  * @brief A dynamic, auto-expanding byte buffer built on SQLite's memory allocator.
  * 
  * Replaces std::vector<uint8_t> in a -nostdlib++ environment.
@@ -59,6 +116,11 @@ public:
         other.m_size = 0;
         other.m_capacity = 0;
     }
+    
+    /** @brief Implicitly converts the buffer to a non-owning slice. */
+    inline operator SqliteBufferSlice() const {
+        return SqliteBufferSlice(m_data, m_size);
+    }
 
     /** @brief Move assignment: frees current memory and transfers ownership of the other buffer. */
     inline SqliteBuffer& operator=(SqliteBuffer&& other) noexcept {
@@ -98,6 +160,43 @@ public:
     /** @brief Resets the active size to 0 without freeing the allocated capacity. */
     inline void clear() { m_size = 0; }
     
+    /** @brief Truncates the active size of the buffer. Cannot expand the buffer. */
+    inline void truncate(sqlite3_int64 new_size) {
+        if (new_size >= 0 && new_size < m_size) {
+            m_size = new_size;
+        }
+    }
+    
+    /** 
+     * @brief Expands the buffer size without initializing the new memory.
+     * Useful for direct streaming operations (e.g. from a SqliteBlobStream or file handle).
+     * 
+     * @param additional_bytes The number of bytes to add to the active size.
+     * @return A pointer to the beginning of the newly allocated uninitialized region, or nullptr on OOM.
+     */
+    inline void* append_uninitialized(sqlite3_int64 additional_bytes) {
+        if (additional_bytes <= 0) return nullptr;
+        if (!ensure_capacity(additional_bytes)) return nullptr;
+        
+        char* dest = static_cast<char*>(m_data) + m_size;
+        m_size += additional_bytes;
+        return dest;
+    }
+    
+    /**
+     * @brief Extracts a non-owning slice of the buffer.
+     * 
+     * @param offset The zero-based index to start the slice.
+     * @param length The number of bytes to extract.
+     * @return A SqliteBufferSlice pointing to the requested region.
+     */
+    inline SqliteBufferSlice bufferSlice(sqlite3_int64 offset, sqlite3_int64 length) const {
+        if (offset < 0 || offset >= m_size || length <= 0) return SqliteBufferSlice();
+        
+        sqlite3_int64 actual_length = (offset + length > m_size) ? (m_size - offset) : length;
+        return SqliteBufferSlice(static_cast<const char*>(m_data) + offset, actual_length);
+    }
+    
     /** @brief Computes a 64-bit FNV-1a hash of the buffer. */
     inline unsigned long long hash() const {
         return SqliteHashUtil::hash(m_data, static_cast<int>(m_size));
@@ -107,6 +206,23 @@ public:
     inline bool operator==(const SqliteBuffer& other) const {
         return SqliteMemoryUtil::memcmp_equal(m_data, static_cast<int>(m_size), other.m_data, static_cast<int>(other.m_size));
     }
+    
+    /** @brief Checks if the buffer is identical to a slice. */
+    inline bool operator==(const SqliteBufferSlice& other) const {
+        return SqliteMemoryUtil::memcmp_equal(m_data, static_cast<int>(m_size), other.data(), static_cast<int>(other.bytes()));
+    }
+    
+    inline bool operator!=(const SqliteBufferSlice& other) const { return !(*this == other); }
+    
+    inline bool operator<(const SqliteBufferSlice& other) const {
+        int min_len = (m_size < other.bytes()) ? static_cast<int>(m_size) : static_cast<int>(other.bytes());
+        int cmp = 0;
+        if (min_len > 0) cmp = memcmp(m_data, other.data(), min_len);
+        return (cmp != 0) ? (cmp < 0) : (m_size < other.bytes());
+    }
+    inline bool operator>(const SqliteBufferSlice& other) const { return other < *this; }
+    inline bool operator<=(const SqliteBufferSlice& other) const { return !(*this > other); }
+    inline bool operator>=(const SqliteBufferSlice& other) const { return !(*this < other); }
     
     /** @brief Checks if the buffer differs from another buffer. */
     inline bool operator!=(const SqliteBuffer& other) const {

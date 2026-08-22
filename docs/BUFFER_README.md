@@ -56,3 +56,18 @@ if (buffer == SqliteValueView(sqlite3_val)) {
     printf("Buffer is perfectly equal to SQLite Blob!");
 }
 ```
+
+## 3. `SqliteBufferSlice` (The `std::span` / `std::string_view` replacement)
+
+Use `SqliteBufferSlice` when you need to inspect or compare a piece of a buffer without triggering an expensive heap allocation or deep copy.
+
+```cpp
+SqliteBuffer buffer;
+buffer.append("Hello World", 11);
+
+// Extract a non-owning slice (zero heap allocations!)
+SqliteBufferSlice slice = buffer.bufferSlice(0, 5);
+assert(slice.bytes() == 5);
+assert(slice == "Hello"); // Natively compares against C-Strings!
+assert(slice < SqliteBufferSlice("World", 5));
+```
