@@ -20,17 +20,19 @@ A fully freestanding C++ allocator that brings `std::allocator` and `std::constr
 - [Allocator Quickstart](docs/ALLOCATOR_README.md)
 - [Allocator Architecture](docs/ALLOCATOR_ARCHITECTURE.md)
 
-### 2. Synchronization Primitives (`sqlite3_atomic.h`, `sqlite3_tiny_lock`, `sqlite3_mutex_lock`, `sqlite3_rw_lock`)
+### 2. Synchronization Primitives (`sqlite3_atomic.h` / `.hpp`, `sqlite3_tiny_lock`, `sqlite3_mutex_lock`, `sqlite3_rw_lock`)
 A zero-dependency, freestanding suite of cross-platform atomics and locks designed for high-concurrency extensions, WebAssembly ports, and OS kernels.
 
 #### Key Features:
-- **`sqlite3_atomic.h`**: Explicitly sized (8, 16, 32, 64-bit) atomics wrapping GCC/Clang built-ins and MSVC intrinsics to guarantee perfectly typed cross-platform memory operations without `<stdatomic.h>`.
-- **`sqlite3_tiny_lock`**: A microscopic (1-byte) hybrid spinlock. On native hardware, it acts as a blistering-fast CPU-yielding spinlock (`PAUSE`/`YIELD`). On WebAssembly, it dynamically scales to 4-bytes and transforms into a true 0% CPU sleeping mutex via `memory.atomic.wait32`.
+- **`sqlite3_atomic.h` / `.hpp`**: Explicitly sized (8, 16, 32, 64-bit) C atomics wrapping GCC/Clang built-ins and MSVC intrinsics. The `.hpp` header adds a zero-dependency C++ SFINAE engine that perfectly mimics the polymorphism of `<atomic>` automatically detecting variable widths at compile-time.
+- **`sqlite3_tiny_lock`**: A microscopic (1-byte) hybrid lock. On native hardware, it acts as a blistering-fast, cache-friendly TTAS (Test and Test-And-Set) spinlock to prevent MESI bouncing storms. On WebAssembly, it dynamically scales to 4-bytes and transforms into a true 0% CPU sleeping mutex via `memory.atomic.wait32`.
 - **`sqlite3_mutex_lock`**: An owning C++ wrapper over SQLite's native `sqlite3_mutex_alloc`. Mimics `std::mutex` and `std::lock_guard` perfectly, while safely handling `nullptr` mutexes in single-threaded SQLite compilations.
 - **`sqlite3_rw_lock`**: A cross-platform Read/Write lock that seamlessly maps to Windows `SRWLOCK`, POSIX `pthread_rwlock_t`, and WASM `memory.atomic.wait32` (via `TinyLock`). Includes zero-overhead C++ RAII wrappers (`SqliteReadGuard` / `SqliteWriteGuard`) to maximize read concurrency while guaranteeing exception-safe locking.
 
 #### Documentation
+- [Atomic Quickstart](docs/ATOMIC_README.md)
 - [Atomic Architecture](docs/ATOMIC_ARCHITECTURE.md)
+- [TinyLock Quickstart](docs/TINY_LOCK_README.md)
 - [TinyLock Architecture](docs/TINY_LOCK_ARCHITECTURE.md)
 - [Mutex Lock Architecture](docs/MUTEX_LOCK_ARCHITECTURE.md)
 - [Read/Write Lock Quickstart](docs/READWRITE_LOCK_README.md)
@@ -76,7 +78,7 @@ Zero-dependency, thread-safe, reference-counted memory allocation that integrate
 #### Key Features:
 - **Zero-Dependency**: Mimics `std::shared_ptr`, `std::unique_ptr`, and `std::weak_ptr` perfectly without linking to `<memory>`.
 - **SQLite Memory Profiling**: Allocates exclusively via `sqlite3_malloc` to ensure SQLite accurately tracks heap usage limits (`SQLITE_LIMIT_MEMORY`).
-- **TinyLock Ref-Counting**: Uses `SqliteTinyLock` instead of a heavyweight `sqlite3_mutex` to manage atomic reference counts, completely eliminating the secondary heap allocation penalty of a standard mutex.
+- **100% Lock-Free Ref-Counting**: Utilizes raw explicit memory-barrier atomics (`sqlite3_atomic.h`) to manage strong and weak reference counts. This completely eliminates the heap allocation overhead of a standard `sqlite3_mutex`, resulting in a blistering fast, cache-friendly, 24-byte control block.
 - **Dual Support**: Available as a C++ template suite (`SqliteSharedPtr`, `SqliteUniquePtr`, `SqliteWeakPtr`) and as a C macro generation suite (`SQLITE_SHARED_PTR_DEFINE`) for pure C extensions.
 - **Thread-Safe**: Safely passes memory payloads across concurrent UDF calls without race conditions or memory leaks.
 

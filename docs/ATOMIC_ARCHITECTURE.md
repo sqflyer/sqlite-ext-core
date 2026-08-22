@@ -32,4 +32,28 @@ The library provides both `WEAK` and `STRONG` Compare-And-Swap macros.
 ### The MSVC Exception
 x86 and x64 hardware (which MSVC primarily targets) do not suffer from spurious CAS failures at the silicon level. Their `LOCK CMPXCHG` instructions are inherently "Strong".
 
-Because of this, MSVC's `_InterlockedCompareExchange` does not differentiate between Weak and Strong. In `sqlite3_atomic.h`, both `SQLITE_ATOMIC_CAS_WEAK` and `SQLITE_ATOMIC_CAS_STRONG` safely map to the exact same MSVC intrinsic.
+Because of this, MSVC's `_InterlockedCompareExchange` does not differentiate between Weak and Strong. In `sqlite3_atomic.h`, both `sqlite_atomic_cas_weak` and `sqlite_atomic_cas_strong` safely map to the exact same MSVC intrinsic.
+
+## The MSVC TOCTOU CAS Trap
+Standard C++ atomics require that if a CAS fails, the `expected` variable is automatically updated with the actual value currently in memory. 
+
+If this was implemented as a pure macro (e.g., `*expected = *ptr`), a thread could fail the CAS, but before the macro executed `*expected = *ptr`, another thread could change `*ptr`. This creates a Time-Of-Check to Time-Of-Use (TOCTOU) race condition, loading incorrect state and breaking spinloops.
+
+To solve this, `sqlite3_atomic.h` uses `static inline` functions (`__sqlite_atomic_cas_32`) for MSVC that safely capture the exact return value of `_InterlockedCompareExchange` and write it to `expected` atomically.
+
+## Hardware-Accelerated 8-Bit Arithmetic
+When implementing 8-bit increments (`sqlite_atomic_increment_8`), a naive implementation might use a CAS spinloop. However, MSVC provides `_InterlockedExchangeAdd8`, which allows the hardware to bypass the spinloop entirely and execute the addition directly in the CPU pipeline. `sqlite3_atomic.h` leverages this to provide lock-free progress guarantees even under extreme thread contention.
+
+## Pointer Loading on MSVC
+Unlike integers which can be atomically loaded using a bitwise identity operation like `_InterlockedOr(ptr, 0)`, pointers cannot be bitwise-OR'd in C/C++. To achieve a thread-safe, atomic pointer load with full memory barriers on MSVC, `sqlite3_atomic.h` leverages `_InterlockedCompareExchangePointer(ptr, (void*)0, (void*)0)`. This cleanly compares the pointer to `NULL`, harmlessly swaps it with `NULL` if it was already `NULL`, and atomically returns the exact pointer value.
+
+## C++ Zero-Dependency Polymorphism (`sqlite3_atomic.hpp`)
+While C developers must explicitly call `sqlite_atomic_store_32`, modern C++ developers expect standard polymorphic overloads (`sqlite_atomic_store(ptr, val)`). However, SQLite extensions built in `no-std` environments cannot link against `<type_traits>` to use `std::enable_if`.
+
+To solve this, `sqlite3_atomic.hpp` implements a custom, zero-dependency **SFINAE (Substitution Failure Is Not An Error)** engine. 
+1. It defines a manual `sqlite_is_pointer<T>` and `sqlite_enable_if`.
+2. When a C++ developer calls `sqlite_atomic_store(&my_var, 5)`, the SFINAE engine intercepts the call.
+3. If `my_var` is a pointer, it routes instantly to the underlying `_ptr` C macro.
+4. If `my_var` is a primitive (integer/bool), it calculates `sizeof(my_var)` and routes the request to a highly optimized struct template (`SqliteAtomicOps<Size>`), bridging the type directly to the correct `_8`, `_16`, `_32`, or `_64` C macro.
+
+This provides the exact developer experience of `<atomic>` with absolutely zero standard library overhead.

@@ -8,7 +8,7 @@ It was built specifically for `c-sqlite-ext-core` to provide a portable thread-s
 - **Zero Dependencies**: Requires absolutely no OS headers or standard library files.
 - **Microscopic Size**: Exactly 1 byte in size on native hardware (4 bytes on WASM).
 - **Cross-Platform**: Natively detects and optimizes for MSVC (Windows), GCC, and Clang (macOS, Linux, iOS, Android).
-- **Hybrid Behavior**: Runs as a highly optimized CPU-yielding spinlock on native hardware, and automatically transforms into a true 0% CPU sleeping mutex on WebAssembly.
+- **Hybrid Behavior**: Runs as a highly optimized, cache-friendly TTAS (Test and Test-And-Set) spinlock on native hardware, and automatically transforms into a true 0% CPU sleeping mutex on WebAssembly.
 - **Dual API**: Provides a pure C struct and a modern C++ RAII class.
 
 *Note: TinyLock is built on top of [sqlite3_atomic.h](ATOMIC_README.md), a fully featured suite of zero-dependency cross-platform memory primitives.*

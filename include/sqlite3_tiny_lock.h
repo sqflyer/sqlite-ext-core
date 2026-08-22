@@ -47,14 +47,16 @@ extern "C" {
  */
 #if defined(__wasm__)
     typedef int sqlite3_tiny_lock_state_t;
-    #define SQLITE_TINY_LOCK_CAS_WEAK(ptr, exp, des)   SQLITE_ATOMIC_CAS_WEAK_32(ptr, exp, des)
-    #define SQLITE_TINY_LOCK_CAS_STRONG(ptr, exp, des) SQLITE_ATOMIC_CAS_STRONG_32(ptr, exp, des)
-    #define SQLITE_TINY_LOCK_STORE(ptr, val)           SQLITE_ATOMIC_STORE_32(ptr, val)
+    #define SQLITE_TINY_LOCK_CAS_WEAK(ptr, exp, des)   sqlite_atomic_cas_weak_32(ptr, exp, des)
+    #define SQLITE_TINY_LOCK_CAS_STRONG(ptr, exp, des) sqlite_atomic_cas_strong_32(ptr, exp, des)
+    #define SQLITE_TINY_LOCK_STORE(ptr, val)           sqlite_atomic_store_32(ptr, val)
+    #define SQLITE_TINY_LOCK_LOAD(ptr)                 sqlite_atomic_load_32(ptr)
 #else
     typedef char sqlite3_tiny_lock_state_t;
-    #define SQLITE_TINY_LOCK_CAS_WEAK(ptr, exp, des)   SQLITE_ATOMIC_CAS_WEAK_8(ptr, exp, des)
-    #define SQLITE_TINY_LOCK_CAS_STRONG(ptr, exp, des) SQLITE_ATOMIC_CAS_STRONG_8(ptr, exp, des)
-    #define SQLITE_TINY_LOCK_STORE(ptr, val)           SQLITE_ATOMIC_STORE_8(ptr, val)
+    #define SQLITE_TINY_LOCK_CAS_WEAK(ptr, exp, des)   sqlite_atomic_cas_weak_8(ptr, exp, des)
+    #define SQLITE_TINY_LOCK_CAS_STRONG(ptr, exp, des) sqlite_atomic_cas_strong_8(ptr, exp, des)
+    #define SQLITE_TINY_LOCK_STORE(ptr, val)           sqlite_atomic_store_8(ptr, val)
+    #define SQLITE_TINY_LOCK_LOAD(ptr)                 sqlite_atomic_load_8(ptr)
 #endif
 
 typedef struct {
@@ -76,10 +78,19 @@ static inline void sqlite3_tiny_lock_init(sqlite3_tiny_lock* lock) {
 static inline void sqlite3_tiny_lock_lock(sqlite3_tiny_lock* lock) {
     sqlite3_tiny_lock_state_t expected = 0;
     
-    // Attempt to swap 0 (Unlocked) with 1 (Locked)
+    // Outer loop tries to CAS (Test-And-Set)
     while (!SQLITE_TINY_LOCK_CAS_WEAK(&lock->state, &expected, 1)) {
         expected = 0;
+        
+#if defined(__wasm__)
+        // WASM natively waits/sleeps at the engine level without needing a spin loop
         SQLITE_CPU_RELAX(&lock->state);
+#else
+        // TTAS (Test and Test-And-Set): Pure read inner loop to prevent cache bouncing
+        while (SQLITE_TINY_LOCK_LOAD(&lock->state) == 1) {
+            SQLITE_CPU_RELAX(&lock->state);
+        }
+#endif
     }
 }
 

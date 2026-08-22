@@ -26,6 +26,7 @@ On POSIX systems, the lock maps to `pthread_rwlock_t`.
 WASM environments lack standard `pthread` read/write locks out of the box. 
 - **The WASM Fallback**: Instead of pulling in massive polyfills, we automatically fallback to our own `sqlite3_tiny_lock`.
 - **Why TinyLock?**: Because `TinyLock` natively compiles down to the `memory.atomic.wait32` instruction. This allows the lock to completely pause execution and put the thread to sleep (0% CPU) without requiring any dynamic memory allocation, serving as a perfect lightweight substitute.
+- **Caveat**: Because it degrades into a standard mutually-exclusive lock, multiple concurrent readers will block each other on WASM. Since WASM extensions generally run in a single thread (or heavily constrained Web Workers), this is an acceptable trade-off to avoid the massive payload size of shipping a full POSIX threading implementation to the browser. Note that read-heavy workloads on WASM won't parallelize exactly like native code.
 
 ## The C++ Abstraction Layer
 While the core logic is written in pure C macros for ultimate portability (`sqlite3_rw_lock.h`), we provide a zero-overhead C++ wrapper (`sqlite3_rw_lock.hpp`) to bring modern RAII (Resource Acquisition Is Initialization) semantics to extension developers.
