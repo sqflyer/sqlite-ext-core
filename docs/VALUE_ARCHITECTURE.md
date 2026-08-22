@@ -47,7 +47,9 @@ This architecture allows developers to instantly achieve zero-allocation heterog
 - **`SqliteValueHash`**: A transparent hasher for all wrappers and primitives.
 - **`SqliteValueEqual`**: A transparent equality struct leveraging the massive `operator==` suite.
 
-To guarantee optimal performance, these comparisons replace manual byte-loops with `SqliteMemoryUtil::memcmp_less` which relies on SIMD-accelerated C `memcmp`. Furthermore, `SqliteValueUtil` implements the official SQLite collation order (`NULL < NUMERIC < TEXT < BLOB`). By centralizing this logic, we enable **Heterogeneous Lookups**, allowing a `View` object to directly search and compare against an `Owned` object natively.
+To guarantee optimal performance, these comparisons replace manual byte-loops with `SqliteMemoryUtil::memcmp_equal` and `SqliteMemoryUtil::memcmp_less` which rely on SIMD-accelerated C `memcmp`. By exporting these core utilities, the `SqliteBuffer` and `SqliteString` classes in the memory subsystem are able to plug directly into the exact same equality and hashing engine. 
+
+Furthermore, `SqliteValueUtil` implements the official SQLite collation order (`NULL < NUMERIC < TEXT < BLOB`). By centralizing this logic, we enable **Heterogeneous Lookups**, allowing a `View` object (or a `SqliteBuffer`) to directly search and compare against an `Owned` object natively.
 
 ## SQLite Integration Helpers
 All `View` and `Owned` wrappers provide `bind(sqlite3_stmt*, int col)` and `result(sqlite3_context*)` helper methods. These methods abstract away the `sqlite3_bind_*` and `sqlite3_result_*` C-APIs, making it effortless to return custom payloads from UDFs or bind data into prepared statements using `SQLITE_TRANSIENT` memory lifetimes.

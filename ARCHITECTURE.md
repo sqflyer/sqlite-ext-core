@@ -48,7 +48,8 @@ This provides:
 For a deeper dive into the specific mechanics and C++ paradigms used in individual components, refer to their dedicated architecture guides:
 
 ### Memory & State Management
-- [**Value System (`SqliteValue`)**](docs/VALUE_ARCHITECTURE.md): The core zero-cost `Owned`/`View` wrappers over `sqlite3_value`.
+- [**Value System (`SqliteValue`)**](docs/VALUE_ARCHITECTURE.md): The core zero-cost `Owned`/`View` wrappers over `sqlite3_value` powering heterogeneous lookups.
+- [**Dynamic Buffers (`SqliteBuffer`)**](docs/BUFFER_ARCHITECTURE.md): `-nostdlib++` replacements for `std::string` and `std::vector` using `sqlite3_realloc64` that natively hook into the Value System's FNV-1a hashing engine.
 - [**Extension State**](docs/EXT_STATE_ARCHITECTURE.md): Thread-safe management of global state across multiple SQLite connections.
 - [**Smart Pointers**](docs/SMART_PTR_ARCHITECTURE.md): Exception-safe `SqliteUniquePtr` and `SqliteSharedPtr` implementations without `<memory>`.
 - [**Custom Allocators**](docs/ALLOCATOR_ARCHITECTURE.md): Hooking into SQLite's memory arena via `sqlite3_malloc64` and `sqlite3_free`.

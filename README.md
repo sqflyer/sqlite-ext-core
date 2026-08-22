@@ -173,6 +173,19 @@ A clean, object-oriented RAII wrapper for managing SQLite connection handles and
 - [Database Wrapper README](docs/DB_README.md)
 - [Database Architecture Guide](docs/DB_ARCHITECTURE.md)
 
+### 12. Dynamic Buffers and Strings (`sqlite3_buffer.hpp`)
+Provides `SqliteString` and `SqliteBuffer` as `-nostdlib++` compliant drop-in replacements for `std::string` and `std::vector<uint8_t>`.
+
+#### Key Features:
+- **Zero-Dependency**: Does not require `<string>` or `<vector>`.
+- **Integrated Allocator**: Automatically grows geometrically using `sqlite3_realloc64`, keeping memory tracked by SQLite's internal limits.
+- **Heterogeneous Lookups**: Natively plugs into `SqliteValue`'s FNV-1a hashing and `memcmp_equal` engines. This guarantees identical hashes and allows `SqliteString` and `SqliteBuffer` to be used dynamically as zero-allocation lookup keys into `std::unordered_map<SqliteValueOwned, T>`!
+- **Zero-Copy Potential**: Because the memory is owned by SQLite, you can pass ownership of a built string directly to SQLite without making secondary copies.
+
+#### Documentation
+- [Buffer README](docs/BUFFER_README.md)
+- [Buffer Architecture Guide](docs/BUFFER_ARCHITECTURE.md)
+
 ## Building and Testing
 This repository includes a robust test suite to verify the thread-safety and memory-safety of the extensions under immense load.
 

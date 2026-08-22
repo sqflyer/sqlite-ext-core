@@ -105,6 +105,10 @@ my_hash_map.emplace(42, 200);
 // Lookups require ZERO memory allocation and construct NO temporary objects!
 my_hash_map.find("hello"); // Native string lookup
 my_hash_map.find(42);      // Native integer lookup
+
+// You can even look them up using dynamic SqliteString buffers!
+SqliteString buffer("hello");
+my_hash_map.find(buffer);  // Native buffer lookup (hashes match exactly!)
 ```
 
 ### 5. Ergonomic String Builders

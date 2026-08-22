@@ -20,6 +20,20 @@ namespace SqliteMemoryUtil {
         }
         return len1 < len2;
     }
+    
+    /**
+     * @brief Performs a fast lexicographical equality check.
+     * 
+     * Shared by String, Blob, and Value classes. Uses standard C memcmp 
+     * for SIMD-accelerated performance with null-safety built in.
+     */
+    inline bool memcmp_equal(const void* val1, int len1, const void* val2, int len2) {
+        if (len1 != len2) return false;
+        if (len1 == 0) return true;
+        if (val1 == val2) return true;
+        if (!val1 || !val2) return false;
+        return memcmp(val1, val2, len1) == 0;
+    }
 }
 
 namespace SqliteHashUtil {
@@ -86,20 +100,7 @@ namespace SqliteStringUtil {
      * @brief Checks if two character arrays are exactly equal.
      */
     inline bool equal(const char* val1, int len1, const char* val2, int len2) {
-        if (len1 != len2) {
-            return false;
-        }
-        if (len1 == 0) {
-            return true;
-        }
-        if (val1 == val2) {
-            return true;
-        }
-        if (!val1 || !val2) {
-            return false;
-        }
-
-        return memcmp(val1, val2, len1) == 0;
+        return SqliteMemoryUtil::memcmp_equal(val1, len1, val2, len2);
     }
     
     /**
