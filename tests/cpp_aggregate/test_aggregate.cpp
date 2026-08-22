@@ -342,7 +342,7 @@ struct DestructorTracker : public SqliteAggregateBase<int> {
         g_active_destructors++;
     }
 
-    ~DestructorTracker() override {
+    ~DestructorTracker() {
         g_active_destructors--;
     }
 

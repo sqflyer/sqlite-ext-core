@@ -12,22 +12,21 @@
  * @param Destructor A function pointer or macro to free the data (e.g., sqlite3_free).
  */
 #define SQLITE_SHARED_PTR_DEFINE(Prefix, Type, Destructor) \
+    typedef struct Prefix##_ControlBlock_s Prefix##_ControlBlock; \
+    typedef struct { Prefix##_ControlBlock* cb; } Prefix##_SharedPtr; \
+    typedef struct { Prefix##_ControlBlock* cb; } Prefix##_WeakPtr; \
+    static inline void Prefix##_release(Prefix##_SharedPtr* sp); \
+    static inline void Prefix##_weak_release(Prefix##_WeakPtr* wp); \
+    \
     /** @brief Control block storing the pointer and atomic reference counts. */ \
-    typedef struct { \
+    struct Prefix##_ControlBlock_s { \
         Type* ptr; \
         int strong_count; \
         int weak_count; \
-    } Prefix##_ControlBlock; \
+    }; \
     \
-    /** @brief The shared pointer struct. */ \
-    typedef struct { \
-        Prefix##_ControlBlock* cb; \
-    } Prefix##_SharedPtr; \
     \
-    /** @brief The weak pointer struct. */ \
-    typedef struct { \
-        Prefix##_ControlBlock* cb; \
-    } Prefix##_WeakPtr; \
+    \
     \
     /** @brief Creates a shared pointer taking ownership of the given pointer. */ \
     static inline Prefix##_SharedPtr Prefix##_make_shared(Type* ptr) { \

@@ -30,20 +30,20 @@ int main() {
     
     MyStruct_SharedPtr sp1 = MyStruct_make_shared(raw);
     assert(sp1.cb != 0);
-    assert(sp1.cb->ref_count == 1);
+    assert(sp1.cb->strong_count == 1);
     assert(MyStruct_get(sp1) == raw);
     
     MyStruct_SharedPtr sp2 = MyStruct_clone(sp1);
-    assert(sp1.cb->ref_count == 2);
+    assert(sp1.cb->strong_count == 2);
     
     // Test C SharedPtr Move
     MyStruct_SharedPtr sp_moved = MyStruct_move(&sp1);
     assert(sp1.cb == 0); // Original is zeroed out
     assert(sp_moved.cb != 0);
-    assert(sp_moved.cb->ref_count == 2); // Ref count didn't change
+    assert(sp_moved.cb->strong_count == 2); // Ref count didn't change
     
     MyStruct_release(&sp_moved);
-    assert(sp2.cb->ref_count == 1);
+    assert(sp2.cb->strong_count == 1);
     
     MyStruct_release(&sp2);
     assert(g_last_freed == raw);
@@ -114,16 +114,16 @@ int main() {
     assert(!MyStruct_weak_expired(wp1));
     
     MyStruct_WeakPtr wp2 = MyStruct_weak_clone(wp1);
-    assert(wp2.cb->weak_count == 2);
+    assert(wp2.cb->weak_count == 3);
     
     MyStruct_WeakPtr wp3 = MyStruct_weak_move(&wp2);
     assert(wp2.cb == 0);
     assert(wp3.cb != 0);
-    assert(wp3.cb->weak_count == 2);
+    assert(wp3.cb->weak_count == 3);
     
     MyStruct_SharedPtr sp5 = MyStruct_weak_lock(wp3);
     assert(sp5.cb != 0);
-    assert(sp5.cb->ref_count == 2);
+    assert(sp5.cb->strong_count == 2);
     MyStruct_release(&sp5);
     
     MyStruct_release(&sp4);

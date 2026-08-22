@@ -160,6 +160,7 @@ public:
  */
 template<typename T>
 class SqliteWeakPtr {
+    friend class SqliteSharedPtr<T>;
 private:
     using ControlBlock = SqlitePtrControlBlock<T>;
     ControlBlock* m_cb;
