@@ -1,5 +1,5 @@
-#ifndef SQLITE3_VALUE_KEYS_HPP
-#define SQLITE3_VALUE_KEYS_HPP
+#ifndef SQLITE3_VALUE_HPP
+#define SQLITE3_VALUE_HPP
 
 #include "sqlite3ext.h"
 #include <stdarg.h>
@@ -23,7 +23,7 @@ namespace SqliteMemoryUtil {
 }
 
 /**
- * @file sqlite3_value_keys.hpp
+ * @file sqlite3_value.hpp
  * @brief Zero-dependency C++ RAII wrappers for SQLite types (String, Blob, Value).
  * 
  * Provides 'View' (non-owning) and 'Owned' (memory-managed) classes for each type,
@@ -1497,4 +1497,4 @@ SQLITE_DEF_VAL_BLOB_OPS(SqliteValueView, get, SqliteBlobOwned, data, size)
 SQLITE_DEF_VAL_PRIM_OPS(SqliteValueOwned)
 SQLITE_DEF_VAL_PRIM_OPS(SqliteValueView)
 
-#endif // SQLITE3_VALUE_KEYS_HPP
+#endif // SQLITE3_VALUE_HPP

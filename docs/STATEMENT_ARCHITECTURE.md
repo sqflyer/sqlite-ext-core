@@ -9,7 +9,7 @@ This document details the internal design and architectural decisions behind `sq
 1. **Deterministic Resource Management**: Prevent statement leaks (`sqlite3_stmt` unfreed handles) in complex control flow without exceptions.
 2. **Move-Only Lifetime Semantics**: Prohibit accidental shallow copies of underlying SQLite VDBE bytecode cursors while enabling efficient transfer across function returns and containers.
 3. **Zero Dynamic Allocation**: Parameter bindings and column reads must operate with zero heap overhead and zero C++ runtime overhead.
-4. **Deep Interoperability**: Seamlessly integrate with `sqlite3_value_keys.hpp` (`SqliteStringView`, `SqliteBlobView`, `SqliteValueView`, `SqliteValueOwned`).
+4. **Deep Interoperability**: Seamlessly integrate with `sqlite3_value.hpp` (`SqliteStringView`, `SqliteBlobView`, `SqliteValueView`, `SqliteValueOwned`).
 
 ---
 
@@ -46,7 +46,7 @@ inline SqliteStatement& operator=(SqliteStatement&& other) noexcept {
 
 When extracting column values from an active `SQLITE_ROW`, conventional C++ libraries allocate `std::string` or `std::vector<uint8_t>`.
 
-`SqliteStatement` pairs directly with the lightweight non-owning view wrappers from `sqlite3_value_keys.hpp`:
+`SqliteStatement` pairs directly with the lightweight non-owning view wrappers from `sqlite3_value.hpp`:
 
 ```
 +--------------------------+

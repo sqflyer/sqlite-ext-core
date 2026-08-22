@@ -1,6 +1,6 @@
 #include <sqlite3.h>
 #define SQLITE_CORE
-#include "../../include/sqlite3_value_keys.hpp"
+#include "../../include/sqlite3_value.hpp"
 #include <stdio.h>
 #include <assert.h>
 #include <string.h>
@@ -129,6 +129,8 @@ void test_bind(sqlite3* db) {
 }
 
 static void dummy_udf(sqlite3_context* ctx, int argc, sqlite3_value** argv) {
+    (void)argc;
+    (void)argv;
     SqliteStringView str("result_test", 11);
     str.result(ctx);
 }
@@ -287,9 +289,6 @@ void test_coverage_edge_cases(sqlite3* db) {
     // 4. Tie-breakers between Int and Float
     assert(val_int < 6.0);         
     assert(val_float < 6);
-    // Int 5 and Float 5.0 -> values are equal, tie-breaker: Int (1) < Float (2) -> false (because SQLITE_INTEGER < SQLITE_FLOAT is true)
-    // Wait, SQLITE_INTEGER is 1, SQLITE_FLOAT is 2
-    // val_int (1) < 5.0 -> float 5.0 becomes type 2 conceptually.
     assert(val_int < 5.0);
     assert(!(val_float < 5));
     

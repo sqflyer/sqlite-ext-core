@@ -79,7 +79,7 @@ void print_high_scorers(sqlite3* db, double min_score) {
 }
 ```
 
-### 5. Seamless Synergy with Value Keys & Polymorphic Variants
+### 5. Seamless Synergy with Value Types & Polymorphic Variants
 ```cpp
 void store_column_in_map(sqlite3* db, std::map<SqliteValueOwned, int, std::less<>>& my_map) {
     SqliteStatement stmt(db, "SELECT payload FROM dynamic_data;");
@@ -144,3 +144,7 @@ void store_column_in_map(sqlite3* db, std::map<SqliteValueOwned, int, std::less<
 | `column_blob_view(col)` | `SqliteBlobView` | Zero-allocation blob view wrapper. |
 | `column_value_view(col)` | `SqliteValueView` | Zero-allocation transient polymorphic value wrapper. |
 | `column_value_owned(col)` | `SqliteValueOwned` | Memory-managed polymorphic copy. |
+
+---
+
+For architectural details, please see [STATEMENT_ARCHITECTURE.md](STATEMENT_ARCHITECTURE.md).

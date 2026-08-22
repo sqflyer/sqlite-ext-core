@@ -8,7 +8,7 @@ A lightweight, zero-dependency C++ framework for registering and executing SQLit
 - **Zero-Allocation Argument Views**: `args[i]` instantly yields a transient `SqliteValueView`, eliminating heap allocations or conversions.
 - **Seamless C++11 Lambda Support**: Pass inline stateless lambdas or standard C++ function pointers directly to registration calls.
 - **Variadic Function Support**: Register dynamic-arity functions (`num_args = -1`) and query `args.size()` dynamically.
-- **Synergy with Value Keys**: Fully interoperates with `SqliteStringOwned`, `SqliteBlobOwned`, and heterogeneous operators for return values and in-place comparisons.
+- **Synergy with Value Types**: Fully interoperates with `SqliteValueView`, `SqliteStringOwned`, `SqliteBlobOwned`, and heterogeneous operators for return values and in-place comparisons.
 - **Freestanding & `-nostdlib++` Compatible**: Requires no standard library dependencies (no `<functional>`, `<tuple>`, or `<vector>`), making it ideal for embedded and WebAssembly extensions.
 
 ## Setup
@@ -127,3 +127,7 @@ void classify_val(sqlite3_context* ctx, SqliteUdfArgs args) {
 | Method | Return Type | Description |
 | :--- | :--- | :--- |
 | `define(db, name, num_args, func, deterministic = true)` | `int` | Registers a C++ scalar function or stateless lambda with SQLite. |
+
+---
+
+For architectural details, please see [UDF_ARCHITECTURE.md](UDF_ARCHITECTURE.md).

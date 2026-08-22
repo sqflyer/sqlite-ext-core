@@ -1,12 +1,12 @@
-# C-SQLite-Ext-Core Architecture
+# C++ Value Types Architecture (`sqlite3_value.hpp`)
 
 ## Overview
 `c-sqlite-ext-core` provides zero-dependency C++ RAII wrappers over SQLite's core types (`sqlite3_value`, `sqlite3_str`, and binary blobs).
 
-The architecture fundamentally relies on a **View vs Owned** paradigm to solve the classic C++ heterogeneous lookup problem for SQLite maps and variants.
+The architecture fundamentally relies on a **View vs Owned** paradigm to solve the classic C++ heterogeneous lookup problem for SQLite maps, User-Defined Functions, and prepared statements.
 
 ## The Problem
-When SQLite passes parameters to your C++ extension functions, it provides them as transient pointers (e.g. `const sqlite3_value*`). If you wish to use these as keys to search a `std::map`, traditional C++ requires you to construct a `std::string` or allocate memory to build the key, causing an expensive memory allocation just to perform a lookup.
+When SQLite passes parameters to your C++ extension functions, it provides them as transient pointers (e.g. `const sqlite3_value*`). If you wish to use these as keys to search a `std::map` or pass them through application layers, traditional C++ requires you to construct a `std::string` or allocate memory to build the key, causing an expensive memory allocation just to perform a lookup.
 
 ## The Solution: View vs Owned
 
@@ -15,7 +15,7 @@ When SQLite passes parameters to your C++ extension functions, it provides them 
 - `SqliteBlobView`
 - `SqliteValueView`
 
-These classes are **zero-allocation**. They do not copy memory. They merely wrap the raw pointers and length provided by SQLite. Use these to perform instant hash lookups or comparisons without ever hitting `malloc()`.
+These classes are **zero-allocation**. They do not copy memory. They merely wrap the raw pointers and length provided by SQLite. Use these to perform instant hash lookups, read statement columns, or pass UDF arguments without ever hitting `malloc()`.
 
 To support C++14 transparent comparators, `SqliteStringView` includes an implicit constructor from `const char*`. This allows queries like `my_map.find("hello")` to seamlessly map to the heterogeneous lookup operators without requiring the user to explicitly instantiate the wrapper.
 
@@ -24,7 +24,7 @@ To support C++14 transparent comparators, `SqliteStringView` includes an implici
 - `SqliteBlobOwned`
 - `SqliteValueOwned`
 
-These classes are heavy and memory-managed via **RAII**. They use `sqlite3_malloc`, `sqlite3_value_dup`, or `sqlite3_str_new` to copy the data securely into permanent memory. They automatically free their memory upon destruction.
+These classes are memory-managed via **RAII**. They use `sqlite3_malloc`, `sqlite3_value_dup`, or `sqlite3_str_new` to copy the data securely into permanent memory. They automatically free their memory upon destruction.
 
 ### Small Buffer Optimization (SBO)
 To guarantee performance, `SqliteValueOwned` implements **Small Buffer Optimization (SBO)**. If the `sqlite3_value` being copied is a primitive type (`SQLITE_INTEGER` or `SQLITE_FLOAT`), the data is stored directly inline inside a union buffer. Memory is only heap-allocated (`sqlite3_value_dup`) for dynamically sized types (`SQLITE_TEXT` and `SQLITE_BLOB`).
@@ -33,7 +33,7 @@ To ensure maximum ergonomics, `SqliteStringOwned` provides specialized construct
 - **`sqlite3_context*`**: Automatically extracts the database handle when building strings inside UDFs.
 - **`const char*` / default**: Uses `sqlite3_str_new(nullptr)` to allocate strings directly from the global heap via `sqlite3_malloc`, completely eliminating the need for a database handle.
 
-Use these `Owned` classes as the actual Keys stored inside your Maps.
+Use these `Owned` classes as the actual values or keys stored inside your maps and long-lived structures.
 
 ### The `Util` Namespaces
 - `SqliteStringUtil`

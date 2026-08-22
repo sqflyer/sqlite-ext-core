@@ -9,7 +9,7 @@ This document details the internal design and architectural decisions behind `sq
 1. **Zero Dynamic Allocation**: Parameter wrapping and function invocation must not trigger any `malloc`, `new`, or standard library heap traffic.
 2. **Bounds-Checked Parameter Access**: Protect against segfaults and buffer overruns when extensions access `argv`.
 3. **Strict Freestanding Portability**: Operate completely without `<functional>`, `<tuple>`, or RTTI/exceptions (`-nostdlib++ -fno-exceptions -fno-rtti`).
-4. **Natural Value Key Integration**: Seamlessly interoperate with `SqliteValueView`, `SqliteStringOwned`, and `SqliteBlobOwned`.
+4. **Natural Value Type Integration**: Seamlessly interoperate with `SqliteValueView`, `SqliteStringOwned`, and `SqliteBlobOwned`.
 
 ---
 
@@ -71,7 +71,7 @@ class SqliteUdfArgs {
 
 ---
 
-## Synergy with Value Keys and Small Buffer Optimization
+## Synergy with Value Types and Small Buffer Optimization
 
 `SqliteUdfArgs::operator[]` returns a `SqliteValueView`, which directly enables:
 - In-place numeric casting via `as_int64()` and `as_double()`.

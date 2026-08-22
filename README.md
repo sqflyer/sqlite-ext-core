@@ -57,8 +57,8 @@ The state manager solves this by automatically generating a thread-safe, garbage
 - [State Manager Quickstart](docs/EXT_STATE_README.md)
 - [State Manager Internal Architecture](docs/EXT_STATE_ARCHITECTURE.md)
 
-### 4. C++ RAII Data Types (`sqlite3_value_keys.hpp`)
-Zero-dependency C++ RAII wrappers for SQLite core data types designed for zero-allocation lookups and heterogeneous map keys.
+### 4. C++ RAII Value Types (`sqlite3_value.hpp`)
+Zero-dependency C++ RAII wrappers for SQLite core data types designed for zero-allocation lookups, heterogeneous map keys, UDF argument access, and statement column readings.
 
 #### Key Features:
 - **SQLite Integration APIs**: Provides zero-overhead `bind()` and `result()` methods directly on wrappers to easily interoperate with `sqlite3_stmt` parameters and `sqlite3_context` returns.
@@ -72,8 +72,8 @@ Zero-dependency C++ RAII wrappers for SQLite core data types designed for zero-a
 - **Zero STL Overhead**: Fully implemented using raw C-pointers and SQLite's native memory profilers (`sqlite3_malloc`). No `<string>` or `<vector>` overhead. Perfect for constrained environments like WASM.
 
 #### Documentation
-- [Value Keys README](docs/VALUE_KEYS_README.md)
-- [Value Keys Internal Architecture](docs/VALUE_KEYS_ARCHITECTURE.md)
+- [Value Types README](docs/VALUE_README.md)
+- [Value Types Architecture](docs/VALUE_ARCHITECTURE.md)
 
 ### 5. Smart Pointers (`sqlite3_smart_ptr.h` / `.hpp`)
 Zero-dependency, thread-safe, reference-counted memory allocation that integrates directly into SQLite's memory manager (`sqlite3_malloc`). Allows safely sharing dynamic payloads across User-Defined Function (UDF) boundaries.

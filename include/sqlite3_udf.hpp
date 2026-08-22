@@ -2,7 +2,7 @@
 #define SQLITE3_UDF_HPP
 
 #include <sqlite3.h>
-#include "sqlite3_value_keys.hpp"
+#include "sqlite3_value.hpp"
 
 /**
  * @brief Bounds-safe C++ wrapper over SQLite's raw (int argc, sqlite3_value** argv)

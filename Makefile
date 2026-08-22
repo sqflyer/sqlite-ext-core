@@ -1,12 +1,14 @@
-.PHONY: test test-ext-state test-cpp-value-keys test-locks test-allocator test-smart-ptr test-cpp-udf test-cpp-statement leak-check-integration clean
+.PHONY: test test-ext-state test-cpp-value test-cpp-value-keys test-locks test-allocator test-smart-ptr test-cpp-udf test-cpp-statement leak-check-integration clean
 
-test: test-ext-state test-cpp-value-keys test-locks test-allocator test-smart-ptr test-cpp-udf test-cpp-statement
+test: test-ext-state test-cpp-value test-locks test-allocator test-smart-ptr test-cpp-udf test-cpp-statement
 
 test-ext-state:
 	$(MAKE) -C tests/ext_state test-c test-cpp
 
-test-cpp-value-keys:
-	$(MAKE) -C tests/cpp_value_keys test
+test-cpp-value:
+	$(MAKE) -C tests/cpp_value test
+
+test-cpp-value-keys: test-cpp-value
 
 test-cpp-udf:
 	$(MAKE) -C tests/cpp_udf test
@@ -29,7 +31,7 @@ leak-check-integration:
 clean:
 	rm -rf bin
 	$(MAKE) -C tests/ext_state clean
-	$(MAKE) -C tests/cpp_value_keys clean
+	$(MAKE) -C tests/cpp_value clean
 	$(MAKE) -C tests/cpp_udf clean
 	$(MAKE) -C tests/cpp_statement clean
 	$(MAKE) -C tests/locks clean

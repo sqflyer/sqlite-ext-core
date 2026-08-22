@@ -2,7 +2,7 @@
 #define SQLITE3_STATEMENT_HPP
 
 #include <sqlite3.h>
-#include "sqlite3_value_keys.hpp"
+#include "sqlite3_value.hpp"
 
 /**
  * @brief Zero-dependency C++ RAII wrapper over SQLite prepared statements (`sqlite3_stmt*`).

@@ -1,9 +1,9 @@
-# C++ Value Keys (`sqlite3_value_keys.hpp`)
+# C++ Value Types (`sqlite3_value.hpp`)
 
-Zero-dependency C++ RAII wrappers for SQLite core data types, engineered specifically to enable zero-allocation heterogeneous map lookups and safe polymorphic variants.
+Zero-dependency C++ RAII wrappers for SQLite core data types, engineered specifically to enable zero-allocation heterogeneous map lookups, safe polymorphic variants, and seamless UDF/statement integration.
 
 ## Features
-- **Zero-Allocation Lookups**: Provides non-owning `View` wrappers (`SqliteStringView`, `SqliteBlobView`, `SqliteValueView`) to prevent expensive memory allocations during C++ map key lookups.
+- **Zero-Allocation Lookups**: Provides non-owning `View` wrappers (`SqliteStringView`, `SqliteBlobView`, `SqliteValueView`) to prevent expensive memory allocations during C++ map lookups, statement column reads, and UDF argument access.
 - **Small Buffer Optimization (SBO)**: `SqliteValueOwned` utilizes a memory union to store primitives (Integer, Float) completely inline, bypassing heap allocation entirely.
 - **Heterogeneous Lookups**: Natively supports 144+ macro-generated operator overloads for deep heterogeneous lookup support across `String`, `Blob`, and C++ primitives (`int`, `double`, `sqlite3_int64`) using all 6 standard relational operators (`==`, `!=`, `<`, `>`, `<=`, `>=`).
 - **Polymorphic Variants**: Safely store Integer, Float, Text, and Blob payloads inside the exact same `std::map` using the polymorphic `SqliteValueOwned` wrapper. Strict Weak Ordering guarantees flawless type-safety and stable `NaN` sorting.
@@ -13,7 +13,7 @@ Zero-dependency C++ RAII wrappers for SQLite core data types, engineered specifi
 - **Zero STL Overhead**: Fully implemented using raw C-pointers, `<string.h>`, and SQLite's native memory profilers (`sqlite3_malloc`). No `<string>`, `<vector>`, or `<cstring>` overhead. Perfect for constrained environments like WASM.
 
 ## Setup
-Simply `#include "include/sqlite3_value_keys.hpp"` in your SQLite C++ extension project!
+Simply `#include "include/sqlite3_value.hpp"` in your SQLite C++ extension project!
 
 ## Examples of Usage
 
@@ -104,7 +104,7 @@ builder.appendchar(1, ']');
 builder.result(ctx); // Outputs: "Hello [42]"
 ```
 
-### 4. Fast Binding & Result Wrappers
+### 5. Fast Binding & Result Wrappers
 ```cpp
 static void bind_example(sqlite3_stmt* stmt, sqlite3_value** argv) {
     // Bind incoming SQLite values directly to a prepared statement
@@ -116,4 +116,4 @@ static void bind_example(sqlite3_stmt* stmt, sqlite3_value** argv) {
 }
 ```
 
-For architectural details, please see [VALUE_KEYS_ARCHITECTURE.md](VALUE_KEYS_ARCHITECTURE.md).
+For architectural details, please see [VALUE_ARCHITECTURE.md](VALUE_ARCHITECTURE.md).
