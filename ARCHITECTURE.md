@@ -26,16 +26,14 @@ Because we cannot rely on `std::string_view` or `std::unique_ptr` in a `-nostdli
   - Their destructors safely clean up the resource (e.g., `sqlite3_close_v2` or `sqlite3_value_free`).
   - By inheriting from `View`, they support **object slicing**. You can pass an `Owned` object by value into any function expecting a `View`, which compiles down to a raw 8-byte pointer copy with zero overhead!
 
-5.  **Online Backup (`sqlite3_backup.hpp`)**: `SqliteBackup` strictly enforces the SQLite backup lifecycle to guarantee the source database read-lock is lifted via `sqlite3_backup_finish` in all scope-exit scenarios.
-6.  **Virtual Tables (`sqlite3_vtab.hpp`)**: An inheritance framework abstracting away C `sqlite3_module` routing, giving developers clean `SqliteVTable` and `SqliteVTabCursor` interfaces to implement.
-7.  **Clean Abstractions (`sqlite3_ext_core.hpp`)**: Functions wrapped in standard C++ interfaces (`SqliteContext::result_text()`) but strictly inline.
-
 ## 3. Strict RAII (Resource Acquisition Is Initialization)
 
-Manual memory and lock management is the leading cause of bugs in SQLite extensions. We enforce strict RAII to guarantee safety:
-- `SqliteStatement`: Automatically calls `sqlite3_finalize` upon destruction.
-- `SqliteTransaction`: Automatically issues a `ROLLBACK;` upon destruction unless explicitly committed.
-- `SqliteSavepoint`: Automatically issues a `ROLLBACK TO;` upon destruction, enabling safe nested C++ transactions.
+Manual memory, resource, and lock management is the leading cause of bugs in SQLite extensions. We enforce strict RAII to guarantee safety:
+- **`SqliteStatement`**: Automatically calls `sqlite3_finalize` upon destruction.
+- **`SqliteTransaction`**: Automatically issues a `ROLLBACK;` upon destruction unless explicitly committed.
+- **`SqliteSavepoint`**: Automatically issues a `ROLLBACK TO;` upon destruction, enabling safe nested C++ transactions.
+- **`SqliteBackup`**: Guarantees the source database read-lock is lifted via `sqlite3_backup_finish` in all scope-exit scenarios.
+- **`SqliteExtState` Lock Guards**: Scope-bound `ReadGuard` and `WriteGuard` mutex lifecycles.
 
 ## 4. Template Metaprogramming
 
@@ -72,7 +70,11 @@ For a deeper dive into the specific mechanics and C++ paradigms used in individu
 - [**Transactions & Savepoints**](docs/TRANSACTION_ARCHITECTURE.md): Exception-safe RAII rollbacks and hierarchical nested transactions.
 - [**Statements**](docs/STATEMENT_ARCHITECTURE.md): Zero-cost query builders, iterators, and prepared statement caching.
 
-### Extensibility (UDFs & Virtual Tables)
+### Extensibility (UDFs, Virtual Tables & Extensions)
+- [**Extension Creator (`sqlite3_ext_creator.hpp`)**](docs/EXTENSION_ARCHITECTURE.md): Zero-boilerplate entrypoint definition, dynamic symbol export, and routine dispatch initialization.
 - [**Scalar UDFs**](docs/UDF_ARCHITECTURE.md): Compile-time C-callback generation for User-Defined Functions.
 - [**Aggregate UDFs**](docs/AGGREGATE_ARCHITECTURE.md): Deterministic memory layouts for `xStep` and `xFinal` aggregations.
 - [**Table-Valued Functions (TVF)**](docs/TVF_ARCHITECTURE.md): Statically generated `sqlite3_module` structs mapping to strictly-typed C++ classes.
+- [**Virtual Tables (VTAB)**](docs/VTAB_ARCHITECTURE.md): Polymorphic standard-layout routing, transactions, savepoints, and direct context state injection.
+- [**Unified Extensibility (`SqliteExt`)**](include/sqlite3_ext.hpp): Symmetrical registration facade combining UDFs, Aggregates, TVFs, and Virtual Tables.
+- [**Extension Examples & Tutorial**](examples/README.md): Turnkey example showcasing compilation, testing, and multi-language loading of SQLite extensions.

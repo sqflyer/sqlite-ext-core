@@ -1,6 +1,6 @@
 # Database Architecture
 
-The Database ecosystem inside `c-sqlite-ext-core` is carefully designed to bridge the gap between low-level SQLite C-APIs and modern C++ development semantics without sacrificing any performance.
+The Database ecosystem inside `sqlite-ext-core` is carefully designed to bridge the gap between low-level SQLite C-APIs and modern C++ development semantics without sacrificing any performance.
 
 ## The Owned vs View Pattern
 

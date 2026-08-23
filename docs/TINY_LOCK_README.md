@@ -2,7 +2,7 @@
 
 TinyLock is a blisteringly fast, 1-byte, zero-dependency hybrid spinlock for C and C++. 
 
-It was built specifically for `c-sqlite-ext-core` to provide a portable thread-safety primitive without relying on `<atomic>`, `libstdc++`, or bulky OS-level mutexes like `pthread_mutex_t` or `CRITICAL_SECTION`. 
+It was built specifically for `sqlite-ext-core` to provide a portable thread-safety primitive without relying on `<atomic>`, `libstdc++`, or bulky OS-level mutexes like `pthread_mutex_t` or `CRITICAL_SECTION`. 
 
 ## Features
 - **Zero Dependencies**: Requires absolutely no OS headers or standard library files.

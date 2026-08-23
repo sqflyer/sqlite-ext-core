@@ -1,6 +1,6 @@
 # Dynamic Strings and Buffers (`sqlite3_buffer.hpp`)
 
-Because `c-sqlite-ext-core` strictly enforces `-nostdlib++`, standard containers like `std::string` and `std::vector` are not available.
+Because `sqlite-ext-core` strictly enforces `-nostdlib++`, standard containers like `std::string` and `std::vector` are not available.
 
 This header provides two powerful, zero-dependency replacements that allocate dynamic memory directly from SQLite's internal memory arena (`sqlite3_malloc64` and `sqlite3_realloc64`).
 

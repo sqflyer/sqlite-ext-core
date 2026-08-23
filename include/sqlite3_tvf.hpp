@@ -141,11 +141,10 @@ struct SqliteTvfModule {
                         return SQLITE_CONSTRAINT;
                     }
 
-                    // Map the hidden column to the filter's argv array!
-                    // SQLite requires 1-based indexing for argvIndex.
-                    pIdxInfo->aConstraintUsage[i].argvIndex = col;
-                    pIdxInfo->aConstraintUsage[i].omit = 1; // Tell SQLite the TVF handled this constraint internally
+                    // Map the constraint to the filter's argv array using contiguous 1-based indexing.
                     usable_constraints++;
+                    pIdxInfo->aConstraintUsage[i].argvIndex = usable_constraints;
+                    pIdxInfo->aConstraintUsage[i].omit = 1; // Tell SQLite the TVF handled this constraint internally
                 }
             }
         }

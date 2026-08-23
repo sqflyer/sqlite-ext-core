@@ -72,6 +72,7 @@ Testing/
 
 # Agent configuration
 AGENTS.md
+tasks.md
 
 # IDE configuration
 .vscode/
