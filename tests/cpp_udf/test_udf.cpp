@@ -4,10 +4,10 @@
 #include <string.h>
 #include "sqlite3_udf.hpp"
 
-// 1. Basic 2-arg scalar function: add_numbers(a, b)
-void udf_add_numbers(sqlite3_context* ctx, SqliteUdfArgs args) {
+// 1. Basic 2-arg scalar function: add_numbers(a, b) using SqliteContext
+void udf_add_numbers(SqliteContext ctx, SqliteUdfArgs args) {
     if (args.size() != 2) {
-        sqlite3_result_error(ctx, "add_numbers requires exactly 2 arguments", -1);
+        ctx.result_error("add_numbers requires exactly 2 arguments");
         return;
     }
     
@@ -20,27 +20,25 @@ void udf_add_numbers(sqlite3_context* ctx, SqliteUdfArgs args) {
     assert(args[999].get() == nullptr);
 
     sqlite3_int64 result = args[0].as_int64() + args[1].as_int64();
-    sqlite3_result_int64(ctx, result);
+    ctx.result_int64(result);
 }
 
-// 2. String manipulation: repeat_str(str, count) using SqliteStringOwned & SqliteStringView
-void udf_repeat_str(sqlite3_context* ctx, SqliteUdfArgs args) {
+// 2. String manipulation: repeat_str(str, count) using SqliteContext, SqliteStringOwned & SqliteStringView
+void udf_repeat_str(SqliteContext ctx, SqliteUdfArgs args) {
     if (args.size() != 2) {
-        sqlite3_result_error(ctx, "repeat_str requires exactly 2 arguments", -1);
+        ctx.result_error("repeat_str requires exactly 2 arguments");
         return;
     }
 
     if (args[0].type() != SQLITE_TEXT || args[1].type() != SQLITE_INTEGER) {
-        sqlite3_result_error(ctx, "repeat_str expects (TEXT, INTEGER)", -1);
+        ctx.result_error("repeat_str expects (TEXT, INTEGER)");
         return;
     }
 
-    const char* raw_str = reinterpret_cast<const char*>(sqlite3_value_text(const_cast<sqlite3_value*>(args[0].get())));
-    int len = sqlite3_value_bytes(const_cast<sqlite3_value*>(args[0].get()));
-    SqliteStringView str(raw_str, len);
+    SqliteStringView str = args[0].as_text();
     int count = args[1].as_int64();
 
-    SqliteStringOwned result(ctx);
+    SqliteStringOwned result(ctx.get());
     for (int i = 0; i < count; i++) {
         result.append(str.data(), str.length());
     }
@@ -48,15 +46,16 @@ void udf_repeat_str(sqlite3_context* ctx, SqliteUdfArgs args) {
     result.result(ctx);
 }
 
-// 3. Blob manipulation: bitwise_not_blob(blob)
-void udf_not_blob(sqlite3_context* ctx, SqliteUdfArgs args) {
+// 3. Blob manipulation: bitwise_not_blob(blob) using SqliteContext
+void udf_not_blob(SqliteContext ctx, SqliteUdfArgs args) {
     if (args.size() != 1 || args[0].type() != SQLITE_BLOB) {
-        sqlite3_result_error(ctx, "not_blob expects 1 BLOB argument", -1);
+        ctx.result_error("not_blob expects 1 BLOB argument");
         return;
     }
 
-    const unsigned char* raw_data = reinterpret_cast<const unsigned char*>(sqlite3_value_blob(const_cast<sqlite3_value*>(args[0].get())));
-    int len = sqlite3_value_bytes(const_cast<sqlite3_value*>(args[0].get()));
+    SqliteBlobView in_blob = args[0].as_blob();
+    const unsigned char* raw_data = reinterpret_cast<const unsigned char*>(in_blob.data());
+    int len = in_blob.size();
     
     unsigned char inv[64];
     assert(len <= 64);
@@ -67,8 +66,8 @@ void udf_not_blob(sqlite3_context* ctx, SqliteUdfArgs args) {
     inverted.result(ctx);
 }
 
-// 4. Variadic UDF: sum_variadic(a, b, c, ...)
-void udf_sum_variadic(sqlite3_context* ctx, SqliteUdfArgs args) {
+// 4. Variadic UDF: sum_variadic(a, b, c, ...) using SqliteContext
+void udf_sum_variadic(SqliteContext ctx, SqliteUdfArgs args) {
     double total = 0.0;
     for (int i = 0; i < args.size(); i++) {
         if (args[i].type() == SQLITE_INTEGER) {
@@ -78,72 +77,76 @@ void udf_sum_variadic(sqlite3_context* ctx, SqliteUdfArgs args) {
         } else if (args[i].type() == SQLITE_NULL) {
             continue;
         } else {
-            sqlite3_result_error(ctx, "sum_variadic only accepts numbers", -1);
+            ctx.result_error("sum_variadic only accepts numbers");
             return;
         }
     }
-    sqlite3_result_double(ctx, total);
+    ctx.result_double(total);
 }
 
-// 5. Heterogeneous comparison inside UDF: check_magic(val)
-void udf_check_magic(sqlite3_context* ctx, SqliteUdfArgs args) {
+// 5. Heterogeneous comparison inside UDF: check_magic(val) using SqliteContext
+void udf_check_magic(SqliteContext ctx, SqliteUdfArgs args) {
     if (args.size() != 1) {
-        sqlite3_result_error(ctx, "check_magic requires 1 argument", -1);
+        ctx.result_error("check_magic requires 1 argument");
         return;
     }
 
     if (args[0] == 42) {
-        sqlite3_result_text(ctx, "is_magic_int", -1, SQLITE_STATIC);
+        ctx.result_text("is_magic_int", -1, SQLITE_STATIC);
     } else if (args[0] == 3.14) {
-        sqlite3_result_text(ctx, "is_magic_pi", -1, SQLITE_STATIC);
+        ctx.result_text("is_magic_pi", -1, SQLITE_STATIC);
     } else if (args[0] == SqliteStringView("sqlite", 6)) {
-        sqlite3_result_text(ctx, "is_magic_str", -1, SQLITE_STATIC);
+        ctx.result_text("is_magic_str", -1, SQLITE_STATIC);
     } else {
-        sqlite3_result_text(ctx, "no_match", -1, SQLITE_STATIC);
+        ctx.result_text("no_match", -1, SQLITE_STATIC);
     }
 }
 
-// 6. Nullable handling UDF: null_safe_concat(a, b)
-void udf_null_safe_concat(sqlite3_context* ctx, SqliteUdfArgs args) {
+// 6. Nullable handling UDF: null_safe_concat(a, b) using SqliteContext
+void udf_null_safe_concat(SqliteContext ctx, SqliteUdfArgs args) {
     if (args.size() != 2) return;
 
     if (args[0].type() == SQLITE_NULL || args[1].type() == SQLITE_NULL) {
-        sqlite3_result_null(ctx);
+        ctx.result_null();
         return;
     }
 
-    const char* str1 = reinterpret_cast<const char*>(sqlite3_value_text(const_cast<sqlite3_value*>(args[0].get())));
-    int len1 = sqlite3_value_bytes(const_cast<sqlite3_value*>(args[0].get()));
-    const char* str2 = reinterpret_cast<const char*>(sqlite3_value_text(const_cast<sqlite3_value*>(args[1].get())));
-    int len2 = sqlite3_value_bytes(const_cast<sqlite3_value*>(args[1].get()));
+    SqliteStringView str1 = args[0].as_text();
+    SqliteStringView str2 = args[1].as_text();
 
-    SqliteStringOwned res(ctx);
-    res.append(str1, len1);
-    res.append(str2, len2);
+    SqliteStringOwned res(ctx.get());
+    res.append(str1.data(), str1.length());
+    res.append(str2.data(), str2.length());
     res.result(ctx);
 }
 
-// 7. Zero-argument UDF: get_constant_version()
-void udf_get_constant_version(sqlite3_context* ctx, SqliteUdfArgs args) {
+// 7. Zero-argument UDF: get_constant_version() using SqliteContext
+void udf_get_constant_version(SqliteContext ctx, SqliteUdfArgs args) {
     assert(args.size() == 0);
     assert(args[0].type() == SQLITE_NULL);
-    sqlite3_result_text(ctx, "v1.0.0", -1, SQLITE_STATIC);
+    ctx.result_text("v1.0.0", -1, SQLITE_STATIC);
 }
 
-// 8. Non-deterministic UDF: sequence_counter()
+// 8. Non-deterministic UDF: sequence_counter() using SqliteContext
 static int g_seq_counter = 0;
-void udf_sequence_counter(sqlite3_context* ctx, SqliteUdfArgs args) {
+void udf_sequence_counter(SqliteContext ctx, SqliteUdfArgs args) {
     (void)args;
-    sqlite3_result_int(ctx, ++g_seq_counter);
+    ctx.result_int(++g_seq_counter);
 }
 
-// 9. SqliteValueOwned return wrapper: identity_val(x)
-void udf_identity_val(sqlite3_context* ctx, SqliteUdfArgs args) {
+// 9. SqliteValueOwned return wrapper: identity_val(x) using SqliteContext
+void udf_identity_val(SqliteContext ctx, SqliteUdfArgs args) {
     if (args.size() != 1) return;
     
     // Copy into an owned wrapper and return via .result(ctx)
     SqliteValueOwned owned_copy(args[0].get());
     owned_copy.result(ctx);
+}
+
+// 10. Raw signature backward-compatibility check: raw_add(a, b)
+void udf_raw_add(sqlite3_context* raw_ctx, SqliteUdfArgs args) {
+    if (args.size() != 2) return;
+    sqlite3_result_int64(raw_ctx, args[0].as_int64() + args[1].as_int64());
 }
 
 int main() {
@@ -155,8 +158,9 @@ int main() {
         return 1;
     }
     
-    printf("1. Registering scalar UDFs...\n");
+    printf("1. Registering scalar UDFs with SqliteContext...\n");
     assert(SqliteUdf::define(db, "add_numbers", 2, udf_add_numbers) == SQLITE_OK);
+    assert(SqliteUdf::define(db, "raw_add", 2, udf_raw_add) == SQLITE_OK);
     assert(SqliteUdf::define(db, "repeat_str", 2, udf_repeat_str) == SQLITE_OK);
     assert(SqliteUdf::define(db, "not_blob", 1, udf_not_blob) == SQLITE_OK);
     assert(SqliteUdf::define(db, "sum_variadic", -1, udf_sum_variadic) == SQLITE_OK);
@@ -166,19 +170,20 @@ int main() {
     assert(SqliteUdf::define(db, "seq_counter", 0, udf_sequence_counter, false) == SQLITE_OK); // non-deterministic
     assert(SqliteUdf::define(db, "identity_val", 1, udf_identity_val) == SQLITE_OK);
     
-    // Stateless C++11 Lambda
-    assert(SqliteUdf::define(db, "square", 1, [](sqlite3_context* ctx, SqliteUdfArgs args) {
+    // Stateless C++11 Lambda using SqliteContext
+    assert(SqliteUdf::define(db, "square", 1, [](SqliteContext ctx, SqliteUdfArgs args) {
         if (args.size() != 1) return;
         sqlite3_int64 val = args[0].as_int64();
-        sqlite3_result_int64(ctx, val * val);
+        ctx.result_int64(val * val);
     }) == SQLITE_OK);
 
     sqlite3_stmt* stmt;
 
     printf("2. Testing basic math UDF...\n");
-    assert(sqlite3_prepare_v2(db, "SELECT add_numbers(5, 10);", -1, &stmt, nullptr) == SQLITE_OK);
+    assert(sqlite3_prepare_v2(db, "SELECT add_numbers(5, 10), raw_add(5, 10);", -1, &stmt, nullptr) == SQLITE_OK);
     assert(sqlite3_step(stmt) == SQLITE_ROW);
     assert(sqlite3_column_int(stmt, 0) == 15);
+    assert(sqlite3_column_int(stmt, 1) == 15);
     sqlite3_finalize(stmt);
 
     printf("3. Testing string builder UDF...\n");
@@ -282,9 +287,9 @@ int main() {
     assert(sqlite3_column_int(stmt, 0) == 30);
     sqlite3_finalize(stmt);
 
-    // Override add_numbers to multiply instead
-    assert(SqliteUdf::define(db, "add_numbers", 2, [](sqlite3_context* ctx, SqliteUdfArgs args) {
-        sqlite3_result_int64(ctx, args[0].as_int64() * args[1].as_int64());
+    // Override add_numbers to multiply instead using SqliteContext
+    assert(SqliteUdf::define(db, "add_numbers", 2, [](SqliteContext ctx, SqliteUdfArgs args) {
+        ctx.result_int64(args[0].as_int64() * args[1].as_int64());
     }) == SQLITE_OK);
 
     assert(sqlite3_prepare_v2(db, "SELECT add_numbers(10, 20);", -1, &stmt, nullptr) == SQLITE_OK);
@@ -295,7 +300,7 @@ int main() {
     printf("15. Testing error handling propagation...\n");
     assert(sqlite3_prepare_v2(db, "SELECT add_numbers(1);", -1, &stmt, nullptr) == SQLITE_ERROR);
     
-    // Runtime error returned via sqlite3_result_error
+    // Runtime error returned via SqliteContext result_error
     assert(sqlite3_prepare_v2(db, "SELECT sum_variadic('invalid');", -1, &stmt, nullptr) == SQLITE_OK);
     assert(sqlite3_step(stmt) == SQLITE_ERROR);
     sqlite3_finalize(stmt);

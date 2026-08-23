@@ -473,6 +473,89 @@ void test_cross_type_relational_operators(sqlite3* db) {
     sqlite3_finalize(stmt);
 }
 
+void test_as_text_and_as_blob(sqlite3* db) {
+    sqlite3_stmt* stmt;
+    assert(sqlite3_prepare_v2(db, "SELECT 'Hello, SQLite!', x'01020304FF', 12345, NULL;", -1, &stmt, nullptr) == SQLITE_OK);
+    assert(sqlite3_step(stmt) == SQLITE_ROW);
+
+    sqlite3_value* v_text = sqlite3_column_value(stmt, 0);
+    sqlite3_value* v_blob = sqlite3_column_value(stmt, 1);
+    sqlite3_value* v_int  = sqlite3_column_value(stmt, 2);
+    sqlite3_value* v_null = sqlite3_column_value(stmt, 3);
+
+    // 1. Test SqliteValueView::as_text()
+    SqliteValueView view_text(v_text);
+    SqliteStringView sv1 = view_text.as_text();
+    assert(sv1.length() == 14);
+    assert(memcmp(sv1.data(), "Hello, SQLite!", 14) == 0);
+    assert(sv1 == SqliteStringView("Hello, SQLite!", 14));
+
+    // Null/empty view returns empty string view
+    SqliteValueView view_null(v_null);
+    SqliteStringView sv_null = view_null.as_text();
+    assert(sv_null.length() == 0);
+
+    SqliteValueView view_empty(nullptr);
+    SqliteStringView sv_empty = view_empty.as_text();
+    assert(sv_empty.length() == 0);
+    assert(sv_empty.data() == nullptr);
+
+    // 2. Test SqliteValueView::as_blob()
+    SqliteValueView view_blob(v_blob);
+    SqliteBlobView bv1 = view_blob.as_blob();
+    assert(bv1.size() == 5);
+    const unsigned char expected_bytes[] = {0x01, 0x02, 0x03, 0x04, 0xFF};
+    assert(memcmp(bv1.data(), expected_bytes, 5) == 0);
+    assert(bv1 == SqliteBlobView(expected_bytes, 5));
+
+    SqliteBlobView bv_null = view_null.as_blob();
+    assert(bv_null.size() == 0);
+
+    SqliteBlobView bv_empty = view_empty.as_blob();
+    assert(bv_empty.size() == 0);
+    assert(bv_empty.data() == nullptr);
+
+    // 3. Test SqliteValueOwned::as_text()
+    SqliteValueOwned owned_text(v_text);
+    SqliteStringView sv_owned = owned_text.as_text();
+    assert(sv_owned.length() == 14);
+    assert(memcmp(sv_owned.data(), "Hello, SQLite!", 14) == 0);
+    assert(sv_owned == sv1);
+
+    SqliteValueOwned owned_null(v_null);
+    SqliteStringView sv_owned_null = owned_null.as_text();
+    assert(sv_owned_null.length() == 0);
+    assert(sv_owned_null.data() == nullptr);
+
+    SqliteValueOwned owned_int(v_int);
+    SqliteStringView sv_owned_int = owned_int.as_text();
+    assert(sv_owned_int.length() == 0); // integer SBO has nullptr pValue
+
+    // Move semantics on SqliteValueOwned invalidates pValue
+    SqliteValueOwned moved_text = static_cast<SqliteValueOwned&&>(owned_text);
+    assert(moved_text.as_text() == sv1);
+    assert(owned_text.as_text().data() == nullptr);
+    assert(owned_text.as_text().length() == 0);
+
+    // 4. Test SqliteValueOwned::as_blob()
+    SqliteValueOwned owned_blob(v_blob);
+    SqliteBlobView bv_owned = owned_blob.as_blob();
+    assert(bv_owned.size() == 5);
+    assert(memcmp(bv_owned.data(), expected_bytes, 5) == 0);
+    assert(bv_owned == bv1);
+
+    SqliteBlobView bv_owned_null = owned_null.as_blob();
+    assert(bv_owned_null.size() == 0);
+    assert(bv_owned_null.data() == nullptr);
+
+    SqliteValueOwned moved_blob = static_cast<SqliteValueOwned&&>(owned_blob);
+    assert(moved_blob.as_blob() == bv1);
+    assert(owned_blob.as_blob().data() == nullptr);
+    assert(owned_blob.as_blob().size() == 0);
+
+    sqlite3_finalize(stmt);
+}
+
 int main() {
     sqlite3_initialize();
     
@@ -529,6 +612,9 @@ int main() {
     
     printf("Testing Result Methods...\n");
     test_result(db);
+    
+    printf("Testing as_text and as_blob on SqliteValueView & SqliteValueOwned...\n");
+    test_as_text_and_as_blob(db);
     
     sqlite3_close(db);
     sqlite3_shutdown();

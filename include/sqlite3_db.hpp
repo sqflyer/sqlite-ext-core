@@ -32,6 +32,20 @@ public:
     inline int exec(const char* sql) const {
         return sqlite3_exec(m_db, sql, nullptr, nullptr, nullptr);
     }
+
+    /**
+     * @brief Enables or disables the extension loading capability.
+     */
+    inline int enable_load_extension(bool onoff = true) const {
+        return sqlite3_enable_load_extension(m_db, onoff ? 1 : 0);
+    }
+
+    /**
+     * @brief Dynamically loads an extension library into the SQLite database connection.
+     */
+    inline int load_extension(const char* zFile, const char* zProc = nullptr, char** pzErrMsg = nullptr) const {
+        return sqlite3_load_extension(m_db, zFile, zProc, pzErrMsg);
+    }
 };
 
 /**
@@ -79,6 +93,8 @@ public:
     }
 };
 
+template <typename T> class SqliteExtState;
+
 /**
  * @brief Zero-allocation wrapper for sqlite3_context inside UDFs and Virtual Tables.
  * Simplifies setting results and throwing errors.
@@ -93,11 +109,22 @@ public:
     // Expose the raw pointer if needed
     inline sqlite3_context* get() const { return m_ctx; }
     inline operator sqlite3_context*() const { return m_ctx; }
+    inline sqlite3* db_handle() const { return sqlite3_context_db_handle(m_ctx); }
 
     // User Data & Aux Data
     inline void* user_data() const { return sqlite3_user_data(m_ctx); }
     inline void* get_auxdata(int N) const { return sqlite3_get_auxdata(m_ctx, N); }
     inline void set_auxdata(int N, void* data, void (*free_func)(void*)) { sqlite3_set_auxdata(m_ctx, N, data, free_func); }
+
+    /**
+     * @brief Retrieve extension shared state directly from this context.
+     * @tparam State The user-defined state struct.
+     * @return Strongly-typed State* pointer.
+     */
+    template <typename State>
+    inline State* state() const {
+        return SqliteExtState<State>::from_context(m_ctx);
+    }
 
     // Fast primitives
     inline void result_int(int iVal) { sqlite3_result_int(m_ctx, iVal); }

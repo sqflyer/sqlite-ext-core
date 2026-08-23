@@ -906,8 +906,23 @@ public:
     
     /** @brief Internal helper to access integer value for heterogeneous lookups. */
     sqlite3_int64 as_int64() const { return m_val ? sqlite3_value_int64(const_cast<sqlite3_value*>(m_val)) : 0; }
+
     /** @brief Internal helper to access double value for heterogeneous lookups. */
     double as_double() const { return m_val ? sqlite3_value_double(const_cast<sqlite3_value*>(m_val)) : 0.0; }
+
+    /** @brief Access string data as a zero-allocation SqliteStringView. */
+    SqliteStringView as_text() const {
+        if (!m_val) return SqliteStringView(nullptr, 0);
+        const char* text = reinterpret_cast<const char*>(sqlite3_value_text(const_cast<sqlite3_value*>(m_val)));
+        return SqliteStringView(text, text ? sqlite3_value_bytes(const_cast<sqlite3_value*>(m_val)) : 0);
+    }
+
+    /** @brief Access binary data as a zero-allocation SqliteBlobView. */
+    SqliteBlobView as_blob() const {
+        if (!m_val) return SqliteBlobView(nullptr, 0);
+        const void* blob = sqlite3_value_blob(const_cast<sqlite3_value*>(m_val));
+        return SqliteBlobView(blob, blob ? sqlite3_value_bytes(const_cast<sqlite3_value*>(m_val)) : 0);
+    }
     
     /** @brief Computes the polymorphic hash. */
     unsigned long long hash() const {
@@ -1083,8 +1098,25 @@ public:
 
     /** @brief Internal helper to access SBO integer for heterogeneous lookups. */
     sqlite3_int64 as_int64() const { return m_data.iValue; }
+
     /** @brief Internal helper to access SBO double for heterogeneous lookups. */
     double as_double() const { return m_data.dValue; }
+    
+    /** @brief Access string data as a zero-allocation SqliteStringView. */
+    SqliteStringView as_text() const {
+        const sqlite3_value* val = heap_value();
+        if (!val) return SqliteStringView(nullptr, 0);
+        const char* text = reinterpret_cast<const char*>(sqlite3_value_text(const_cast<sqlite3_value*>(val)));
+        return SqliteStringView(text, text ? sqlite3_value_bytes(const_cast<sqlite3_value*>(val)) : 0);
+    }
+
+    /** @brief Access binary data as a zero-allocation SqliteBlobView. */
+    SqliteBlobView as_blob() const {
+        const sqlite3_value* val = heap_value();
+        if (!val) return SqliteBlobView(nullptr, 0);
+        const void* blob = sqlite3_value_blob(const_cast<sqlite3_value*>(val));
+        return SqliteBlobView(blob, blob ? sqlite3_value_bytes(const_cast<sqlite3_value*>(val)) : 0);
+    }
 
     /** 
      * @brief Computes a polymorphic FNV-1a hash of the value.

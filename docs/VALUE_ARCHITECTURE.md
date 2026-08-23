@@ -1,67 +1,117 @@
 # C++ Value Types Architecture (`sqlite3_value.hpp`)
 
-## Overview
-`c-sqlite-ext-core` provides zero-dependency C++ RAII wrappers over SQLite's core types (`sqlite3_value`, `sqlite3_str`, and binary blobs).
+This document details the internal design, Small Buffer Optimization (SBO) memory layouts, view extraction mechanisms, and heterogeneous comparison operator suites implemented by `sqlite3_value.hpp`.
 
-The architecture fundamentally relies on a **View vs Owned** paradigm to solve the classic C++ heterogeneous lookup problem for SQLite maps, User-Defined Functions, and prepared statements.
+> **API & Usage Guide**: For usage tutorials, examples, and the public API reference, see [`docs/VALUE_README.md`](VALUE_README.md).
 
-## The Problem
-When SQLite passes parameters to your C++ extension functions, it provides them as transient pointers (e.g. `const sqlite3_value*`). If you wish to use these as keys to search a `std::map` or pass them through application layers, traditional C++ requires you to construct a `std::string` or allocate memory to build the key, causing an expensive memory allocation just to perform a lookup.
+---
 
-## The Solution: View vs Owned
+## 1. Architectural Motivation: The View vs Owned Paradigm
 
-### The `View` Classes
-- `SqliteStringView`
-- `SqliteBlobView`
-- `SqliteValueView`
+When SQLite executes queries or passes parameters to User-Defined Functions (UDFs), it passes raw pointers (`sqlite3_value*`). Traditional C++ extension development suffers from two critical bottlenecks:
 
-These classes are **zero-allocation**. They do not copy memory. They merely wrap the raw pointers and length provided by SQLite. Use these to perform instant hash lookups, read statement columns, or pass UDF arguments without ever hitting `malloc()`.
+1. **Unnecessary Heap Allocations**: Converting a transient `sqlite3_value*` into a standard C++ type (like `std::string`) invokes `malloc()` just to perform a lookup in a `std::map` or pass it to a sub-routine.
+2. **Polymorphic Variant Overhead**: Standard variants (`std::variant`, `boost::variant`) have high footprint, require exceptions/RTTI, and do not follow SQLite's exact collation semantics (`NULL < NUMERIC < TEXT < BLOB`).
 
-To support C++14 transparent comparators, `SqliteStringView` includes an implicit constructor from `const char*`. This allows queries like `my_map.find("hello")` to seamlessly map to the heterogeneous lookup operators without requiring the user to explicitly instantiate the wrapper.
+`sqlite3_value.hpp` solves this via the **View vs Owned** architectural model:
 
-### The `Owned` Classes
-- `SqliteStringOwned`
-- `SqliteBlobOwned`
-- `SqliteValueOwned`
+```
++---------------------------------------------------------------------------------------+
+|                                    VIEW TYPES                                         |
+|  - Zero dynamic allocations (lives entirely on the stack or in CPU registers)         |
+|  - Non-owning transient wrappers over raw SQLite memory                               |
+|                                                                                       |
+|  SqliteValueView                SqliteStringView               SqliteBlobView         |
+|  [sqlite3_value* (8B)]          [const char* (8B), len (4B)]   [const void* (8B), (4B)]|
++---------------------------------------------------------------------------------------+
+                                           ^
+                     .as_text() / .as_blob() extraction
+                                           |
++---------------------------------------------------------------------------------------+
+|                                   OWNED TYPES                                         |
+|  - RAII memory ownership & lifecycle management                                       |
+|  - Small Buffer Optimization (SBO) for numeric primitives                             |
+|  - Dynamic heap allocation for Strings & Blobs via SQLite allocators                  |
+|                                                                                       |
+|  SqliteValueOwned               SqliteStringOwned              SqliteBlobOwned        |
+|  [type (4B), Union (8B)]        [sqlite3_str* (8B)]            [void* (8B), len (4B)] |
++---------------------------------------------------------------------------------------+
+```
 
-These classes are memory-managed via **RAII**. They use `sqlite3_malloc`, `sqlite3_value_dup`, or `sqlite3_str_new` to copy the data securely into permanent memory. They automatically free their memory upon destruction.
+---
 
-### Small Buffer Optimization (SBO)
-To guarantee performance, `SqliteValueOwned` implements **Small Buffer Optimization (SBO)**. If the `sqlite3_value` being copied is a primitive type (`SQLITE_INTEGER` or `SQLITE_FLOAT`), the data is stored directly inline inside a union buffer. Memory is only heap-allocated (`sqlite3_value_dup`) for dynamically sized types (`SQLITE_TEXT` and `SQLITE_BLOB`).
+## 2. Memory Layout & Small Buffer Optimization (SBO)
 
-To ensure maximum ergonomics, `SqliteStringOwned` provides specialized constructors to handle different contexts seamlessly:
-- **`sqlite3_context*`**: Automatically extracts the database handle when building strings inside UDFs.
-- **`const char*` / default**: Uses `sqlite3_str_new(nullptr)` to allocate strings directly from the global heap via `sqlite3_malloc`, completely eliminating the need for a database handle.
+### `SqliteValueOwned` Memory Structure
+`SqliteValueOwned` uses a tagged union to store numeric primitives completely inline, bypassing heap allocation entirely:
 
-Use these `Owned` classes as the actual values or keys stored inside your maps and long-lived structures.
+```
++-------------------+-------------------+---------------------------------------+
+|  m_type (4 bytes) | (4 bytes padding) |          m_data (8-byte Union)        |
+|   SQLITE_INTEGER  |                   |   iValue (sqlite3_int64: 8 bytes)     |
+|   SQLITE_FLOAT    |                   |   dValue (double: 8 bytes)            |
+|   SQLITE_TEXT     |                   |   pValue (sqlite3_value*: 8 bytes)    |
+|   SQLITE_BLOB     |                   |                                       |
+|   SQLITE_NULL     |                   |                                       |
++-------------------+-------------------+---------------------------------------+
+<----------------------------------- 16 bytes Total ----------------------------------->
+```
 
-### The `Util` Namespaces
-- `SqliteHashUtil`
-- `SqliteStringUtil`
-- `SqliteBlobUtil`
-- `SqliteValueUtil`
+### Union Safety & `heap_value()` Discrimination
+Because `m_data` is a union, accessing `m_data.pValue` when `m_type == SQLITE_INTEGER` or `SQLITE_FLOAT` reads numeric bits as a pointer, causing undefined behavior.
 
-These hold the shared logic for computing `FNV-1a` hashes, equality, and lexicographical less-than comparisons. `SqliteHashUtil` provides a centralized, high-performance inline FNV-1a mixer. To enable seamless `std::unordered_map` heterogeneous lookups, `SqliteValueUtil` explicitly avoids mixing type-IDs into the hash algorithm. This guarantees that the hash of a polymorphic variant perfectly matches the hashes of native C++ primitives and standalone strings. 
+To ensure safety:
+```cpp
+const sqlite3_value* heap_value() const {
+    return (m_type == SQLITE_TEXT || m_type == SQLITE_BLOB) ? m_data.pValue : nullptr;
+}
+```
+All view extractions (`as_text()`, `as_blob()`) and destructions route through `heap_value()`, preventing union memory corruption.
 
-This architecture allows developers to instantly achieve zero-allocation heterogeneous hash-map lookups using the two built-in C++20 transparent functors:
-- **`SqliteValueHash`**: A transparent hasher for all wrappers and primitives.
-- **`SqliteValueEqual`**: A transparent equality struct leveraging the massive `operator==` suite.
+---
 
-To guarantee optimal performance, these comparisons replace manual byte-loops with `SqliteMemoryUtil::memcmp_equal` and `SqliteMemoryUtil::memcmp_less` which rely on SIMD-accelerated C `memcmp`. By exporting these core utilities, the `SqliteBuffer` and `SqliteString` classes in the memory subsystem are able to plug directly into the exact same equality and hashing engine. 
+## 3. Zero-Allocation View Extraction Architecture
 
-Furthermore, `SqliteValueUtil` implements the official SQLite collation order (`NULL < NUMERIC < TEXT < BLOB`). By centralizing this logic, we enable **Heterogeneous Lookups**, allowing a `View` object (or a `SqliteBuffer`) to directly search and compare against an `Owned` object natively.
+`as_text()` and `as_blob()` extract lightweight non-owning views directly from values:
 
-## SQLite Integration Helpers
-All `View` and `Owned` wrappers provide `bind(sqlite3_stmt*, int col)` and `result(sqlite3_context*)` helper methods. These methods abstract away the `sqlite3_bind_*` and `sqlite3_result_*` C-APIs, making it effortless to return custom payloads from UDFs or bind data into prepared statements using `SQLITE_TRANSIENT` memory lifetimes.
+```
+                          +-------------------------------+
+                          | SqliteValueView / Owned       |
+                          +---------------+---------------+
+                                          |
+                +-------------------------+-------------------------+
+                | .as_text()                                        | .as_blob()
+                v                                                   v
++-------------------------------+                   +-------------------------------+
+| Check: heap_value() or m_val  |                   | Check: heap_value() or m_val  |
++---------------+---------------+                   +---------------+---------------+
+                |                                                   |
+        +-------+-------+                                   +-------+-------+
+        | Valid         | NULL / Missing                    | Valid         | NULL / Missing
+        v               v                                   v               v
++---------------+ +-------------+                   +---------------+ +-------------+
+| SqliteString- | | StringView  |                   | SqliteBlob-   | | BlobView    |
+| View(ptr, len)| | (nullptr, 0)|                   | View(ptr, len)| | (nullptr, 0)|
++---------------+ +-------------+                   +---------------+ +-------------+
+```
 
-## Polymorphic Variants
-The `SqliteValueOwned` and `SqliteValueView` classes act as type-safe polymorphic variant map keys. A map constructed with `std::map<SqliteValueOwned, T>` can safely store and query Integer, Float, Text, and Blob variants simultaneously without type collisions.
+---
 
-- **Massive Macro Generation**: A suite of macros (`SQLITE_DEF_VAL_STR_OPS`, `SQLITE_DEF_VAL_PRIM_OPS`, etc.) generates over 144 inline comparison operators, establishing strict-weak ordering across all 6 relational operators (`==`, `!=`, `<`, `>`, `<=`, `>=`) between values and native types.
-- **Transparent Mapping**: Thanks to the comprehensive definition of relational operators and the implicit `SqliteStringView(const char*)` constructor, polymorphic `std::map<SqliteValueOwned, T, std::less<>>` instances can be queried dynamically using native C++ primitives and C-strings with zero overhead.
+## 4. Heterogeneous Comparison Operator Suite
 
-### Strict Weak Ordering & NaN Stability
-Because `std::map` fundamentally relies on Strict Weak Ordering for binary tree navigation, the variant `<` operators implement complex tie-breaker heuristics:
-1. **Type Hierarchies**: Follows `NULL < NUMERIC < TEXT < BLOB`.
-2. **NaN Stability**: All `NaN` floating point values are statically forced to sort to the front of the tree, ensuring that maps do not fracture when encountering `0.0/0.0`.
-3. **Type Tie-Breakers**: An Integer and a Float with identical numeric values (e.g. `5` and `5.0`) resolve collisions using their underlying type-IDs, preventing collisions and maintaining strict type integrity during heterogeneous queries.
+To enable transparent map lookups (`std::map<SqliteValueOwned, T, std::less<>>` or `std::unordered_map`), `sqlite3_value.hpp` generates over **144 inline comparison operators**:
+
+- **Strict Weak Ordering**: Guarantees consistent ordering across different types using the SQLite hierarchy:
+  $$\text{NULL} < \text{NUMERIC} < \text{TEXT} < \text{BLOB}$$
+- **NaN Stability**: Floating-point `NaN` values are strictly sorted to the front of the numeric partition, preventing binary search tree corruption in `std::map`.
+- **Type Collision Tie-Breakers**: When an integer and a float share the same numerical value (e.g. `5` and `5.0`), their type IDs break the tie, preserving strict typing.
+
+---
+
+## 5. Freestanding Memory Guarantees
+
+All classes strictly adhere to `-nostdlib++` requirements:
+- Memory for `SqliteStringOwned` is allocated via `sqlite3_str_new(nullptr)`.
+- Memory for `SqliteBlobOwned` is allocated via `sqlite3_malloc`.
+- Dynamic values in `SqliteValueOwned` are duplicated via `sqlite3_value_dup` and freed via `sqlite3_value_free`.
+- Zero standard library exceptions or RTTI dependencies are introduced.

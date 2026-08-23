@@ -221,7 +221,40 @@ public:
         entry_release(entry);
     }
 
-    /** @brief Initializes or fetches the shared state for the attached database. */
+    /** 
+     * @brief Retrieves the strongly-typed T* shared state for the attached database, creating it if not present.
+     * @param db The SQLite database connection.
+     * @param init_fn Optional setup callback executed only when the state is created for the first time.
+     * @return Strongly-typed pointer to the shared state instance (T*).
+     */
+    static T* get_or_create(sqlite3 *db, void (*init_fn)(T*) = nullptr) {
+        if (!db) return nullptr;
+        char resolved_path[128];
+        const char *db_path = get_db_path(db, resolved_path);
+        Entry *entry = entry_get_or_create(db_path, init_fn);
+        return entry ? &entry->state : nullptr;
+    }
+
+    /** 
+     * @brief Retrieves an existing strongly-typed T* shared state for the attached database if present.
+     * @param db The SQLite database connection.
+     * @return Strongly-typed pointer T* if found, or nullptr if not yet created.
+     */
+    static T* get(sqlite3 *db) {
+        if (!db) return nullptr;
+        char resolved_path[128];
+        const char *db_path = get_db_path(db, resolved_path);
+        ensure_mutex_init();
+        registry_mutex->lock();
+        Entry *entry = entry_find_locked(db_path);
+        if (entry) {
+            entry_release(entry);
+        }
+        registry_mutex->unlock();
+        return entry ? &entry->state : nullptr;
+    }
+
+    /** @brief Initializes or fetches the shared state for the attached database, returning raw entry handle. */
     static void* init(sqlite3 *db, void (*init_fn)(T*) = nullptr) {
         if (!db) return nullptr;
         char resolved_path[128];
@@ -259,6 +292,10 @@ public:
         if (!ctx) return nullptr;
         Entry *entry = (Entry *)sqlite3_user_data(ctx);
         return entry ? &entry->state : nullptr;
+    }
+
+    static inline T* from_context(SqliteContext ctx) {
+        return from_context(ctx.get());
     }
 
     /**
