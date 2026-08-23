@@ -220,18 +220,18 @@ struct RangeIterator : public SqliteTvfIterator {
     sqlite3_int64 rowid() const override { return curr; }
 };
 
-SqliteUdf::define_tvf<RangeIterator>(db, "generate_range");
+SqliteTvf::define<RangeIterator>(db, "generate_range");
+// Or via umbrella: SqliteExt::define_tvf<RangeIterator>(db, "generate_range");
 ```
 
-### Object-Oriented Aggregates (`define_aggregate`)
+### Object-Oriented Aggregates (`SqliteAggregate::define`)
 ```cpp
-struct StdDevAgg : public SqliteAggregateBase {
+struct StdDevAgg : public SqliteAggregateBase<double> {
     double sum = 0.0;
     double sum_sq = 0.0;
     int count = 0;
 
-    void step(SqliteContext ctx, SqliteUdfArgs args) {
-        (void)ctx;
+    void step(SqliteUdfArgs args) {
         double val = args[0].as_double();
         sum += val;
         sum_sq += val * val;
@@ -246,24 +246,30 @@ struct StdDevAgg : public SqliteAggregateBase {
     }
 };
 
-SqliteUdf::define_aggregate<StdDevAgg>(db, "std_dev", 1);
+SqliteAggregate::define<StdDevAgg>(db, "std_dev", 1);
+// Or via umbrella: SqliteExt::define_aggregate<StdDevAgg>(db, "std_dev", 1);
 ```
 
 ---
 
 ## 5. API Reference Summary
 
-### Stateless Registration:
+### Stateless Scalar UDFs:
 - `SqliteUdf::define(db, name, num_args, func, deterministic = true)`
   - `func`: `void(*)(SqliteContext, SqliteUdfArgs)`
   - `func`: `void(*)(SqliteContext&, SqliteUdfArgs)`
   - `func`: `void(*)(sqlite3_context*, SqliteUdfArgs)`
+  - `func`: C++11 Lambda capturing local values
+- `SqliteUdf::define<Func>(db, name, num_args, deterministic = true)` (Zero-Allocation Template Proxy)
 
-### Stateful Registration:
+### Stateful Scalar UDFs:
 - `SqliteUdf::define_with_state<State, Func>(db, name, num_args, deterministic = false)`
-  - Direct compile-time proxy binding `raw_state` to `pApp` with automated `xDestroy` garbage collection.
+  - Direct compile-time proxy binding `raw_state` to `pApp` with automated `xDestroy` garbage collection on connection close.
 
 ### State Access Helpers:
-- `SqliteExtState<State>::from_context(ctx)`
-- `ctx.state<State>()`
 - `SqliteExtState<State>::get_or_create(db, init_fn)`
+- `SqliteExtState<State>::get(db)`
+- `SqliteExtState<State>::from_context(ctx)` or `ctx.state<State>()`
+
+### Umbrella Master Header:
+- `#include "sqlite3_ext.hpp"`: Provides `SqliteExt` unified registration across Scalar UDFs, Aggregates, TVFs, and Virtual Tables.

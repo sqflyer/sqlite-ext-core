@@ -298,4 +298,35 @@ struct SqliteTvfModule {
 template <typename T>
 constexpr sqlite3_module SqliteTvfModule<T>::module_def;
 
+/**
+ * @brief High-level helper class for Table-Valued Function (TVF) registration.
+ */
+class SqliteTvf {
+public:
+    /**
+     * @brief Register an Object-Oriented C++ Table-Valued Function (TVF) (Stateless).
+     * @tparam T The iterator struct/class inheriting from SqliteTvfIterator.
+     * @param db The SQLite database connection (SqliteDatabaseView, SqliteDatabaseOwned, or sqlite3*).
+     * @param name The SQL name of the TVF.
+     * @return SQLITE_OK on success, or an error code.
+     */
+    template <typename T>
+    static inline int define(SqliteDatabaseView db, const char* name) {
+        return SqliteTvfModule<T>::define(db.get(), name);
+    }
+
+    /**
+     * @brief Register an Object-Oriented C++ Table-Valued Function (TVF) bound to shared connection state.
+     * @tparam State The state struct type managed by SqliteExtState<State>.
+     * @tparam T The iterator struct/class inheriting from SqliteTvfIterator.
+     * @param db The SQLite database connection (SqliteDatabaseView, SqliteDatabaseOwned, or sqlite3*).
+     * @param name The SQL name of the TVF.
+     * @return SQLITE_OK on success, or an error code.
+     */
+    template <typename State, typename T>
+    static inline int define_with_state(SqliteDatabaseView db, const char* name) {
+        return SqliteTvfModule<T>::template define_with_state<State>(db, name);
+    }
+};
+
 #endif // SQLITE3_TVF_HPP

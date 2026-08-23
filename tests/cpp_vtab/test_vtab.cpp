@@ -225,7 +225,7 @@ void test_vtab() {
     });
 
     printf("Registering Series Table...\n");
-    int rc = SqliteVTabModule<SeriesTable>::register_module(db, "series");
+    int rc = SqliteVTab::define<SeriesTable>(db, "series");
     assert(rc == SQLITE_OK);
     
     printf("Creating my_series...\n");
@@ -248,7 +248,7 @@ void test_vtab() {
     
     printf("Registering Complex Table...\n");
     constexpr VTabOptions ALL_OPTIONS = VTabOptions::Writable | VTabOptions::Findable | VTabOptions::HasShadow | VTabOptions::Renameable | VTabOptions::Savepoint;
-    rc = SqliteVTabModule<ComplexTable, ALL_OPTIONS>::register_module(db, "complex_table");
+    rc = SqliteVTab::define<ComplexTable, ALL_OPTIONS>(db, "complex_table");
     assert(rc == SQLITE_OK);
 
     printf("Creating my_complex...\n");
@@ -258,46 +258,29 @@ void test_vtab() {
     exec(db, "ALTER TABLE my_complex RENAME TO my_complex_renamed;");
     
     printf("Inserting into my_complex_renamed...\n");
-    exec(db, "INSERT INTO my_complex_renamed(value) VALUES(99);");
-
+    exec(db, "INSERT INTO my_complex_renamed(value) VALUES(10);");
+    exec(db, "INSERT INTO my_complex_renamed(value) VALUES(20);");
+    
     printf("Executing overloaded UDF (complex_math) in SELECT clause...\n");
-    // Does xFindFunction intercept functions in the SELECT clause? Let's find out!
     rc = sqlite3_prepare_v2(db, "SELECT complex_math(value) FROM my_complex_renamed LIMIT 1;", -1, &stmt, nullptr);
     assert(rc == SQLITE_OK);
-    if (sqlite3_step(stmt) == SQLITE_ROW) {
-        int magic_val = sqlite3_column_int(stmt, 0);
-        // If xFindFunction intercepts SELECT, this will be 999. If not, it will be 0 (the global fallback).
-        printf("  complex_math() in SELECT returned: %d\n", magic_val);
-    }
+    assert(sqlite3_step(stmt) == SQLITE_ROW);
+    int overloaded_res = sqlite3_column_int(stmt, 0);
+    printf("  complex_math() in SELECT returned: %d\n", overloaded_res);
+    assert(overloaded_res == 999);
     sqlite3_finalize(stmt);
-
+    
     printf("Executing overloaded UDF (complex_math) in WHERE clause...\n");
     rc = sqlite3_prepare_v2(db, "SELECT value FROM my_complex_renamed WHERE complex_math(value) = 999 LIMIT 1;", -1, &stmt, nullptr);
-    if (rc != SQLITE_OK) {
-        printf("Prepare failed: %s\n", sqlite3_errmsg(db));
-    }
     assert(rc == SQLITE_OK);
-    
-    if (sqlite3_step(stmt) == SQLITE_ROW) {
-        int val = sqlite3_column_int(stmt, 0);
-        // SeriesCursor yields 1 first.
-        assert(val == 1); 
-    }
+    assert(sqlite3_step(stmt) == SQLITE_ROW);
     sqlite3_finalize(stmt);
 
     printf("Executing MATCH operator (Native Query Planner)...\n");
-    // "value MATCH 'test'" will be handled entirely by bestIndex() and filter() without needing xFindFunction!
     rc = sqlite3_prepare_v2(db, "SELECT value FROM my_complex_renamed WHERE value MATCH 'test';", -1, &stmt, nullptr);
-    if (rc != SQLITE_OK) {
-        printf("Prepare failed: %s\n", sqlite3_errmsg(db));
-    }
     assert(rc == SQLITE_OK);
-    
-    if (sqlite3_step(stmt) == SQLITE_ROW) {
-        int match_val = sqlite3_column_int(stmt, 0);
-        // Our MATCH index logic in filter() yields exactly 42!
-        assert(match_val == 42);
-    }
+    assert(sqlite3_step(stmt) == SQLITE_ROW);
+    assert(sqlite3_column_int(stmt, 0) == 42); // matched dummy 42
     sqlite3_finalize(stmt);
 
     printf("Testing Transactions & Savepoints...\n");
@@ -323,8 +306,8 @@ void test_vtab() {
     }
 
     printf("Testing Eponymous Virtual Table (Table-Valued Function)...\n");
-    // Register as Eponymous (true). We must pass nullptr for pAux and xDestroyAux.
-    rc = SqliteVTabModule<EponymousTable>::register_module(db, "my_eponymous", nullptr, nullptr, true);
+    // Register as Eponymous via SqliteVTab::define with VTabOptions::Eponymous
+    rc = SqliteVTab::define<EponymousTable, VTabOptions::Eponymous>(db, "my_eponymous");
     assert(rc == SQLITE_OK);
     
     // We can query it DIRECTLY without running CREATE VIRTUAL TABLE!

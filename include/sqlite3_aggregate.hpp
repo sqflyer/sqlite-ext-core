@@ -228,7 +228,7 @@ namespace SqliteAggregateDetail {
  * @tparam T The user's aggregate struct or class, which must inherit from `SqliteAggregateBase`.
  */
 template <typename T>
-class SqliteAggregate {
+class SqliteAggregateModule {
     static_assert(SqliteAggregateDetail::is_base_of<SqliteAggregateMarker, T>::value,
                   "Custom aggregate struct must publicly inherit from SqliteAggregateBase<ReturnType>!");
 
@@ -252,8 +252,8 @@ public:
             flags,
             nullptr, // pApp
             nullptr, // xFunc
-            &SqliteAggregate<T>::step_proxy,
-            &SqliteAggregate<T>::final_proxy,
+            &SqliteAggregateModule<T>::step_proxy,
+            &SqliteAggregateModule<T>::final_proxy,
             nullptr  // xDestroy
         );
     }
@@ -280,10 +280,10 @@ public:
             name,
             num_args,
             flags,
-            raw_state, // Passed as pApp / user_data!
+            raw_state,
             nullptr,   // xFunc
-            &SqliteAggregate<T>::step_proxy,
-            &SqliteAggregate<T>::final_proxy,
+            &SqliteAggregateModule<T>::step_proxy,
+            &SqliteAggregateModule<T>::final_proxy,
             SqliteExtState<State>::destructor // Automatically garbage-collected by SQLite!
         );
     }
@@ -328,6 +328,41 @@ private:
             T empty_agg;
             SqliteAggregateDetail::invoke_finalize(&empty_agg, ctx);
         }
+    }
+};
+
+/**
+ * @brief High-level helper class for Aggregate Function registration.
+ */
+class SqliteAggregate {
+public:
+    /**
+     * @brief Register an Object-Oriented C++ Aggregate Function (Stateless).
+     * @tparam T The aggregate struct/class implementing step() and finalize().
+     * @param db The SQLite database connection (SqliteDatabaseView, SqliteDatabaseOwned, or sqlite3*).
+     * @param name The SQL function name.
+     * @param num_args Expected argument count (-1 for variadic).
+     * @param deterministic Whether the aggregate is deterministic (default true).
+     * @return SQLITE_OK on success, or an error code.
+     */
+    template <typename T>
+    static inline int define(SqliteDatabaseView db, const char* name, int num_args = -1, bool deterministic = true) {
+        return SqliteAggregateModule<T>::define(db, name, num_args, deterministic);
+    }
+
+    /**
+     * @brief Register an Object-Oriented C++ Aggregate Function bound to shared connection state.
+     * @tparam State The user-defined state struct type.
+     * @tparam T The aggregate struct/class implementing step() and finalize().
+     * @param db The SQLite database connection (SqliteDatabaseView, SqliteDatabaseOwned, or sqlite3*).
+     * @param name The SQL function name.
+     * @param num_args Expected argument count (-1 for variadic).
+     * @param deterministic Whether the aggregate is deterministic (default false).
+     * @return SQLITE_OK on success, or an error code.
+     */
+    template <typename State, typename T>
+    static inline int define_with_state(SqliteDatabaseView db, const char* name, int num_args = -1, bool deterministic = false) {
+        return SqliteAggregateModule<T>::template define_with_state<State>(db, name, num_args, deterministic);
     }
 };
 

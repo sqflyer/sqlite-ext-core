@@ -174,13 +174,13 @@ When using typed returns (`Priority 0` or `Priority 2`), `set_sqlite_result` aut
 
 ## 5. Stateful Aggregates Architecture (`define_with_state`)
 
-When an aggregate is registered via `SqliteUdf::define_aggregate_with_state<State, MyAgg>(db, "my_agg")`:
+When an aggregate is registered via `SqliteAggregate::define_with_state<State, MyAgg>(db, "my_agg")`:
 
 ```
 +========================================================================================================+
 | 1. REGISTRATION PHASE (sqlite3_create_function_v2)                                                     |
 +========================================================================================================+
-| SqliteUdf::define_aggregate_with_state<AppState, MyAgg>(db, "my_agg", 1)                             |
+| SqliteAggregate::define_with_state<AppState, MyAgg>(db, "my_agg", 1)                                   |
 |   |                                                                                                    |
 |   |---> raw_state = SqliteExtState<AppState>::init(db)  (Allocates shared Entry struct)                |
 |   |---> sqlite3_create_function_v2(db, "my_agg", 1, SQLITE_UTF8, raw_state,                            |

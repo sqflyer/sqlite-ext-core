@@ -5,6 +5,7 @@
 #include "sqlite3_value.hpp"
 #include "sqlite3_db.hpp"
 #include "sqlite3_allocator.hpp"
+#include "sqlite3_ext_state.hpp"
 
 /**
  * @brief Bitmask options for Virtual Table capabilities.
@@ -15,7 +16,8 @@ enum VTabOptions : unsigned int {
     Findable   = 1 << 1, // Enables xFindFunction (function overloading)
     HasShadow  = 1 << 2, // Enables xShadowName (protects shadow tables)
     Renameable = 1 << 3, // Enables xRename (ALTER TABLE RENAME)
-    Savepoint  = 1 << 4  // Enables xSavepoint, xRelease, xRollbackTo
+    Savepoint  = 1 << 4, // Enables xSavepoint, xRelease, xRollbackTo
+    Eponymous  = 1 << 5  // Enables Eponymous-only table (xCreate and xDestroy are nullptr)
 };
 
 inline constexpr VTabOptions operator|(VTabOptions a, VTabOptions b) {
@@ -109,6 +111,16 @@ public:
 
     inline int size() const { return m_argc; }
     inline const char* operator[](int i) const { return m_argv[i]; }
+
+    /**
+     * @brief Retrieve extension shared state directly from connect args.
+     * @tparam State The user-defined state struct.
+     * @return Strongly-typed State* pointer, or nullptr.
+     */
+    template <typename State>
+    inline State* state() const {
+        return SqliteExtState<State>::from_ptr(m_pAux);
+    }
 
     template <typename T>
     inline void set_instance(T* instance) { m_instance = static_cast<SqliteVTable*>(instance); }
@@ -302,6 +314,7 @@ private:
     struct TableWrapper {
         sqlite3_vtab base;
         VTableType* instance;
+        void* raw_state;
     };
 
     struct CursorWrapper {
@@ -329,6 +342,7 @@ private:
             wrapper->base.nRef = 0;
             wrapper->base.zErrMsg = nullptr;
             wrapper->instance = static_cast<VTableType*>(instance);
+            wrapper->raw_state = pAux;
             *ppVTab = &wrapper->base;
         }
         return rc;
@@ -409,7 +423,8 @@ private:
 
     static int xColumn(sqlite3_vtab_cursor* pCursor, sqlite3_context* ctx, int N) {
         CursorWrapper* wrapper = reinterpret_cast<CursorWrapper*>(pCursor);
-        SqliteContext sqlite_ctx(ctx);
+        TableWrapper* tab = reinterpret_cast<TableWrapper*>(pCursor->pVtab);
+        SqliteContext sqlite_ctx(ctx, tab ? tab->raw_state : nullptr);
         return wrapper->instance->column(sqlite_ctx, N);
     }
 
@@ -479,53 +494,103 @@ public:
      * @param xDestroyAux Optional destructor for pAux
      * @param is_eponymous If true, creates an eponymous-only virtual table.
      */
-    static int register_module(sqlite3* db, const char* module_name, void* pAux = nullptr, void(*xDestroyAux)(void*) = nullptr, bool is_eponymous = false) {
-        static constexpr bool is_writable = ((Options & VTabOptions::Writable) != VTabOptions::ReadOnly) || ((Options & VTabOptions::Savepoint) != VTabOptions::ReadOnly);
-        static constexpr int IVER = ((Options & VTabOptions::HasShadow) != VTabOptions::ReadOnly) ? 3 : (((Options & VTabOptions::Savepoint) != VTabOptions::ReadOnly) ? 2 : 1);
-        static constexpr sqlite3_module mods[2] = {
-            // [0] Normal Module
-            {
-                IVER, // iVersion
-                xCreate, xConnect, xBestIndex, xDisconnect, xDestroy,
-                xOpen, xClose, xFilter, xNext, xEof, xColumn, xRowid,
-                is_writable ? xUpdate : nullptr,
-                is_writable ? xBegin : nullptr,
-                is_writable ? xSync : nullptr,
-                is_writable ? xCommit : nullptr,
-                is_writable ? xRollback : nullptr,
-                ((Options & VTabOptions::Findable) != VTabOptions::ReadOnly) ? xFindFunction : nullptr,
-                ((Options & VTabOptions::Renameable) != VTabOptions::ReadOnly) ? xRename : nullptr,
-                ((Options & VTabOptions::Savepoint) != VTabOptions::ReadOnly) ? xSavepoint : nullptr,
-                ((Options & VTabOptions::Savepoint) != VTabOptions::ReadOnly) ? xRelease : nullptr,
-                ((Options & VTabOptions::Savepoint) != VTabOptions::ReadOnly) ? xRollbackTo : nullptr,
-                ((Options & VTabOptions::HasShadow) != VTabOptions::ReadOnly) ? xShadowName : nullptr,
-                nullptr  // xIntegrity
-            },
-            // [1] Eponymous Module (xCreate and xDestroy are omitted)
-            {
-                IVER, // iVersion
-                nullptr, xConnect, xBestIndex, xDisconnect, nullptr,
-                xOpen, xClose, xFilter, xNext, xEof, xColumn, xRowid,
-                is_writable ? xUpdate : nullptr,
-                is_writable ? xBegin : nullptr,
-                is_writable ? xSync : nullptr,
-                is_writable ? xCommit : nullptr,
-                is_writable ? xRollback : nullptr,
-                ((Options & VTabOptions::Findable) != VTabOptions::ReadOnly) ? xFindFunction : nullptr,
-                ((Options & VTabOptions::Renameable) != VTabOptions::ReadOnly) ? xRename : nullptr,
-                ((Options & VTabOptions::Savepoint) != VTabOptions::ReadOnly) ? xSavepoint : nullptr,
-                ((Options & VTabOptions::Savepoint) != VTabOptions::ReadOnly) ? xRelease : nullptr,
-                ((Options & VTabOptions::Savepoint) != VTabOptions::ReadOnly) ? xRollbackTo : nullptr,
-                ((Options & VTabOptions::HasShadow) != VTabOptions::ReadOnly) ? xShadowName : nullptr,
-                nullptr  // xIntegrity
-            }
-        };
+    static constexpr bool is_writable = ((Options & VTabOptions::Writable) != VTabOptions::ReadOnly) || ((Options & VTabOptions::Savepoint) != VTabOptions::ReadOnly);
+    static constexpr bool is_eponymous = (Options & VTabOptions::Eponymous) != VTabOptions::ReadOnly;
+    static constexpr int IVER = ((Options & VTabOptions::HasShadow) != VTabOptions::ReadOnly) ? 3 : (((Options & VTabOptions::Savepoint) != VTabOptions::ReadOnly) ? 2 : 1);
 
+    static constexpr sqlite3_module module_def = {
+        IVER, // iVersion
+        is_eponymous ? nullptr : xCreate,
+        xConnect,
+        xBestIndex,
+        xDisconnect,
+        is_eponymous ? nullptr : xDestroy,
+        xOpen,
+        xClose,
+        xFilter,
+        xNext,
+        xEof,
+        xColumn,
+        xRowid,
+        is_writable ? xUpdate : nullptr,
+        is_writable ? xBegin : nullptr,
+        is_writable ? xSync : nullptr,
+        is_writable ? xCommit : nullptr,
+        is_writable ? xRollback : nullptr,
+        ((Options & VTabOptions::Findable) != VTabOptions::ReadOnly) ? xFindFunction : nullptr,
+        ((Options & VTabOptions::Renameable) != VTabOptions::ReadOnly) ? xRename : nullptr,
+        ((Options & VTabOptions::Savepoint) != VTabOptions::ReadOnly) ? xSavepoint : nullptr,
+        ((Options & VTabOptions::Savepoint) != VTabOptions::ReadOnly) ? xRelease : nullptr,
+        ((Options & VTabOptions::Savepoint) != VTabOptions::ReadOnly) ? xRollbackTo : nullptr,
+        ((Options & VTabOptions::HasShadow) != VTabOptions::ReadOnly) ? xShadowName : nullptr,
+        nullptr  // xIntegrity
+    };
+
+    /**
+     * @brief Registers the virtual table module.
+     * @param db The SQLite database connection (SqliteDatabaseView, SqliteDatabaseOwned, or sqlite3*).
+     * @param module_name The name of the module (e.g., used in CREATE VIRTUAL TABLE x USING module_name).
+     * @param pAux Optional auxiliary data passed to xCreate/xConnect.
+     * @param xDestroyAux Optional destructor for pAux.
+     * @return SQLITE_OK on success, or an error code.
+     */
+    static int register_module(SqliteDatabaseView db, const char* module_name, void* pAux = nullptr, void(*xDestroyAux)(void*) = nullptr) {
         if (xDestroyAux) {
-            return sqlite3_create_module_v2(db, module_name, &mods[is_eponymous ? 1 : 0], pAux, xDestroyAux);
+            return sqlite3_create_module_v2(db.get(), module_name, &module_def, pAux, xDestroyAux);
         } else {
-            return sqlite3_create_module(db, module_name, &mods[is_eponymous ? 1 : 0], pAux);
+            return sqlite3_create_module(db.get(), module_name, &module_def, pAux);
         }
+    }
+
+    /**
+     * @brief Registers the C++ Virtual Table module with SQLite bound to shared state.
+     * 
+     * @tparam State The state struct type managed by SqliteExtState<State>.
+     * @param db The SQLite database connection (SqliteDatabaseView, SqliteDatabaseOwned, or sqlite3*).
+     * @param module_name The SQL name of the virtual table module.
+     * @return SQLITE_OK on success, or an error code.
+     */
+    template <typename State>
+    static int register_module_with_state(SqliteDatabaseView db, const char* module_name) {
+        void* raw_state = SqliteExtState<State>::init(db.get());
+        return register_module(db.get(), module_name, raw_state, SqliteExtState<State>::destructor);
+    }
+};
+
+// Out-of-line definition for static constexpr member in C++11
+template <typename VTableType, VTabOptions Options>
+constexpr sqlite3_module SqliteVTabModule<VTableType, Options>::module_def;
+
+/**
+ * @brief High-level helper class for Virtual Table registration.
+ */
+class SqliteVTab {
+public:
+    /**
+     * @brief Register a C++ Virtual Table module with SQLite (Stateless).
+     * @tparam VTableType The C++ class implementing the virtual table (inheriting from SqliteVTable).
+     * @tparam Options Bitmask of VTabOptions (e.g. VTabOptions::Writable, VTabOptions::Eponymous).
+     * @param db The SQLite database connection (SqliteDatabaseView, SqliteDatabaseOwned, or sqlite3*).
+     * @param module_name The SQL virtual table module name.
+     * @return SQLITE_OK on success, or an SQLite error code.
+     */
+    template <typename VTableType, VTabOptions Options = VTabOptions::ReadOnly>
+    static inline int define(SqliteDatabaseView db, const char* module_name) {
+        return SqliteVTabModule<VTableType, Options>::register_module(db, module_name);
+    }
+
+    /**
+     * @brief Register a C++ Virtual Table module with SQLite bound to shared connection state.
+     * @tparam State The user-defined state struct type.
+     * @tparam VTableType The C++ class implementing the virtual table (inheriting from SqliteVTable).
+     * @tparam Options Bitmask of VTabOptions (e.g. VTabOptions::Writable, VTabOptions::Eponymous).
+     * @param db The SQLite database connection (SqliteDatabaseView, SqliteDatabaseOwned, or sqlite3*).
+     * @param module_name The SQL virtual table module name.
+     * @return SQLITE_OK on success, or an SQLite error code.
+     */
+    template <typename State, typename VTableType, VTabOptions Options = VTabOptions::ReadOnly>
+    static inline int define_with_state(SqliteDatabaseView db, const char* module_name) {
+        return SqliteVTabModule<VTableType, Options>::template register_module_with_state<State>(db, module_name);
     }
 };
 

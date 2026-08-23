@@ -53,9 +53,9 @@ struct MyCount : public SqliteAggregateBase<int> {
 };
 
 void test_basic_numeric_aggregates(sqlite3* db) {
-    SqliteUdf::define_aggregate<MyAvg>(db, "my_avg", 1);
-    SqliteUdf::define_aggregate<MySumInt>(db, "my_sum_int", 1);
-    SqliteUdf::define_aggregate<MyCount>(db, "my_count", 1);
+    SqliteAggregate::define<MyAvg>(db, "my_avg", 1);
+    SqliteAggregate::define<MySumInt>(db, "my_sum_int", 1);
+    SqliteAggregate::define<MyCount>(db, "my_count", 1);
 
     char* err = nullptr;
     sqlite3_exec(db, "CREATE TABLE num_test(val REAL);", nullptr, nullptr, &err);
@@ -104,7 +104,7 @@ struct MyConcat : public SqliteAggregateBase<SqliteStringOwned> {
 };
 
 void test_string_concat_aggregate(sqlite3* db) {
-    SqliteUdf::define_aggregate<MyConcat>(db, "my_concat", 1);
+    SqliteAggregate::define<MyConcat>(db, "my_concat", 1);
 
     char* err = nullptr;
     sqlite3_exec(db, "CREATE TABLE str_test(word TEXT);", nullptr, nullptr, &err);
@@ -149,7 +149,7 @@ struct MyBlobAccum : public SqliteAggregateBase<SqliteBlobOwned> {
 };
 
 void test_blob_aggregate(sqlite3* db) {
-    SqliteUdf::define_aggregate<MyBlobAccum>(db, "my_blob_accum", 1);
+    SqliteAggregate::define<MyBlobAccum>(db, "my_blob_accum", 1);
 
     char* err = nullptr;
     sqlite3_exec(db, "CREATE TABLE blob_test(data BLOB);", nullptr, nullptr, &err);
@@ -207,8 +207,8 @@ struct VariadicSum : public SqliteAggregateBase<double> {
 };
 
 void test_multi_arg_and_variadic_aggregates(sqlite3* db) {
-    SqliteUdf::define_aggregate<WeightedAvg>(db, "weighted_avg", 2);
-    SqliteUdf::define_aggregate<VariadicSum>(db, "variadic_sum", -1);
+    SqliteAggregate::define<WeightedAvg>(db, "weighted_avg", 2);
+    SqliteAggregate::define<VariadicSum>(db, "variadic_sum", -1);
 
     char* err = nullptr;
     sqlite3_exec(db, "CREATE TABLE grades(score REAL, weight REAL);", nullptr, nullptr, &err);
@@ -254,7 +254,7 @@ struct EmptyNullAgg : public SqliteAggregateBase<void> {
 };
 
 void test_empty_set_aggregation(sqlite3* db) {
-    SqliteUdf::define_aggregate<EmptyNullAgg>(db, "empty_null_avg", 1);
+    SqliteAggregate::define<EmptyNullAgg>(db, "empty_null_avg", 1);
 
     char* err = nullptr;
     sqlite3_exec(db, "CREATE TABLE empty_tbl(x REAL);", nullptr, nullptr, &err);
@@ -318,7 +318,7 @@ struct ErrorThrowingAgg : public SqliteAggregateBase<void> {
 };
 
 void test_context_aware_finalize_and_errors(sqlite3* db) {
-    SqliteUdf::define_aggregate<ErrorThrowingAgg>(db, "check_pos", 1);
+    SqliteAggregate::define<ErrorThrowingAgg>(db, "check_pos", 1);
 
     char* err = nullptr;
     sqlite3_exec(db, "CREATE TABLE err_test(val REAL);", nullptr, nullptr, &err);
@@ -351,7 +351,7 @@ struct DestructorTracker : public SqliteAggregateBase<int> {
 };
 
 void test_destructor_cleanup(sqlite3* db) {
-    SqliteUdf::define_aggregate<DestructorTracker>(db, "track_dtor", 1);
+    SqliteAggregate::define<DestructorTracker>(db, "track_dtor", 1);
 
     int initial_count = g_active_destructors;
     sqlite3_stmt* stmt;
@@ -387,7 +387,7 @@ struct LogicalAndAgg : public SqliteAggregateBase<bool> {
 };
 
 void test_logical_aggregates(sqlite3* db) {
-    SqliteUdf::define_aggregate<LogicalAndAgg>(db, "logical_and", 1);
+    SqliteAggregate::define<LogicalAndAgg>(db, "logical_and", 1);
 
     char* err = nullptr;
     sqlite3_exec(db, "CREATE TABLE bool_test(val INTEGER);", nullptr, nullptr, &err);
@@ -430,7 +430,7 @@ struct MaxIntAgg : public SqliteAggregateBase<sqlite3_int64> {
 };
 
 void test_min_max_aggregates(sqlite3* db) {
-    SqliteUdf::define_aggregate<MaxIntAgg>(db, "max_int", 1);
+    SqliteAggregate::define<MaxIntAgg>(db, "max_int", 1);
 
     char* err = nullptr;
     sqlite3_exec(db, "CREATE TABLE mm_test(val INTEGER);", nullptr, nullptr, &err);

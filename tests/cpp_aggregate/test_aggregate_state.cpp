@@ -203,8 +203,8 @@ int main() {
     });
 
     printf("2. Registering stateful aggregates and companion UDFs on db1...\n");
-    assert((SqliteUdf::define_aggregate_with_state<AggregateSharedState, StatefulWeightedAvg>(db1, "weighted_avg", 2)) == SQLITE_OK);
-    assert((SqliteUdf::define_aggregate_with_state<AggregateSharedState, StatefulTaggedConcat>(db1, "tagged_concat", 1)) == SQLITE_OK);
+    assert((SqliteAggregate::define_with_state<AggregateSharedState, StatefulWeightedAvg>(db1, "weighted_avg", 2)) == SQLITE_OK);
+    assert((SqliteAggregate::define_with_state<AggregateSharedState, StatefulTaggedConcat>(db1, "tagged_concat", 1)) == SQLITE_OK);
     assert((SqliteUdf::define_with_state<AggregateSharedState, udf_get_agg_stats>(db1, "agg_stats", 0)) == SQLITE_OK);
     assert((SqliteUdf::define_with_state<AggregateSharedState, udf_set_agg_tag>(db1, "agg_set_tag", 1)) == SQLITE_OK);
     assert((SqliteUdf::define_with_state<AggregateSharedState, udf_reset_agg_state>(db1, "agg_reset", 0)) == SQLITE_OK);
@@ -288,7 +288,7 @@ int main() {
         memcpy(s->last_tag, db2_tag, strlen(db2_tag) + 1);
     });
 
-    assert((SqliteUdf::define_aggregate_with_state<AggregateSharedState, StatefulWeightedAvg>(db2, "weighted_avg", 2)) == SQLITE_OK);
+    assert((SqliteAggregate::define_with_state<AggregateSharedState, StatefulWeightedAvg>(db2, "weighted_avg", 2)) == SQLITE_OK);
     assert((SqliteUdf::define_with_state<AggregateSharedState, udf_get_agg_stats>(db2, "agg_stats", 0)) == SQLITE_OK);
 
     // Check db2 starts fresh

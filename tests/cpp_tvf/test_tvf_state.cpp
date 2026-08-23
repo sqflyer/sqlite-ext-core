@@ -204,8 +204,8 @@ int main() {
     });
 
     printf("2. Registering stateful TVFs and companion UDFs on db1...\n");
-    assert((SqliteUdf::define_tvf_with_state<TvfSharedState, MetricsStreamer>(db1, "stream_metrics")) == SQLITE_OK);
-    assert((SqliteUdf::define_tvf_with_state<TvfSharedState, ScaledSeriesIterator>(db1, "scaled_series")) == SQLITE_OK);
+    assert((SqliteTvf::define_with_state<TvfSharedState, MetricsStreamer>(db1, "stream_metrics")) == SQLITE_OK);
+    assert((SqliteTvf::define_with_state<TvfSharedState, ScaledSeriesIterator>(db1, "scaled_series")) == SQLITE_OK);
     assert((SqliteUdf::define_with_state<TvfSharedState, udf_get_tvf_stats>(db1, "tvf_stats", 0)) == SQLITE_OK);
     assert((SqliteUdf::define_with_state<TvfSharedState, udf_set_metric>(db1, "tvf_set_metric", 2)) == SQLITE_OK);
 
@@ -301,7 +301,7 @@ int main() {
         s->metrics[3] = 400;
     });
 
-    assert((SqliteUdf::define_tvf_with_state<TvfSharedState, MetricsStreamer>(db2, "stream_metrics")) == SQLITE_OK);
+    assert((SqliteTvf::define_with_state<TvfSharedState, MetricsStreamer>(db2, "stream_metrics")) == SQLITE_OK);
     assert((SqliteUdf::define_with_state<TvfSharedState, udf_get_tvf_stats>(db2, "tvf_stats", 0)) == SQLITE_OK);
 
     // Verify db2 initial stats

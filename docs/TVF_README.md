@@ -77,11 +77,12 @@ struct SeriesIterator : public SqliteTvfIterator {
 ## 3. Registering and Executing the TVF
 
 ### Registration
-Register the TVF on the database connection in a single line using `SqliteUdf::define_tvf<T>`:
+Register the TVF on the database connection in a single line using `SqliteTvf::define<T>`:
 
 ```cpp
 void register_tvfs(SqliteDatabaseView db) {
-    SqliteUdf::define_tvf<SeriesIterator>(db, "generate_series");
+    SqliteTvf::define<SeriesIterator>(db, "generate_series");
+    // Or via umbrella: SqliteExt::define_tvf<SeriesIterator>(db, "generate_series");
 }
 ```
 
@@ -169,7 +170,7 @@ struct SplitIterator : public SqliteTvfIterator {
 };
 
 // Register:
-SqliteUdf::define_tvf<SplitIterator>(db, "str_split");
+SqliteTvf::define<SplitIterator>(db, "str_split");
 ```
 
 ```sql
@@ -183,13 +184,13 @@ SELECT token_index, token FROM str_split('apple,banana,cherry');
 
 ## 5. Stateful TVFs: Streaming from Shared `SqliteExtState<T>`
 
-When a Table-Valued Function needs to stream internal state, configuration metrics, or session counters maintained across other UDFs and aggregates on the database connection, use **`SqliteUdf::define_tvf_with_state`**.
+When a Table-Valued Function needs to stream internal state, configuration metrics, or session counters maintained across other UDFs and aggregates on the database connection, use **`SqliteTvf::define_with_state`** (or **`SqliteExt::define_tvf_with_state`**).
 
 ### How State Injection Works
 Unlike Scalar UDFs and Aggregates where SQLite automatically passes `pApp` to `sqlite3_user_data(ctx)`, SQLite Virtual Table `xColumn` callbacks receive an ephemeral context where `sqlite3_user_data(ctx)` is `NULL`.
 
 The TVF framework solves this via **Direct Context Injection**:
-1. When registered via `define_tvf_with_state<State, Iterator>`, `sqlite3_create_module_v2` receives `raw_state` as `pClientData`.
+1. When registered via `define_with_state<State, Iterator>`, `sqlite3_create_module_v2` receives `raw_state` as `pClientData`.
 2. In `xConnect`, the module captures `pAux` directly onto the `VTab` holder (`pTab->raw_state = pAux`).
 3. In `xColumn`, the module constructs `SqliteContext(ctx, pTab->raw_state)` on the stack.
 4. Calling `ctx.state<State>()` accesses the injected pointer directly in **1 CPU instruction ($O(1)$)** without any hash table searches or database handle lookups.
@@ -260,12 +261,8 @@ void setup_stateful_tvf(SqliteDatabaseView db) {
     });
 
     // 2. Register TVF bound to shared state with automated xDestroy cleanup
-    SqliteUdf::define_tvf_with_state<AppMetricsState, MetricsIterator>(db, "app_metrics");
-}
-```
-
-    // 2. Register TVF bound to shared state with automated xDestroy cleanup
-    SqliteUdf::define_tvf_with_state<AppMetricsState, MetricsIterator>(db, "app_metrics");
+    SqliteTvf::define_with_state<AppMetricsState, MetricsIterator>(db, "app_metrics");
+    // Or via umbrella: SqliteExt::define_tvf_with_state<AppMetricsState, MetricsIterator>(db, "app_metrics");
 }
 ```
 

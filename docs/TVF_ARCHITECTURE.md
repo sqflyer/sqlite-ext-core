@@ -98,19 +98,19 @@ struct SqliteTvfModule {
 };
 ```
 
-When `SqliteUdf::define_tvf<MyIterator>(db, "my_tvf")` is called, the compiler generates a dedicated static `sqlite3_module` table populated with zero-cost function pointers.
+When `SqliteTvf::define<MyIterator>(db, "my_tvf")` is called, the compiler generates a dedicated static `sqlite3_module` table populated with zero-cost function pointers.
 
 ---
 
-## 4. Stateful TVFs (`define_tvf_with_state`) Architecture
+## 4. Stateful TVFs (`define_with_state`) Architecture
 
-When a TVF is registered via `SqliteUdf::define_tvf_with_state<State, Iterator>(db, name)`:
+When a TVF is registered via `SqliteTvf::define_with_state<State, Iterator>(db, name)`:
 
 ```
 +========================================================================================================+
 | 1. REGISTRATION PHASE (sqlite3_create_module_v2)                                                       |
 +========================================================================================================+
-| SqliteUdf::define_tvf_with_state<AppState, MyTvf>(db, "my_tvf")                                        |
+| SqliteTvf::define_with_state<AppState, MyTvf>(db, "my_tvf")                                            |
 |   |                                                                                                    |
 |   |---> raw_state = SqliteExtState<AppState>::init(db)  (Allocates shared Entry struct)                |
 |   |---> sqlite3_create_module_v2(db, "my_tvf", &module_def, raw_state, destructor)                     |

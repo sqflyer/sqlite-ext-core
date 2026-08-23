@@ -88,17 +88,18 @@ public:
 ### 3. Register the Module
 To register a **Read-Only** virtual table:
 ```cpp
-SqliteVTabModule<MySeriesTable>::register_module(db, "my_series");
+SqliteVTab::define<MySeriesTable>(db, "my_series");
+// Or via umbrella: SqliteExt::define_vtab<MySeriesTable>(db, "my_series");
 ```
 
 ---
 
 ## Writeable Virtual Tables
 
-To register a **Writeable** virtual table, provide the `VTabOptions::Writable` template parameter during registration.
+To register a **Writeable** virtual table, provide the `VTabOptions::Writable` template parameter during registration:
 
 ```cpp
-SqliteVTabModule<MySeriesTable, VTabOptions::Writable>::register_module(db, "my_series");
+SqliteVTab::define<MySeriesTable, VTabOptions::Writable>(db, "my_series");
 ```
 
 By explicitly declaring it writeable, `SqliteVTabModule` will conditionally route `xUpdate`, `xBegin`, `xSync`, `xCommit`, and `xRollback` function pointers to your class instance. 
@@ -224,26 +225,34 @@ SqliteVTabModule<MyShadowTable, VTabOptions::HasShadow>::register_module(db, "my
 
 ---
 
-## 5. Renaming Virtual Tables (`VTabOptions::Renameable`)
-
-If you want to allow users to run `ALTER TABLE my_vtab RENAME TO my_new_vtab;`, you must implement the `rename()` method. This is critical if your virtual table manages shadow tables that also need to be renamed!
-
-```cpp
-class MyRenameableTable : public SqliteVTable {
-    // ...
-    int rename(const char* zNewName) override {
-        // Update internal state or rename shadow tables
-        return SQLITE_OK;
-    }
-};
-
-// Registration:
-SqliteVTabModule<MyRenameableTable, VTabOptions::Renameable>::register_module(db, "my_renameable_table");
+SqliteVTab::define<MyTransactionalTable, VTabOptions::Savepoint>(db, "my_tx_table");
 ```
 
 ---
 
-## 6. Eponymous Virtual Tables (Table-Valued Functions)
+## 4. Shadow Tables (Defensive Mode)
+
+To protect underlying storage tables with `xShadowName`:
+
+```cpp
+// Registration:
+SqliteVTab::define<MyShadowTable, VTabOptions::HasShadow>(db, "my_shadow_table");
+```
+
+---
+
+## 5. Renaming Virtual Tables (`xRename`)
+
+To handle `ALTER TABLE RENAME TO`:
+
+```cpp
+// Registration:
+SqliteVTab::define<MyRenameableTable, VTabOptions::Renameable>(db, "my_renameable_table");
+```
+
+---
+
+## 6. Eponymous Virtual Tables (`VTabOptions::Eponymous`)
 
 Sometimes you don't want the user to have to run `CREATE VIRTUAL TABLE x USING module`. You just want them to be able to instantly query a function that returns a table:
 
@@ -251,17 +260,51 @@ Sometimes you don't want the user to have to run `CREATE VIRTUAL TABLE x USING m
 SELECT * FROM generate_series(1, 100);
 ```
 
-These are called **Eponymous Virtual Tables**. You build them exactly like a normal read-only Virtual Table, but when registering them, you set the `is_eponymous` flag to `true`.
+These are called **Eponymous Virtual Tables**. You build them exactly like a normal read-only Virtual Table, but when registering them, provide the `VTabOptions::Eponymous` template option:
 
 ```cpp
-// Register the module with is_eponymous = true
-// Note: Eponymous tables cannot take a pAux pointer, so pass nullptr.
-SqliteVTabModule<MySeriesTable>::register_module(db, "generate_series", nullptr, nullptr, true);
+// Register as Eponymous via compile-time option flag:
+SqliteVTab::define<MySeriesTable, VTabOptions::Eponymous>(db, "generate_series");
+// Or via umbrella: SqliteExt::define_vtab<MySeriesTable, VTabOptions::Eponymous>(db, "generate_series");
 ```
 
 ---
 
-## 7. The `MATCH` Operator: `xFindFunction` vs `bestIndex`
+## 7. Stateful Virtual Tables (`SqliteVTab::define_with_state`)
+
+Virtual tables can participate in shared per-connection state alongside Scalar UDFs and Aggregates using **`SqliteVTab::define_with_state`**:
+
+```cpp
+struct AppCacheState {
+    int total_reads;
+    int cache[10];
+};
+
+class StatefulTable : public SqliteVTable {
+public:
+    StatefulTable(sqlite3* db) : SqliteVTable(db) {}
+
+    static int connect(SqliteConnectArgs& args) {
+        int rc = sqlite3_declare_vtab(args.db(), "CREATE TABLE x(id INT, val INT)");
+        if (rc == SQLITE_OK) {
+            // Retrieve shared state during connect/create:
+            AppCacheState* state = args.state<AppCacheState>();
+            args.set_instance(sqlite_new<StatefulTable>(args.db()));
+        }
+        return rc;
+    }
+};
+
+// Register stateful virtual table:
+SqliteVTab::define_with_state<AppCacheState, StatefulTable>(db, "my_cache_tbl");
+// Or via umbrella: SqliteExt::define_vtab_with_state<AppCacheState, StatefulTable>(db, "my_cache_tbl");
+```
+
+Inside cursor `column(SqliteContext& ctx, int N)`, state is resolved via **`ctx.state<AppCacheState>()`** in 1 CPU instruction.
+
+---
+
+## 8. The `MATCH` Operator: `xFindFunction` vs `bestIndex`
 
 One of the most powerful features of virtual tables is the ability to implement custom search logic for keywords like `MATCH` (e.g. `WHERE column MATCH 'search_term'`). 
 

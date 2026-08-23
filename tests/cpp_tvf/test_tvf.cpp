@@ -56,7 +56,7 @@ void run_tests() {
     assert(sqlite3_open(":memory:", &db) == SQLITE_OK);
 
     // Register the TVF
-    assert(SqliteUdf::define_tvf<SeriesIterator>(db, "my_series") == SQLITE_OK);
+    assert(SqliteTvf::define<SeriesIterator>(db, "my_series") == SQLITE_OK);
 
     // Test 1: Forward Series (1 to 5)
     {

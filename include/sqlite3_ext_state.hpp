@@ -287,6 +287,13 @@ public:
         return entry ? &entry->state : nullptr;
     }
 
+    /** @brief Fast-path fetch from raw Entry pointer. */
+    static T* from_ptr(void *p) {
+        if (!p) return nullptr;
+        Entry *entry = (Entry *)p;
+        return &entry->state;
+    }
+
     /** @brief Fast-path fetch from raw sqlite3_context user_data. */
     static T* from_context(sqlite3_context *ctx) {
         if (!ctx) return nullptr;

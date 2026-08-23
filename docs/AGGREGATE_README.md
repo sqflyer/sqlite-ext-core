@@ -47,7 +47,8 @@ struct MyAvg : public SqliteAggregateBase<double> {
 
 // Register aggregate function
 void register_aggregates(SqliteDatabaseView db) {
-    SqliteUdf::define_aggregate<MyAvg>(db, "my_avg", 1);
+    SqliteAggregate::define<MyAvg>(db, "my_avg", 1);
+    // Or via umbrella: SqliteExt::define_aggregate<MyAvg>(db, "my_avg", 1);
 }
 ```
 
@@ -78,7 +79,7 @@ struct GroupConcat : public SqliteAggregateBase<SqliteStringOwned> {
     }
 };
 
-SqliteUdf::define_aggregate<GroupConcat>(db, "group_concat_custom", 1);
+SqliteAggregate::define<GroupConcat>(db, "group_concat_custom", 1);
 ```
 
 ```sql
@@ -110,7 +111,7 @@ struct BlobCollector : public SqliteAggregateBase<SqliteBlobOwned> {
     }
 };
 
-SqliteUdf::define_aggregate<BlobCollector>(db, "blob_accum", 1);
+SqliteAggregate::define<BlobCollector>(db, "blob_accum", 1);
 ```
 
 ---
@@ -136,7 +137,7 @@ struct WeightedAvg : public SqliteAggregateBase<double> {
 };
 
 // 2 arguments: value, weight
-SqliteUdf::define_aggregate<WeightedAvg>(db, "weighted_avg", 2);
+SqliteAggregate::define<WeightedAvg>(db, "weighted_avg", 2);
 ```
 
 ```sql
@@ -165,7 +166,7 @@ struct StrictPositiveSum : public SqliteAggregateBase<sqlite3_int64> {
     }
 };
 
-SqliteUdf::define_aggregate<StrictPositiveSum>(db, "strict_sum", 1);
+SqliteAggregate::define<StrictPositiveSum>(db, "strict_sum", 1);
 ```
 
 ---
@@ -226,7 +227,8 @@ void setup_stateful_aggregates(SqliteDatabaseView db) {
     });
 
     // 2. Register aggregate bound to shared state
-    SqliteUdf::define_aggregate_with_state<MetricSharedState, TaggedConcat>(db, "tagged_concat", 1);
+    SqliteAggregate::define_with_state<MetricSharedState, TaggedConcat>(db, "tagged_concat", 1);
+    // Or via umbrella: SqliteExt::define_aggregate_with_state<MetricSharedState, TaggedConcat>(db, "tagged_concat", 1);
 }
 ```
 
@@ -252,10 +254,10 @@ Base template class for all custom aggregate implementations:
 ### Registration Methods
 | Method | Description |
 | :--- | :--- |
-| `SqliteUdf::define_aggregate<T>(db, name, num_args = -1, deterministic = true)` | Registers a stateless aggregate struct. |
-| `SqliteUdf::define_aggregate_with_state<State, T>(db, name, num_args = -1, deterministic = true)` | Registers a stateful aggregate bound to `SqliteExtState<State>`. |
-| `SqliteAggregate<T>::define(db, name, num_args = -1, deterministic = true)` | Direct module registration for stateless aggregates. |
-| `SqliteAggregate<T>::define_with_state<State>(db, name, num_args = -1, deterministic = true)` | Direct module registration for stateful aggregates. |
+| `SqliteAggregate::define<T>(db, name, num_args = -1, deterministic = true)` | Registers a stateless aggregate struct. |
+| `SqliteAggregate::define_with_state<State, T>(db, name, num_args = -1, deterministic = false)` | Registers a stateful aggregate bound to `SqliteExtState<State>`. |
+| `SqliteExt::define_aggregate<T>(db, name, num_args = -1, deterministic = true)` | Umbrella helper for stateless aggregate registration. |
+| `SqliteExt::define_aggregate_with_state<State, T>(db, name, num_args = -1, deterministic = false)` | Umbrella helper for stateful aggregate registration. |
 
 ### Supported Struct Signatures
 
