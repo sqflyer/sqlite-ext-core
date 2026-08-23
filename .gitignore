@@ -69,3 +69,11 @@ vcpkg_installed/
 # test output & cache
 Testing/
 .cache/
+
+# Agent configuration
+AGENTS.md
+
+# IDE configuration
+.vscode/
+
+

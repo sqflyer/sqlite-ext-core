@@ -1,7 +1,7 @@
 #ifndef SQLITE3_DB_HPP
 #define SQLITE3_DB_HPP
 
-#include "sqlite3ext.h"
+#include <sqlite3.h>
 #include "sqlite3_statement.hpp"
 
 /**
@@ -77,6 +77,48 @@ public:
         }
         return *this;
     }
+};
+
+/**
+ * @brief Zero-allocation wrapper for sqlite3_context inside UDFs and Virtual Tables.
+ * Simplifies setting results and throwing errors.
+ */
+class SqliteContext {
+private:
+    sqlite3_context* m_ctx;
+
+public:
+    inline explicit SqliteContext(sqlite3_context* ctx) : m_ctx(ctx) {}
+
+    // Expose the raw pointer if needed
+    inline sqlite3_context* get() const { return m_ctx; }
+    inline operator sqlite3_context*() const { return m_ctx; }
+
+    // User Data & Aux Data
+    inline void* user_data() const { return sqlite3_user_data(m_ctx); }
+    inline void* get_auxdata(int N) const { return sqlite3_get_auxdata(m_ctx, N); }
+    inline void set_auxdata(int N, void* data, void (*free_func)(void*)) { sqlite3_set_auxdata(m_ctx, N, data, free_func); }
+
+    // Fast primitives
+    inline void result_int(int iVal) { sqlite3_result_int(m_ctx, iVal); }
+    inline void result_int64(sqlite3_int64 iVal) { sqlite3_result_int64(m_ctx, iVal); }
+    inline void result_double(double dVal) { sqlite3_result_double(m_ctx, dVal); }
+    inline void result_null() { sqlite3_result_null(m_ctx); }
+
+    // String / Blob with memory ownership tags
+    inline void result_text(const char* z, int n = -1, void (*free_func)(void*) = SQLITE_TRANSIENT) {
+        sqlite3_result_text(m_ctx, z, n, free_func);
+    }
+    inline void result_blob(const void* z, int n, void (*free_func)(void*) = SQLITE_TRANSIENT) {
+        sqlite3_result_blob(m_ctx, z, n, free_func);
+    }
+    inline void result_zeroblob(int n) { sqlite3_result_zeroblob(m_ctx, n); }
+
+    // Errors
+    inline void result_error(const char* z, int n = -1) { sqlite3_result_error(m_ctx, z, n); }
+    inline void result_error_toobig() { sqlite3_result_error_toobig(m_ctx); }
+    inline void result_error_nomem() { sqlite3_result_error_nomem(m_ctx); }
+    inline void result_error_code(int errCode) { sqlite3_result_error_code(m_ctx, errCode); }
 };
 
 #endif // SQLITE3_DB_HPP

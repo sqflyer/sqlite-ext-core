@@ -10,37 +10,6 @@
  */
 class SqliteUdfArgs;
 
-#ifndef SQLITE3_UDF_ARGS_DEFINED
-#define SQLITE3_UDF_ARGS_DEFINED
-/**
- * @brief Bounds-safe C++ wrapper over SQLite's raw (int argc, sqlite3_value** argv)
- */
-class SqliteUdfArgs {
-private:
-    int m_argc;
-    sqlite3_value** m_argv;
-
-public:
-    inline SqliteUdfArgs(int argc, sqlite3_value** argv) : m_argc(argc), m_argv(argv) {}
-
-    /**
-     * @brief Get the number of arguments passed to the UDF / Aggregate step.
-     */
-    inline int size() const { return m_argc; }
-
-    /**
-     * @brief Safely access an argument as a zero-allocation SqliteValueView.
-     * 
-     * If the index is out of bounds, returns a SQLITE_NULL view to prevent segfaults.
-     */
-    inline SqliteValueView operator[](int index) const {
-        if (index < 0 || index >= m_argc) {
-            return SqliteValueView(nullptr);
-        }
-        return SqliteValueView(m_argv[index]);
-    }
-};
-#endif // SQLITE3_UDF_ARGS_DEFINED
 
 /**
  * @brief Base marker tag struct for compile-time inheritance verification.

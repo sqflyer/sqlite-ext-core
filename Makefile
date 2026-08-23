@@ -39,6 +39,9 @@ test-blob-stream:
 test-backup:
 	@$(MAKE) -C tests/cpp_backup test
 
+test-vtab:
+	@$(MAKE) -C tests/cpp_vtab test
+
 test-locks:
 	$(MAKE) -C tests/locks test
 
@@ -66,3 +69,4 @@ clean:
 	$(MAKE) -C tests/locks clean
 	$(MAKE) -C tests/allocator clean
 	$(MAKE) -C tests/smart_ptr clean
+	$(MAKE) -C tests/cpp_vtab clean

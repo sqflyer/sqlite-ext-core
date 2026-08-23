@@ -135,13 +135,18 @@ class SqliteStringView {
 
 public:
     /** @brief Sets this object as the return result of a SQLite UDF context. */
-    void result(sqlite3_context* ctx, void(*dtor)(void*) = SQLITE_TRANSIENT) const {
+    inline void result(sqlite3_context* ctx, void(*dtor)(void*) = SQLITE_TRANSIENT) const {
         sqlite3_result_text(ctx, data(), length(), dtor);
     }
+    template <typename TContext>
+    inline void result(TContext& ctx, void(*dtor)(void*) = SQLITE_TRANSIENT) const { result(ctx.get(), dtor); }
+
     /** @brief Binds this object to a prepared SQLite statement at the given 1-based column index. */
-    int bind(sqlite3_stmt* stmt, int col, void(*dtor)(void*) = SQLITE_TRANSIENT) const {
+    inline int bind(sqlite3_stmt* stmt, int col, void(*dtor)(void*) = SQLITE_TRANSIENT) const {
         return sqlite3_bind_text(stmt, col, data(), length(), dtor);
     }
+    template <typename TStatement>
+    inline int bind(TStatement& stmt, int col, void(*dtor)(void*) = SQLITE_TRANSIENT) const { return bind(stmt.get(), col, dtor); }
     /**
      * @brief Constructs a view over an existing string buffer.
      * @param data Pointer to the character array.
@@ -201,13 +206,18 @@ class SqliteStringOwned {
 
 public:
     /** @brief Sets this object as the return result of a SQLite UDF context. */
-    void result(sqlite3_context* ctx, void(*dtor)(void*) = SQLITE_TRANSIENT) const {
+    inline void result(sqlite3_context* ctx, void(*dtor)(void*) = SQLITE_TRANSIENT) const {
         sqlite3_result_text(ctx, value(), length(), dtor);
     }
+    template <typename TContext>
+    inline void result(TContext& ctx, void(*dtor)(void*) = SQLITE_TRANSIENT) const { result(ctx.get(), dtor); }
+
     /** @brief Binds this object to a prepared SQLite statement at the given 1-based column index. */
-    int bind(sqlite3_stmt* stmt, int col, void(*dtor)(void*) = SQLITE_TRANSIENT) const {
+    inline int bind(sqlite3_stmt* stmt, int col, void(*dtor)(void*) = SQLITE_TRANSIENT) const {
         return sqlite3_bind_text(stmt, col, value(), length(), dtor);
     }
+    template <typename TStatement>
+    inline int bind(TStatement& stmt, int col, void(*dtor)(void*) = SQLITE_TRANSIENT) const { return bind(stmt.get(), col, dtor); }
     /**
      * @brief Creates a new string builder tied to a specific database connection.
      * @param db The SQLite database connection.
@@ -464,13 +474,18 @@ class SqliteBlobView {
 
 public:
     /** @brief Sets this object as the return result of a SQLite UDF context. */
-    void result(sqlite3_context* ctx, void(*dtor)(void*) = SQLITE_TRANSIENT) const {
+    inline void result(sqlite3_context* ctx, void(*dtor)(void*) = SQLITE_TRANSIENT) const {
         sqlite3_result_blob(ctx, data(), size(), dtor);
     }
+    template <typename TContext>
+    inline void result(TContext& ctx, void(*dtor)(void*) = SQLITE_TRANSIENT) const { result(ctx.get(), dtor); }
+
     /** @brief Binds this object to a prepared SQLite statement at the given 1-based column index. */
-    int bind(sqlite3_stmt* stmt, int col, void(*dtor)(void*) = SQLITE_TRANSIENT) const {
+    inline int bind(sqlite3_stmt* stmt, int col, void(*dtor)(void*) = SQLITE_TRANSIENT) const {
         return sqlite3_bind_blob(stmt, col, data(), size(), dtor);
     }
+    template <typename TStatement>
+    inline int bind(TStatement& stmt, int col, void(*dtor)(void*) = SQLITE_TRANSIENT) const { return bind(stmt.get(), col, dtor); }
     /**
      * @brief Constructs a view over an existing binary buffer.
      * @param data Pointer to the binary payload.
@@ -524,13 +539,18 @@ class SqliteBlobOwned {
 
 public:
     /** @brief Sets this object as the return result of a SQLite UDF context. */
-    void result(sqlite3_context* ctx, void(*dtor)(void*) = SQLITE_TRANSIENT) const {
+    inline void result(sqlite3_context* ctx, void(*dtor)(void*) = SQLITE_TRANSIENT) const {
         sqlite3_result_blob(ctx, data(), size(), dtor);
     }
+    template <typename TContext>
+    inline void result(TContext& ctx, void(*dtor)(void*) = SQLITE_TRANSIENT) const { result(ctx.get(), dtor); }
+
     /** @brief Binds this object to a prepared SQLite statement at the given 1-based column index. */
-    int bind(sqlite3_stmt* stmt, int col, void(*dtor)(void*) = SQLITE_TRANSIENT) const {
+    inline int bind(sqlite3_stmt* stmt, int col, void(*dtor)(void*) = SQLITE_TRANSIENT) const {
         return sqlite3_bind_blob(stmt, col, data(), size(), dtor);
     }
+    template <typename TStatement>
+    inline int bind(TStatement& stmt, int col, void(*dtor)(void*) = SQLITE_TRANSIENT) const { return bind(stmt.get(), col, dtor); }
     /**
      * @brief Constructs an empty binary blob.
      */
@@ -851,13 +871,19 @@ class SqliteValueView {
 
 public:
     /** @brief Sets this object as the return result of a SQLite UDF context. */
-    void result(sqlite3_context* ctx) const {
-        sqlite3_result_value(ctx, const_cast<sqlite3_value*>(get()));
+    inline void result(sqlite3_context* ctx) const {
+        sqlite3_result_value(ctx, const_cast<sqlite3_value*>(m_val));
     }
+    template <typename TContext>
+    inline void result(TContext& ctx) const { result(ctx.get()); }
+
     /** @brief Binds this object to a prepared SQLite statement at the given 1-based column index. */
-    int bind(sqlite3_stmt* stmt, int col) const {
-        return sqlite3_bind_value(stmt, col, get());
+    inline int bind(sqlite3_stmt* stmt, int col) const {
+        return sqlite3_bind_value(stmt, col, m_val);
     }
+    template <typename TStatement>
+    inline int bind(TStatement& stmt, int col) const { return bind(stmt.get(), col); }
+
     /**
      * @brief Constructs a view over a temporary `sqlite3_value`.
      * @param val The transient value pointer passed from SQLite.
@@ -940,7 +966,7 @@ public:
      * Dynamically switches on the internal SBO type (`m_type`) to call the most efficient 
      * underlying SQLite C-API function (e.g. `sqlite3_result_int64` vs `sqlite3_result_value`).
      */
-    void result(sqlite3_context* ctx) const {
+    inline void result(sqlite3_context* ctx) const {
         switch (m_type) {
             case SQLITE_INTEGER: sqlite3_result_int64(ctx, m_data.iValue); break;
             case SQLITE_FLOAT: sqlite3_result_double(ctx, m_data.dValue); break;
@@ -950,6 +976,8 @@ public:
             default: sqlite3_result_null(ctx); break;
         }
     }
+    template <typename TContext>
+    inline void result(TContext& ctx) const { result(ctx.get()); }
 
     /** 
      * @brief Binds this object to a prepared SQLite statement at the given 1-based column index. 
@@ -957,7 +985,7 @@ public:
      * Dynamically switches on the internal SBO type (`m_type`) to call the most efficient 
      * underlying SQLite C-API function (e.g. `sqlite3_bind_int64` vs `sqlite3_bind_value`).
      */
-    int bind(sqlite3_stmt* stmt, int col) const {
+    inline int bind(sqlite3_stmt* stmt, int col) const {
         switch (m_type) {
             case SQLITE_INTEGER: return sqlite3_bind_int64(stmt, col, m_data.iValue);
             case SQLITE_FLOAT: return sqlite3_bind_double(stmt, col, m_data.dValue);
@@ -967,6 +995,8 @@ public:
             default: return sqlite3_bind_null(stmt, col);
         }
     }
+    template <typename TStatement>
+    inline int bind(TStatement& stmt, int col) const { return bind(stmt.get(), col); }
     /**
      * @brief Duplicates the temporary value into owned memory or stores it inline.
      * 
@@ -1505,5 +1535,37 @@ struct SqliteValueEqual {
         return a == b;
     }
 };
+
+#ifndef SQLITE3_UDF_ARGS_DEFINED
+#define SQLITE3_UDF_ARGS_DEFINED
+/**
+ * @brief Bounds-safe C++ wrapper over SQLite's raw (int argc, sqlite3_value** argv)
+ */
+class SqliteUdfArgs {
+private:
+    int m_argc;
+    sqlite3_value** m_argv;
+
+public:
+    inline SqliteUdfArgs(int argc, sqlite3_value** argv) : m_argc(argc), m_argv(argv) {}
+
+    /**
+     * @brief Get the number of arguments passed to the UDF / Aggregate step.
+     */
+    int size() const { return m_argc; }
+
+    /**
+     * @brief Safely access an argument as a zero-allocation SqliteValueView.
+     * 
+     * If the index is out of bounds, returns a SQLITE_NULL view to prevent segfaults.
+     */
+    inline SqliteValueView operator[](int index) const {
+        if (index < 0 || index >= m_argc) {
+            return SqliteValueView(nullptr);
+        }
+        return SqliteValueView(m_argv[index]);
+    }
+};
+#endif // SQLITE3_UDF_ARGS_DEFINED
 
 #endif // SQLITE3_VALUE_HPP

@@ -26,6 +26,10 @@ Because we cannot rely on `std::string_view` or `std::unique_ptr` in a `-nostdli
   - Their destructors safely clean up the resource (e.g., `sqlite3_close_v2` or `sqlite3_value_free`).
   - By inheriting from `View`, they support **object slicing**. You can pass an `Owned` object by value into any function expecting a `View`, which compiles down to a raw 8-byte pointer copy with zero overhead!
 
+5.  **Online Backup (`sqlite3_backup.hpp`)**: `SqliteBackup` strictly enforces the SQLite backup lifecycle to guarantee the source database read-lock is lifted via `sqlite3_backup_finish` in all scope-exit scenarios.
+6.  **Virtual Tables (`sqlite3_vtab.hpp`)**: An inheritance framework abstracting away C `sqlite3_module` routing, giving developers clean `SqliteVTable` and `SqliteVTabCursor` interfaces to implement.
+7.  **Clean Abstractions (`sqlite3_ext_core.hpp`)**: Functions wrapped in standard C++ interfaces (`SqliteContext::result_text()`) but strictly inline.
+
 ## 3. Strict RAII (Resource Acquisition Is Initialization)
 
 Manual memory and lock management is the leading cause of bugs in SQLite extensions. We enforce strict RAII to guarantee safety:
@@ -52,6 +56,7 @@ For a deeper dive into the specific mechanics and C++ paradigms used in individu
 - [**Dynamic Buffers (`SqliteBuffer`)**](docs/BUFFER_ARCHITECTURE.md): `-nostdlib++` replacements for `std::string` and `std::vector` using `sqlite3_realloc64` that natively hook into the Value System's FNV-1a hashing engine.
 - [**Blob Streams (`SqliteBlobStream`)**](docs/BLOB_STREAM_ARCHITECTURE.md): Zero-copy stream interfaces for handling large SQLite blobs without loading them entirely into memory.
 - [**Online Backup (`SqliteBackup`)**](docs/BACKUP_ARCHITECTURE.md): RAII wrappers for the SQLite Online Backup API to ensure safe resource disposal during long-running background tasks.
+- [**Virtual Tables (`SqliteVTable`)**](docs/VTAB_ARCHITECTURE.md): An object-oriented routing framework that maps SQLite's raw C module function pointers to safe polymorphic C++ method invocations.
 - [**Extension State**](docs/EXT_STATE_ARCHITECTURE.md): Thread-safe management of global state across multiple SQLite connections.
 - [**Smart Pointers**](docs/SMART_PTR_ARCHITECTURE.md): Exception-safe `SqliteUniquePtr` and `SqliteSharedPtr` implementations without `<memory>`.
 - [**Custom Allocators**](docs/ALLOCATOR_ARCHITECTURE.md): Hooking into SQLite's memory arena via `sqlite3_malloc64` and `sqlite3_free`.

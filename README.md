@@ -193,10 +193,30 @@ A specialized streaming API for reading and writing potentially massive BLOB dat
 ### 14. Online Backup API (`sqlite3_backup.hpp`)
 A strict, zero-allocation RAII wrapper over SQLite's Online Backup API (`sqlite3_backup_init`, `sqlite3_backup_step`, `sqlite3_backup_finish`).
 
+### 15. C++ Virtual Table Framework (`sqlite3_vtab.hpp`)
+An object-oriented, zero-overhead routing framework for building highly advanced SQLite Virtual Tables in C++.
+
 #### Key Features:
+- **Zero-Overhead Routing**: C++ virtual method dispatches are automatically routed from SQLite's C-API directly into your class instances using safe pointer wrappers.
+- **Query Planner Auto-Tuning**: Wrap `xBestIndex` natively with the `SqliteIndexInfo` class to easily intercept operators (like `MATCH` and `LIKE`) without pointer math.
+- **Function Interception**: Wrap `xFindFunction` to override global SQLite functions specifically for your virtual table.
+- **Shadow Table Protection**: Conditionally route `xShadowName` to protect internal virtual table data from malicious SQL injection.
+- **Eponymous TVF Support**: Support Table-Valued Functions seamlessly using the `is_eponymous` registration flag.
+
+#### Documentation
+- [Virtual Tables README](docs/VTAB_README.md)
+- [Virtual Tables Architecture](docs/VTAB_ARCHITECTURE.md)
 - **Resource Safety**: Guarantees that `sqlite3_backup_finish` is called exactly once when the wrapper goes out of scope, preventing the source database from remaining read-locked indefinitely if a C++ exception occurs during the copy process.
 - **Page-Level Granularity**: Allows copying databases page-by-page in a background thread to avoid completely locking out other database clients.
 - **Move Semantics**: The backup handle can be safely passed across scopes or threads using `std::move`.
+
+### 15. Virtual Tables (`sqlite3_vtab.hpp`)
+An object-oriented, C++ inheritance-based framework for writing powerful SQLite Virtual Tables without dealing with raw C pointer casting and `sqlite3_module` function pointer routing.
+
+#### Key Features:
+- **Object-Oriented Lifecycle**: Destroying a table automatically deletes all associated cursors and internal memory allocations in a `-nostdlib++` compliant way.
+- **Compile-Time Feature Flags**: You can explicitly register a module as read-only or writeable by flipping a single C++ template parameter `SqliteVTabModule<MyTable, true>`.
+- **Zero-Overhead Routing**: C++ virtual method dispatches are automatically routed from SQLite's C-API directly into your class instances.
 
 #### Documentation
 - [Buffer README](docs/BUFFER_README.md)
