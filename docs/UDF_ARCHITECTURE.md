@@ -86,8 +86,8 @@ When multiple functions need to share and mutate the same state struct (e.g. `Ap
 ### Key Architectural Advantages:
 1. **Zero-Overhead $O(1)$ Direct State Access**:
    Inside each function, `SqliteExtState<AppState>::from_context(ctx)` or `ctx.state<AppState>()` directly reads `sqlite3_user_data(ctx)` in **1 CPU instruction**. No hash table lookups, no string path searches, and zero heap allocations.
-2. **Automated SQLite Garbage Collection (`xDestroy`)**:
-   Each `define_with_state` passes `SqliteExtState<State>::destructor` as SQLite's `xDestroy` callback. When the database closes or functions are unregistered, SQLite automatically decrements the reference count and frees the state when no functions remain.
+2. **Automated SQLite Garbage Collection on Database Close**:
+   Each `define_with_state` passes `SqliteExtState<State>::destructor` as SQLite's `xDestroy` callback. When the database connection is closed (`sqlite3_close` / `sqlite3_close_v2`), SQLite automatically invokes `xDestroy`, decrementing the reference count and safely freeing the state memory when `ref_count == 0`.
 3. **Cross-Function Thread Safety**:
    State access is coordinated using `SqliteExtState<State>::ReadGuard` (shared read lock) and `SqliteExtState<State>::WriteGuard` (exclusive write lock), backed by platform-native fast locks (Windows SRWLock, POSIX `pthread_rwlock_t`).
 

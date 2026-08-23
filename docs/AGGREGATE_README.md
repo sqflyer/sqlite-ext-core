@@ -1,32 +1,33 @@
 # C++ Aggregate Function Framework (`sqlite3_aggregate.hpp`)
 
-A zero-dependency, type-safe C++ framework for defining SQLite Aggregate Functions using clean, object-oriented structs. It eliminates the boilerplate of raw C pointers, manual `sqlite3_aggregate_context` memory tracking, and C-style casts while remaining 100% freestanding and `-nostdlib++` compliant.
+A zero-boilerplate, zero-dependency, type-safe C++ framework for defining SQLite Aggregate Functions using clean, object-oriented structs. It eliminates raw C pointers, manual `sqlite3_aggregate_context` memory tracking, and C-style casts while remaining 100% freestanding and `-nostdlib++` compliant.
 
-## Features
-- **Object-Oriented Aggregate Structs**: Define custom aggregate states as intuitive C++ structs with `step()` and `finalize()` methods.
-- **Single-Line Registration**: Register aggregates effortlessly via `SqliteUdf::define_aggregate<MyAgg>(db, "my_agg", num_args)` or `SqliteAggregate<MyAgg>::define(db, "my_agg", num_args)`.
-- **Automatic Return Type Dispatching**: Return standard primitives (`int`, `sqlite3_int64`, `double`, `bool`), `const char*`, or zero-overhead SQLite wrappers (`SqliteStringOwned`, `SqliteBlobOwned`, `SqliteValueOwned`) directly from `finalize()`.
-- **Bounds-Safe Parameter Access**: `step(SqliteUdfArgs args)` provides bounds-checked, zero-allocation `SqliteValueView` access.
-- **Context-Aware Overloads**: Supports `step(sqlite3_context* ctx, SqliteUdfArgs args)` and `void finalize(sqlite3_context* ctx)` for custom error reporting or direct result setting.
-- **RAII Lifecycle & Destructor Cleanup**: Automatically constructs the struct in-place on the first row and deterministically triggers `~T()` when SQLite finishes aggregation.
-- **Safe Empty-Set Aggregation**: Handles empty table sets gracefully by finalizing a default-constructed instance without crashing.
-- **Freestanding & `-nostdlib++` Ready**: Compiles cleanly with `-fno-exceptions -fno-rtti -nostdlib++`.
-
-## Setup
-Include the header in your C++ SQLite extension project:
-```cpp
-#include "include/sqlite3_aggregate.hpp"
-// Or via sqlite3_udf.hpp
-#include "include/sqlite3_udf.hpp"
-```
+> **Architecture Reference**: For an in-depth breakdown of `sqlite3_aggregate_context` memory layouts, 4-tier tag-dispatch finalize SFINAE, and shared state lifecycles, see [`docs/AGGREGATE_ARCHITECTURE.md`](AGGREGATE_ARCHITECTURE.md).
 
 ---
 
-## Examples of Usage
+## 1. Features Matrix
+
+| Feature | Description |
+| :--- | :--- |
+| **Object-Oriented Aggregate Structs** | Define aggregation state as intuitive C++ structs with `step()` and `finalize()` methods. |
+| **Single-Line Registration** | Register aggregates via `SqliteUdf::define_aggregate<T>` or `SqliteAggregate<T>::define`. |
+| **Shared Stateful Aggregates** | Share per-connection state structs across Aggregates, Scalar UDFs, and TVFs using `define_aggregate_with_state<State, T>`. |
+| **Automatic Return Type Dispatching** | Return primitives (`int`, `sqlite3_int64`, `double`, `bool`), `const char*`, or wrappers (`SqliteStringOwned`, `SqliteBlobOwned`, `SqliteValueOwned`) directly from `finalize()`. |
+| **Modern `SqliteContext` Support** | Full support for `step(SqliteContext ctx, SqliteUdfArgs args)` and `finalize(SqliteContext ctx)` for direct context access, error reporting, and state retrieval. |
+| **Bounds-Safe Parameter Access** | `step(SqliteUdfArgs args)` provides bounds-checked, zero-allocation `SqliteValueView` access. |
+| **RAII Lifecycle & Destructor Cleanup** | Automatically constructs the struct in-place on the first row and deterministically triggers `~T()` when SQLite finishes aggregation. |
+| **Safe Empty-Set Aggregation** | Handles empty table sets gracefully by finalizing a default-constructed instance without crashes or undefined behavior. |
+| **Freestanding & `-nostdlib++` Ready** | Compiles cleanly with `-fno-exceptions -fno-rtti -nostdlib++`. |
+
+---
+
+## 2. Quickstart Examples
 
 ### 1. Basic Numeric Aggregate (Custom Average)
 ```cpp
 #include "sqlite3_aggregate.hpp"
+#include "sqlite3_udf.hpp"
 
 struct MyAvg : public SqliteAggregateBase<double> {
     double total = 0.0;
@@ -45,10 +46,16 @@ struct MyAvg : public SqliteAggregateBase<double> {
 };
 
 // Register aggregate function
-void register_aggregates(sqlite3* db) {
+void register_aggregates(SqliteDatabaseView db) {
     SqliteUdf::define_aggregate<MyAvg>(db, "my_avg", 1);
 }
 ```
+
+```sql
+SELECT my_avg(score) FROM students;
+```
+
+---
 
 ### 2. Dynamic String Concatenation (`SqliteStringOwned`)
 ```cpp
@@ -61,9 +68,8 @@ struct GroupConcat : public SqliteAggregateBase<SqliteStringOwned> {
             if (!first) str.append(", ", 2);
             first = false;
             
-            const char* text = reinterpret_cast<const char*>(sqlite3_value_text(const_cast<sqlite3_value*>(args[0].get())));
-            int len = sqlite3_value_bytes(const_cast<sqlite3_value*>(args[0].get()));
-            str.append(text, len);
+            SqliteStringView text = args[0].as_text();
+            str.append(text.data(), text.length());
         }
     }
 
@@ -75,6 +81,14 @@ struct GroupConcat : public SqliteAggregateBase<SqliteStringOwned> {
 SqliteUdf::define_aggregate<GroupConcat>(db, "group_concat_custom", 1);
 ```
 
+```sql
+SELECT department, group_concat_custom(employee_name) 
+FROM employees 
+GROUP BY department;
+```
+
+---
+
 ### 3. Binary Blob Accumulator (`SqliteBlobOwned`)
 ```cpp
 struct BlobCollector : public SqliteAggregateBase<SqliteBlobOwned> {
@@ -83,11 +97,10 @@ struct BlobCollector : public SqliteAggregateBase<SqliteBlobOwned> {
 
     void step(SqliteUdfArgs args) override {
         if (args[0].type() == SQLITE_BLOB) {
-            const void* data = sqlite3_value_blob(const_cast<sqlite3_value*>(args[0].get()));
-            int bytes = sqlite3_value_bytes(const_cast<sqlite3_value*>(args[0].get()));
-            if (size + bytes <= 256) {
-                memcpy(buffer + size, data, bytes);
-                size += bytes;
+            SqliteBlobView blob = args[0].as_blob();
+            if (size + blob.size() <= 256) {
+                memcpy(buffer + size, blob.data(), blob.size());
+                size += blob.size();
             }
         }
     }
@@ -100,14 +113,16 @@ struct BlobCollector : public SqliteAggregateBase<SqliteBlobOwned> {
 SqliteUdf::define_aggregate<BlobCollector>(db, "blob_accum", 1);
 ```
 
-### 4. Multi-Argument Aggregates (Weighted Average)
+---
+
+### 4. Multi-Argument & Variadic Aggregates (Weighted Average)
 ```cpp
 struct WeightedAvg : public SqliteAggregateBase<double> {
     double weighted_sum = 0.0;
     double total_weight = 0.0;
 
     void step(SqliteUdfArgs args) override {
-        if (args.size() >= 2) {
+        if (args.size() >= 2 && args[0].type() != SQLITE_NULL && args[1].type() != SQLITE_NULL) {
             double val = args[0].as_double();
             double weight = args[1].as_double();
             weighted_sum += (val * weight);
@@ -120,29 +135,33 @@ struct WeightedAvg : public SqliteAggregateBase<double> {
     }
 };
 
+// 2 arguments: value, weight
 SqliteUdf::define_aggregate<WeightedAvg>(db, "weighted_avg", 2);
 ```
 
-### 5. Context-Aware Error Reporting
-```cpp
-struct StrictPositiveSum : public SqliteAggregateBase<void> {
-    sqlite3_int64 sum = 0;
-    bool has_error = false;
+```sql
+SELECT weighted_avg(price, quantity) FROM orders;
+```
 
-    void step(sqlite3_context* ctx, SqliteUdfArgs args) override {
+---
+
+### 5. Context-Aware Aggregates with Typed Return (`finalize(SqliteContext)`)
+```cpp
+struct StrictPositiveSum : public SqliteAggregateBase<sqlite3_int64> {
+    sqlite3_int64 sum = 0;
+
+    void step(SqliteContext ctx, SqliteUdfArgs args) override {
         sqlite3_int64 val = args[0].as_int64();
         if (val < 0) {
-            has_error = true;
-            sqlite3_result_error(ctx, "Negative numbers are disallowed", -1);
+            ctx.result_error("Negative numbers are disallowed");
             return;
         }
         sum += val;
     }
 
-    void finalize(sqlite3_context* ctx) override {
-        if (!has_error) {
-            sqlite3_result_int64(ctx, sum);
-        }
+    sqlite3_int64 finalize(SqliteContext ctx) override {
+        // Can set custom headers/auxdata, or simply return typed sum:
+        return sum;
     }
 };
 
@@ -151,32 +170,109 @@ SqliteUdf::define_aggregate<StrictPositiveSum>(db, "strict_sum", 1);
 
 ---
 
-## API Reference
+## 3. Stateful Aggregates: Sharing State Across UDFs & TVFs
 
-### `SqliteAggregateBase<ReturnType = void>`
-Base template class for all custom aggregate implementations. User structs must publicly inherit from `SqliteAggregateBase<ReturnType>` (e.g. `SqliteAggregateBase<double>`, `SqliteAggregateBase<SqliteStringOwned>`, or `SqliteAggregateBase<void>`).
+When an aggregate function needs to read or mutate shared per-connection state (such as configurations, audit counters, or runtime filters) alongside other UDFs and TVFs, use **`SqliteUdf::define_aggregate_with_state`**.
 
-| Base Class | Purpose | Required Method to Implement |
-| :--- | :--- | :--- |
-| `SqliteAggregateBase<T>` | Typed return value | `T finalize() override` |
-| `SqliteAggregateBase<void>` | Direct context control | `void finalize(sqlite3_context* ctx) override` |
+### Step 1: Define Shared State Struct
+```cpp
+struct MetricSharedState {
+    int total_aggregations;
+    char prefix_tag[32];
+};
+```
 
-### `SqliteAggregate<T>` / `SqliteUdf::define_aggregate<T>`
-| Function | Return Type | Description |
-| :--- | :--- | :--- |
-| `SqliteAggregate<T>::define(db, name, num_args = -1, deterministic = true)` | `int` | Registers aggregate struct `T` with SQLite. |
-| `SqliteUdf::define_aggregate<T>(db, name, num_args = -1, deterministic = true)` | `int` | Convenience forwarder on `SqliteUdf`. |
+### Step 2: Define the Stateful Aggregate
+```cpp
+struct TaggedConcat : public SqliteAggregateBase<SqliteStringOwned> {
+    SqliteStringOwned out;
+    bool first = true;
 
-### Supported Aggregate Struct Signatures
+    void step(SqliteContext ctx, SqliteUdfArgs args) override {
+        if (args[0].type() == SQLITE_TEXT) {
+            if (!first) out.append(", ", 2);
+            first = false;
+            SqliteStringView val = args[0].as_text();
+            out.append(val.data(), val.length());
+        }
+    }
 
-#### `step` Overloads
-- `void step(SqliteUdfArgs args)`
-- `void step(sqlite3_context* ctx, SqliteUdfArgs args)`
+    SqliteStringOwned finalize(SqliteContext ctx) override {
+        MetricSharedState* state = ctx.state<MetricSharedState>();
+        if (state) {
+            SqliteExtState<MetricSharedState>::WriteGuard lock(state);
+            lock->total_aggregations++;
+            
+            // Prepend the shared tag prefix
+            SqliteStringOwned prefixed(ctx.get());
+            prefixed.appendall(lock->prefix_tag);
+            prefixed.appendall(":");
+            prefixed.append(out.data(), out.length());
+            return sqlite_move_ptr(prefixed);
+        }
+        return sqlite_move_ptr(out);
+    }
+};
+```
 
-#### `finalize` Overloads
-- `TResult finalize()`: Automatically dispatches result for `int`, `sqlite3_int64`, `double`, `bool`, `const char*`, `SqliteStringView`, `SqliteStringOwned`, `SqliteBlobView`, `SqliteBlobOwned`, `SqliteValueView`, `SqliteValueOwned`.
-- `void finalize(sqlite3_context* ctx)`: Manually sets result or error on the SQLite context.
+### Step 3: Register Companion Functions & Stateful Aggregate
+```cpp
+void setup_stateful_aggregates(SqliteDatabaseView db) {
+    // 1. Initialize per-database shared state
+    SqliteExtState<MetricSharedState>::get_or_create(db.get(), [](MetricSharedState* s) {
+        s->total_aggregations = 0;
+        const char* tag = "BATCH_A";
+        memcpy(s->prefix_tag, tag, strlen(tag) + 1);
+    });
+
+    // 2. Register aggregate bound to shared state
+    SqliteUdf::define_aggregate_with_state<MetricSharedState, TaggedConcat>(db, "tagged_concat", 1);
+}
+```
+
+```sql
+SELECT department, tagged_concat(employee_name) 
+FROM employees 
+GROUP BY department;
+-- Output: "BATCH_A:Alice, Bob, Charlie"
+```
 
 ---
 
-For architectural details, please see [AGGREGATE_ARCHITECTURE.md](AGGREGATE_ARCHITECTURE.md).
+## 4. API Reference
+
+### `SqliteAggregateBase<ReturnType = void>`
+Base template class for all custom aggregate implementations:
+
+| Base Class | Purpose | Primary Method to Implement |
+| :--- | :--- | :--- |
+| `SqliteAggregateBase<T>` | Typed return value | `T finalize()` or `T finalize(SqliteContext ctx)` |
+| `SqliteAggregateBase<void>` | Direct context control | `void finalize(SqliteContext ctx)` |
+
+### Registration Methods
+| Method | Description |
+| :--- | :--- |
+| `SqliteUdf::define_aggregate<T>(db, name, num_args = -1, deterministic = true)` | Registers a stateless aggregate struct. |
+| `SqliteUdf::define_aggregate_with_state<State, T>(db, name, num_args = -1, deterministic = true)` | Registers a stateful aggregate bound to `SqliteExtState<State>`. |
+| `SqliteAggregate<T>::define(db, name, num_args = -1, deterministic = true)` | Direct module registration for stateless aggregates. |
+| `SqliteAggregate<T>::define_with_state<State>(db, name, num_args = -1, deterministic = true)` | Direct module registration for stateful aggregates. |
+
+### Supported Struct Signatures
+
+#### `step` Overloads
+- `void step(SqliteUdfArgs args)`
+- `void step(SqliteContext ctx, SqliteUdfArgs args)`
+- `void step(sqlite3_context* ctx, SqliteUdfArgs args)`
+
+#### `finalize` Overloads
+- `TReturn finalize(SqliteContext ctx)`: Context-aware typed return (Priority 0).
+- `void finalize(SqliteContext ctx)`: Context-aware manual result setting (Priority 1).
+- `TReturn finalize()`: Stateless auto-converted return (Priority 2).
+- `void finalize()`: Stateless void return (Priority 3).
+
+---
+
+## 5. Deep-Dive Architecture Documentation
+
+For memory layouts, alignment guarantees, 4-tier tag dispatching, and empty-set handling:
+- **[`docs/AGGREGATE_ARCHITECTURE.md`](AGGREGATE_ARCHITECTURE.md)**: Deep dive into `sqlite3_aggregate_context` storage, SFINAE return rank dispatching, and RAII destruction.

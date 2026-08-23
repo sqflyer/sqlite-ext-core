@@ -208,6 +208,22 @@ public:
     }
 
     /**
+     * @brief Register an Object-Oriented C++ Aggregate Function struct with SQLite bound to shared state.
+     * 
+     * @tparam State The state struct type managed by SqliteExtState<State>.
+     * @tparam T The aggregate struct/class implementing step() and finalize().
+     * @param db The SQLite database connection (SqliteDatabaseView, SqliteDatabaseOwned, or sqlite3*).
+     * @param name The SQL name of the aggregate function.
+     * @param num_args Expected argument count (-1 for variadic).
+     * @param deterministic Whether the aggregate is deterministic (default false).
+     * @return SQLITE_OK on success, or an error code.
+     */
+    template <typename State, typename T>
+    static inline int define_aggregate_with_state(SqliteDatabaseView db, const char* name, int num_args = -1, bool deterministic = false) {
+        return SqliteAggregate<T>::template define_with_state<State>(db, name, num_args, deterministic);
+    }
+
+    /**
      * @brief Register an Object-Oriented C++ Table-Valued Function (TVF) with SQLite.
      * 
      * @tparam T The iterator struct/class inheriting from SqliteTvfIterator.
@@ -218,6 +234,20 @@ public:
     template <typename T>
     static inline int define_tvf(SqliteDatabaseView db, const char* name) {
         return SqliteTvfModule<T>::define(db.get(), name);
+    }
+
+    /**
+     * @brief Register an Object-Oriented C++ Table-Valued Function (TVF) with SQLite bound to shared state.
+     * 
+     * @tparam State The state struct type managed by SqliteExtState<State>.
+     * @tparam T The iterator struct/class inheriting from SqliteTvfIterator.
+     * @param db The SQLite database connection (SqliteDatabaseView, SqliteDatabaseOwned, or sqlite3*).
+     * @param name The SQL name of the TVF.
+     * @return SQLITE_OK on success, or an error code.
+     */
+    template <typename State, typename T>
+    static inline int define_tvf_with_state(SqliteDatabaseView db, const char* name) {
+        return SqliteTvfModule<T>::template define_with_state<State>(db, name);
     }
 
 private:

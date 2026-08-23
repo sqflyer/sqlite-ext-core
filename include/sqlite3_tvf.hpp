@@ -2,8 +2,10 @@
 #define SQLITE3_TVF_HPP
 
 #include "sqlite3.h"
+#include "sqlite3_db.hpp"
 #include "sqlite3_aggregate.hpp" // Provides SqliteUdfArgs
 #include "sqlite3_allocator.hpp"
+#include "sqlite3_ext_state.hpp"
 
 // ============================================================================
 // TVF (TABLE-VALUED FUNCTION) FRAMEWORK
@@ -53,11 +55,11 @@ public:
     virtual bool eof() const = 0;
 
     /**
-     * @brief Output the data for a specific column in the current row.
+     * @brief Output the data for a specific column in the current row using SqliteContext.
      * @param ctx The SQLite context to write the result to.
      * @param col_idx The 0-based index of the column being requested.
      */
-    virtual void column(sqlite3_context* ctx, int col_idx) = 0;
+    virtual void column(SqliteContext ctx, int col_idx) = 0;
 
     /**
      * @brief Provide a unique row ID for the current row.
@@ -82,6 +84,19 @@ struct SqliteTvfModule {
     // The SQLite virtual table instance
     struct VTab {
         sqlite3_vtab base;
+        
+        /**
+         * @brief Holds the shared SqliteExtState Entry pointer passed as pClientData
+         * during sqlite3_create_module_v2.
+         * 
+         * STATE INJECTION ARCHITECTURE:
+         * Unlike Scalar UDFs and Aggregates where SQLite automatically passes `pApp`
+         * to `sqlite3_user_data(ctx)`, SQLite Virtual Table `xColumn` callbacks receive
+         * an ephemeral context where `sqlite3_user_data(ctx)` is NULL.
+         * By preserving `raw_state` here on the VTab, `xColumn` can inject it directly
+         * into `SqliteContext`, enabling O(1) single-instruction `ctx.state<T>()` retrieval.
+         */
+        void* raw_state;
     };
 
     // The SQLite cursor instance
@@ -92,11 +107,13 @@ struct SqliteTvfModule {
 
     // 1. xConnect / xCreate
     // TVFs are ephemeral (not backed by disk), so Connect and Create do the same thing.
-    static int xConnect(sqlite3* db, void* /*pAux*/, int /*argc*/, const char* const* /*argv*/, sqlite3_vtab** ppVtab, char** /*pzErr*/) {
+    static int xConnect(sqlite3* db, void* pAux, int /*argc*/, const char* const* /*argv*/, sqlite3_vtab** ppVtab, char** /*pzErr*/) {
         int rc = sqlite3_declare_vtab(db, T::schema());
         if (rc == SQLITE_OK) {
             // Allocate the VTab using our zero-dependency memory allocator
             VTab* pTab = sqlite_new<VTab>();
+            // Capture the shared state pointer (pAux) on the VTab instance for xColumn injection
+            pTab->raw_state = pAux;
             *ppVtab = &pTab->base;
         }
         return rc;
@@ -110,21 +127,24 @@ struct SqliteTvfModule {
     }
 
     // 3. xBestIndex
-    // This automagically maps SQL equality constraints into xFilter arguments.
-    // If a user queries `my_tvf(10, 20)`, SQLite presents them as equality constraints
-    // on the hidden columns in the WHERE clause.
-    static int xBestIndex(sqlite3_vtab* /*pVtab*/, sqlite3_index_info* pIdxInfo) {
+    static int xBestIndex(sqlite3_vtab* /*pVTab*/, sqlite3_index_info* pIdxInfo) {
         int usable_constraints = 0;
-        for (int i = 0; i < pIdxInfo->nConstraint; ++i) {
+        
+        for (int i = 0; i < pIdxInfo->nConstraint; i++) {
+            // Check if this is an equality constraint (=)
             if (pIdxInfo->aConstraint[i].op == SQLITE_INDEX_CONSTRAINT_EQ) {
                 int col = pIdxInfo->aConstraint[i].iColumn;
+                // Column 0 is the output value. 
+                // Columns 1..N are the hidden argument parameters!
                 if (col > 0) {
                     if (!pIdxInfo->aConstraint[i].usable) {
                         return SQLITE_CONSTRAINT;
                     }
 
+                    // Map the hidden column to the filter's argv array!
+                    // SQLite requires 1-based indexing for argvIndex.
                     pIdxInfo->aConstraintUsage[i].argvIndex = col;
-                    pIdxInfo->aConstraintUsage[i].omit = 1; 
+                    pIdxInfo->aConstraintUsage[i].omit = 1; // Tell SQLite the TVF handled this constraint internally
                     usable_constraints++;
                 }
             }
@@ -177,65 +197,105 @@ struct SqliteTvfModule {
     }
 
     // 9. xColumn
+    // Dispatches column output to the C++ iterator, injecting the VTab's raw_state pointer
+    // directly into SqliteContext so ctx.state<T>() executes in O(1) single CPU instruction.
     static int xColumn(sqlite3_vtab_cursor* cur, sqlite3_context* ctx, int i) {
         Cursor* pCur = reinterpret_cast<Cursor*>(cur);
-        pCur->iter->column(ctx, i);
+        VTab* pTab = reinterpret_cast<VTab*>(cur->pVtab);
+        SqliteContext sqlite_ctx(ctx, pTab ? pTab->raw_state : nullptr);
+        pCur->iter->column(sqlite_ctx, i);
         return SQLITE_OK;
     }
 
     // 10. xRowid
-    static int xRowid(sqlite3_vtab_cursor* cur, sqlite_int64* pRowid) {
+    static int xRowid(sqlite3_vtab_cursor* cur, sqlite3_int64* pRowid) {
         Cursor* pCur = reinterpret_cast<Cursor*>(cur);
         *pRowid = pCur->iter->rowid();
         return SQLITE_OK;
     }
 
-    // The static module instance to register with SQLite
-    static sqlite3_module module;
+    // Statically constructed module table
+    static constexpr sqlite3_module module_def = {
+        0,              // iVersion
+        xConnect,       // xCreate (same as xConnect for ephemeral TVFs)
+        xConnect,       // xConnect
+        xBestIndex,     // xBestIndex
+        xDisconnect,    // xDisconnect
+        xDisconnect,    // xDestroy (same as xDisconnect)
+        xOpen,          // xOpen
+        xClose,         // xClose
+        xFilter,        // xFilter
+        xNext,          // xNext
+        xEof,           // xEof
+        xColumn,        // xColumn
+        xRowid,         // xRowid
+        nullptr,        // xUpdate
+        nullptr,        // xBegin
+        nullptr,        // xSync
+        nullptr,        // xCommit
+        nullptr,        // xRollback
+        nullptr,        // xFindFunction
+        nullptr,        // xRename
+        nullptr,        // xSavepoint
+        nullptr,        // xRelease
+        nullptr,        // xRollbackTo
+        nullptr,        // xShadowName
+        nullptr         // xIntegrity
+    };
 
     /**
-     * @brief Define and register this TVF with SQLite.
-     * @param db The SQLite database connection.
-     * @param name The name of the table-valued function.
+     * @brief Register the C++ TVF iterator as a SQLite Table-Valued Function.
+     * 
+     * @param db The SQLite database connection (SqliteDatabaseView, SqliteDatabaseOwned, or sqlite3*).
+     * @param name The SQL name of the function (e.g., generate_series).
      * @return SQLITE_OK on success, or an error code.
      */
-    static inline int define(sqlite3* db, const char* name) {
-        // Enforce strict API contract at compile-time (schema must exist)
+    static int define(SqliteDatabaseView db, const char* name) {
+        // Enforce that the user provided a static schema() function
         static_assert(sizeof(T::schema()) > 0, 
-                      "TVF class must define: static constexpr const char* schema()");
+            "TVF iterator struct must define a 'static constexpr const char* schema()' method!");
 
-        return sqlite3_create_module(db, name, &module, nullptr);
+        return sqlite3_create_module(
+            db.get(), 
+            name, 
+            &module_def, 
+            nullptr
+        );
+    }
+
+    /**
+     * @brief Register the C++ TVF iterator as a Stateful Table-Valued Function bound to shared state.
+     * 
+     * Passes raw_state as pClientData into sqlite3_create_module_v2 so that xConnect can capture
+     * it on the VTab and inject it into SqliteContext during xColumn evaluation.
+     * Automatically registers SqliteExtState<State>::destructor as xDestroy for memory safety.
+     * 
+     * @tparam State The state struct type managed by SqliteExtState<State>.
+     * @param db The SQLite database connection (SqliteDatabaseView, SqliteDatabaseOwned, or sqlite3*).
+     * @param name The SQL name of the function.
+     * @return SQLITE_OK on success, or an error code.
+     */
+    template <typename State>
+    static int define_with_state(SqliteDatabaseView db, const char* name) {
+        static_assert(sizeof(T::schema()) > 0, 
+            "TVF iterator struct must define a 'static constexpr const char* schema()' method!");
+
+        // Initialize / retain refcount for this connection's state Entry
+        void* raw_state = SqliteExtState<State>::init(db.get());
+
+        // Bind raw_state as pClientData and SqliteExtState destructor as xDestroy
+        return sqlite3_create_module_v2(
+            db.get(), 
+            name, 
+            &module_def, 
+            raw_state,
+            SqliteExtState<State>::destructor
+        );
     }
 };
 
-// Define the static module instance
+// Out-of-line definition for static constexpr member
 template <typename T>
-sqlite3_module SqliteTvfModule<T>::module = {
-    0,                      // iVersion
-    SqliteTvfModule<T>::xConnect,    // xCreate (Virtual Tables normally use Create to make backing tables)
-    SqliteTvfModule<T>::xConnect,    // xConnect
-    SqliteTvfModule<T>::xBestIndex,  // xBestIndex
-    SqliteTvfModule<T>::xDisconnect, // xDisconnect
-    SqliteTvfModule<T>::xDisconnect, // xDestroy
-    SqliteTvfModule<T>::xOpen,       // xOpen
-    SqliteTvfModule<T>::xClose,      // xClose
-    SqliteTvfModule<T>::xFilter,     // xFilter
-    SqliteTvfModule<T>::xNext,       // xNext
-    SqliteTvfModule<T>::xEof,        // xEof
-    SqliteTvfModule<T>::xColumn,     // xColumn
-    SqliteTvfModule<T>::xRowid,      // xRowid
-    nullptr,                // xUpdate
-    nullptr,                // xBegin
-    nullptr,                // xSync
-    nullptr,                // xCommit
-    nullptr,                // xRollback
-    nullptr,                // xFindFunction
-    nullptr,                // xRename
-    nullptr,                // xSavepoint
-    nullptr,                // xRelease
-    nullptr,                // xRollbackTo
-    nullptr,                // xShadowName
-    nullptr                 // xIntegrity
-};
+constexpr sqlite3_module SqliteTvfModule<T>::module_def;
 
 #endif // SQLITE3_TVF_HPP

@@ -40,9 +40,9 @@ struct SeriesIterator : public SqliteTvfIterator {
         return m_current < m_stop;
     }
 
-    void column(sqlite3_context* ctx, int col_idx) override {
+    void column(SqliteContext ctx, int col_idx) override {
         if (col_idx == 0) {
-            sqlite3_result_int64(ctx, m_current);
+            ctx.result_int64(m_current);
         }
     }
 

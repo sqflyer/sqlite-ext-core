@@ -287,15 +287,20 @@ public:
         return entry ? &entry->state : nullptr;
     }
 
-    /** @brief Fast-path fetch from context user_data. */
+    /** @brief Fast-path fetch from raw sqlite3_context user_data. */
     static T* from_context(sqlite3_context *ctx) {
         if (!ctx) return nullptr;
         Entry *entry = (Entry *)sqlite3_user_data(ctx);
         return entry ? &entry->state : nullptr;
     }
 
-    static inline T* from_context(SqliteContext ctx) {
-        return from_context(ctx.get());
+    /** @brief Fast-path fetch from injected SqliteContext or any context wrapper. */
+    template <typename TContext>
+    static inline auto from_context(TContext ctx) -> T* {
+        void* data = ctx.user_data();
+        if (!data) return nullptr;
+        Entry *entry = (Entry *)data;
+        return &entry->state;
     }
 
     /**

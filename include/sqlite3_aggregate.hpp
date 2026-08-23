@@ -2,14 +2,15 @@
 #define SQLITE3_AGGREGATE_HPP
 
 #include <sqlite3.h>
+#include "sqlite3_db.hpp"
 #include "sqlite3_value.hpp"
 #include "sqlite3_allocator.hpp"
+#include "sqlite3_ext_state.hpp"
 
 /**
  * @brief Forward declaration of SqliteUdfArgs.
  */
 class SqliteUdfArgs;
-
 
 /**
  * @brief Base marker tag struct for compile-time inheritance verification.
@@ -30,7 +31,6 @@ protected:
     ~SqliteAggregateBase() = default;
 
 public:
-
     /**
      * @brief Aggregation step callback invoked for each row.
      * @param args Bounds-safe wrapper over row argument values.
@@ -40,11 +40,11 @@ public:
     }
 
     /**
-     * @brief Aggregation step callback with access to sqlite3_context.
-     * @param ctx The SQLite context handle.
+     * @brief Aggregation step callback with access to SqliteContext.
+     * @param ctx The SQLite context wrapper.
      * @param args Bounds-safe wrapper over row argument values.
      */
-    virtual void step(sqlite3_context* ctx, SqliteUdfArgs args) {
+    virtual void step(SqliteContext ctx, SqliteUdfArgs args) {
         (void)ctx;
         step(args);
     }
@@ -55,6 +55,16 @@ public:
      */
     virtual ReturnType finalize() {
         return ReturnType();
+    }
+
+    /**
+     * @brief Aggregation finalize callback with access to SqliteContext.
+     * @param ctx The SQLite context wrapper.
+     * @return The strongly-typed aggregation result.
+     */
+    virtual ReturnType finalize(SqliteContext ctx) {
+        (void)ctx;
+        return finalize();
     }
 };
 
@@ -67,7 +77,6 @@ protected:
     ~SqliteAggregateBase() = default;
 
 public:
-
     /**
      * @brief Aggregation step callback invoked for each row.
      * @param args Bounds-safe wrapper over row argument values.
@@ -77,20 +86,20 @@ public:
     }
 
     /**
-     * @brief Aggregation step callback with access to sqlite3_context.
-     * @param ctx The SQLite context handle.
+     * @brief Aggregation step callback with access to SqliteContext.
+     * @param ctx The SQLite context wrapper.
      * @param args Bounds-safe wrapper over row argument values.
      */
-    virtual void step(sqlite3_context* ctx, SqliteUdfArgs args) {
+    virtual void step(SqliteContext ctx, SqliteUdfArgs args) {
         (void)ctx;
         step(args);
     }
 
     /**
-     * @brief Aggregation finalize callback with direct access to sqlite3_context.
-     * @param ctx The SQLite context handle to write results or errors to.
+     * @brief Aggregation finalize callback with direct access to SqliteContext.
+     * @param ctx The SQLite context wrapper to write results or errors to.
      */
-    virtual void finalize(sqlite3_context* ctx) {
+    virtual void finalize(SqliteContext ctx) {
         (void)ctx;
     }
 };
@@ -104,37 +113,18 @@ namespace SqliteAggregateDetail {
     template <typename Base, typename Derived>
     struct is_base_of {
     private:
-        // We use arrays of different sizes to differentiate between function overloads at compile time.
-        // sizeof(yes) == 1, sizeof(no) == 2.
         typedef char yes[1];
         typedef char no[2];
 
-        // Overload 1: Selected if Derived* can be implicitly cast to Base*.
-        // This only happens if Derived inherits from Base.
         static yes& test(Base*);
-
-        // Overload 2: Selected if the cast fails.
-        // Varargs (...) have the lowest possible priority in C++ overload resolution.
         static no&  test(...);
 
     public:
-        // We pretend to call test() with a Derived*. The sizeof() operator evaluates 
-        // the return type's size without executing any code. If the inheritance is valid,
-        // it chooses test(Base*) returning `yes`. Otherwise, it falls back to test(...) returning `no`.
         static const bool value = sizeof(test(static_cast<Derived*>(nullptr))) == sizeof(yes);
     };
 
     /**
      * @brief Overloaded helpers to write return values directly to the SQLite execution context.
-     * 
-     * When your Aggregate struct's `finalize()` method returns a value (like `double`, `int`, 
-     * or a C++ wrapper like `SqliteStringOwned`), these overloads automatically route it 
-     * to the correct underlying `sqlite3_result_...` C-API function without any runtime overhead.
-     * 
-     * BEST PRACTICE: For strings and blobs, it is highly recommended to return `SqliteStringOwned` 
-     * or `SqliteBlobOwned` from your `finalize()` method rather than raw pointers. The SFINAE 
-     * dispatcher will automatically call their `.result(ctx)` method, which safely manages 
-     * memory ownership and lifetime with SQLite.
      */
     inline void set_sqlite_result(sqlite3_context* ctx, int val) { sqlite3_result_int(ctx, val); }
     inline void set_sqlite_result(sqlite3_context* ctx, sqlite3_int64 val) { sqlite3_result_int64(ctx, val); }
@@ -157,41 +147,19 @@ namespace SqliteAggregateDetail {
 
     /**
      * @brief Tag dispatch priority hierarchy for unambiguous SFINAE method resolution.
-     *
-     * When SFINAE (Substitution Failure Is Not An Error) finds multiple matching templates,
-     * the compiler will throw an "ambiguous call" error unless one is strictly preferred.
-     * By passing PriorityRank0, the compiler will try PriorityRank0 first. If substitution
-     * fails (e.g. the method signature doesn't exist), it automatically falls back up the 
-     * inheritance chain to PriorityRank1, and then PriorityRank2, eliminating ambiguity.
-     *
-     * WHY THIS IS NEEDED:
-     * Because `SqliteAggregateBase` provides a default `virtual void step(SqliteUdfArgs args)`, 
-     * every derived aggregate struct automatically inherits it. If a user writes a custom
-     * context-aware `step(sqlite3_context*, SqliteUdfArgs)`, their struct now secretly has BOTH methods.
-     * 
-     * When SFINAE evaluates `decltype(agg->step(ctx, args))` and `decltype(agg->step(args))`,
-     * BOTH are technically valid, so the compiler doesn't know which one to pick and throws
-     * an "ambiguous call to overloaded function" error.
-     * 
-     * THE SOLUTION:
-     * We pass a dummy `PriorityRank` object to force the compiler to check them in a strict order.
-     * The compiler tries to match the arguments exactly first (`PriorityRank0`). 
-     * - If `step(ctx, args)` is valid, it picks the `PriorityRank0` overload immediately.
-     * - If it's invalid, it falls back to the `PriorityRank1` overload because `PriorityRank0`
-     *   inherits from `PriorityRank1` and can be implicitly cast to it.
-     * This dummy inheritance tree completely eliminates the ambiguity!
      */
-    struct PriorityRank2 {};                                // Lowest priority fallback
-    struct PriorityRank1 : PriorityRank2 {};                // Medium priority fallback
-    struct PriorityRank0 : PriorityRank1 {};                // Highest priority (tried first)
+    struct PriorityRank3 {};
+    struct PriorityRank2 : PriorityRank3 {};
+    struct PriorityRank1 : PriorityRank2 {};
+    struct PriorityRank0 : PriorityRank1 {};
 
     /**
-     * @brief SFINAE helper to invoke `agg->step(ctx, args)` or `agg->step(args)`.
+     * @brief SFINAE helper to invoke `agg->step(SqliteContext(ctx), args)` or `agg->step(args)`.
      */
     template <typename U>
     inline auto invoke_step_impl(U* agg, sqlite3_context* ctx, SqliteUdfArgs args, PriorityRank0)
-        -> decltype(agg->step(ctx, args), void()) {
-        agg->step(ctx, args);
+        -> decltype(agg->step(SqliteContext(ctx), args), void()) {
+        agg->step(SqliteContext(ctx), args);
     }
 
     template <typename U>
@@ -206,22 +174,28 @@ namespace SqliteAggregateDetail {
     }
 
     /**
-     * @brief SFINAE helper to invoke `agg->finalize(ctx)`, `set_sqlite_result(ctx, agg->finalize())`, or `agg->finalize()`.
+     * @brief SFINAE helper to invoke typed finalize(ctx), void finalize(ctx), typed finalize(), or void finalize().
      */
     template <typename U>
     inline auto invoke_finalize_impl(U* agg, sqlite3_context* ctx, PriorityRank0)
-        -> decltype(agg->finalize(ctx), void()) {
-        agg->finalize(ctx);
+        -> decltype(set_sqlite_result(ctx, agg->finalize(SqliteContext(ctx))), void()) {
+        set_sqlite_result(ctx, agg->finalize(SqliteContext(ctx)));
     }
 
     template <typename U>
     inline auto invoke_finalize_impl(U* agg, sqlite3_context* ctx, PriorityRank1)
+        -> decltype(agg->finalize(SqliteContext(ctx)), void()) {
+        agg->finalize(SqliteContext(ctx));
+    }
+
+    template <typename U>
+    inline auto invoke_finalize_impl(U* agg, sqlite3_context* ctx, PriorityRank2)
         -> decltype(set_sqlite_result(ctx, agg->finalize()), void()) {
         set_sqlite_result(ctx, agg->finalize());
     }
 
     template <typename U>
-    inline auto invoke_finalize_impl(U* agg, sqlite3_context*, PriorityRank2)
+    inline auto invoke_finalize_impl(U* agg, sqlite3_context*, PriorityRank3)
         -> decltype(agg->finalize(), void()) {
         agg->finalize();
     }
@@ -262,28 +236,55 @@ public:
     /**
      * @brief Register a C++ struct as an Aggregate Function with SQLite.
      * 
-     * @param db The SQLite database connection handle.
+     * @param db The SQLite database connection (SqliteDatabaseView, SqliteDatabaseOwned, or sqlite3*).
      * @param name The SQL function name.
      * @param num_args The expected number of arguments (-1 for variadic).
      * @param deterministic Whether the function is deterministic (default true).
      * @return SQLITE_OK on success, or an error code.
      */
-    static int define(sqlite3* db, const char* name, int num_args = -1, bool deterministic = true) {
-        int flags = SQLITE_UTF8;
-        if (deterministic) {
-            flags |= SQLITE_DETERMINISTIC;
-        }
+    static int define(SqliteDatabaseView db, const char* name, int num_args = -1, bool deterministic = true) {
+        int flags = SQLITE_UTF8 | (deterministic ? SQLITE_DETERMINISTIC : 0);
 
         return sqlite3_create_function_v2(
-            db,
+            db.get(),
             name,
             num_args,
             flags,
-            nullptr,
-            nullptr,
+            nullptr, // pApp
+            nullptr, // xFunc
             &SqliteAggregate<T>::step_proxy,
             &SqliteAggregate<T>::final_proxy,
-            nullptr
+            nullptr  // xDestroy
+        );
+    }
+
+    /**
+     * @brief Register a C++ struct as a Stateful Aggregate Function with SQLite,
+     * binding a shared state type (SqliteExtState<State>) to SQLite's user_data (pApp)
+     * with automated xDestroy garbage collection.
+     * 
+     * @tparam State The state struct type managed by SqliteExtState<State>.
+     * @param db The SQLite database connection (SqliteDatabaseView, SqliteDatabaseOwned, or sqlite3*).
+     * @param name The SQL function name.
+     * @param num_args The expected number of arguments (-1 for variadic).
+     * @param deterministic Whether the function is deterministic (default false).
+     * @return SQLITE_OK on success, or an error code.
+     */
+    template <typename State>
+    static int define_with_state(SqliteDatabaseView db, const char* name, int num_args = -1, bool deterministic = false) {
+        void* raw_state = SqliteExtState<State>::init(db.get());
+        int flags = SQLITE_UTF8 | (deterministic ? SQLITE_DETERMINISTIC : 0);
+
+        return sqlite3_create_function_v2(
+            db.get(),
+            name,
+            num_args,
+            flags,
+            raw_state, // Passed as pApp / user_data!
+            nullptr,   // xFunc
+            &SqliteAggregate<T>::step_proxy,
+            &SqliteAggregate<T>::final_proxy,
+            SqliteExtState<State>::destructor // Automatically garbage-collected by SQLite!
         );
     }
 

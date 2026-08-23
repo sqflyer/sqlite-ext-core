@@ -244,11 +244,11 @@ struct EmptyNullAgg : public SqliteAggregateBase<void> {
         count++;
     }
 
-    void finalize(sqlite3_context* ctx) override {
+    void finalize(SqliteContext ctx) override {
         if (count == 0) {
-            sqlite3_result_null(ctx);
+            ctx.result_null();
         } else {
-            sqlite3_result_double(ctx, total / count);
+            ctx.result_double(total / count);
         }
     }
 };
@@ -303,16 +303,16 @@ void test_group_by_aggregates(sqlite3* db) {
 struct ErrorThrowingAgg : public SqliteAggregateBase<void> {
     bool has_error = false;
 
-    void step(sqlite3_context* ctx, SqliteUdfArgs args) override {
+    void step(SqliteContext ctx, SqliteUdfArgs args) override {
         if (args[0].as_double() < 0) {
             has_error = true;
-            sqlite3_result_error(ctx, "Negative values not allowed", -1);
+            ctx.result_error("Negative values not allowed");
         }
     }
 
-    void finalize(sqlite3_context* ctx) override {
+    void finalize(SqliteContext ctx) override {
         if (!has_error) {
-            sqlite3_result_text(ctx, "All positive", -1, SQLITE_STATIC);
+            ctx.result_text("All positive", -1, SQLITE_STATIC);
         }
     }
 };
