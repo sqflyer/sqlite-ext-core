@@ -216,27 +216,30 @@ An object-oriented, zero-overhead routing framework for building advanced SQLite
 - [Virtual Tables README](docs/VTAB_README.md)
 - [Virtual Tables Architecture](docs/VTAB_ARCHITECTURE.md)
 
-### 16. Extension Creation Macros (`sqlite3_ext_creator.hpp`)
-Zero-boilerplate entrypoint macros and dynamic symbol exports for creating native loadable SQLite extensions in C++11.
+### 16. Extension Creation Macros (`sqlite3_ext_creator.h` / `sqlite3_ext_creator.hpp`)
+Zero-boilerplate entrypoint macros and dynamic symbol exports for creating native loadable SQLite extensions in Pure C (C99/C11) and modern C++11.
 
 #### Key Features:
 - **Zero-Boilerplate Entrypoints**: Replaces tedious `SQLITE_EXTENSION_INIT1`, `SQLITE_EXTENSION_INIT2(pApi)`, and `extern "C"` boilerplate with single-line macros (`SQLITE_EXTENSION_ENTRYPOINT(my_ext, db)`).
+- **Dual C and C++ Support**: Available as `sqlite3_ext_creator.h` for raw `sqlite3*` C extensions, and `sqlite3_ext_creator.hpp` for modern `SqliteDatabaseView` and `SqliteExtensionInitContext` C++ extensions.
 - **Cross-Platform Symbol Visibility**: Handles `__declspec(dllexport)` on Windows and `__attribute__((visibility("default")))` on Linux/macOS automatically.
-- **Modern RAII Connection Lifecycle**: Provides `SqliteDatabaseView` or `SqliteExtensionInitContext` directly inside initialization callbacks.
 - **Dynamic Loader Helpers**: `SqliteDatabaseView::enable_load_extension()` and `SqliteDatabaseView::load_extension()` allow programmatic dynamic loading from host C++ applications.
 
 #### Documentation:
-- [Extension Quickstart Tutorial & Examples](examples/README.md)
+- [C++ Extension Quickstart & Tutorial](examples/README.md)
+- [Pure C Extension Quickstart & Tutorial](example-c/README.md)
 - [Extension README](docs/EXTENSION_README.md)
 - [Extension Architecture](docs/EXTENSION_ARCHITECTURE.md)
 
-### 17. Unified Umbrella Header & Entry Point (`sqlite3_ext.hpp`)
-Master umbrella header and unified registration facade (`SqliteExt`) providing symmetrical registration across all extension subsystems:
-- **Scalar UDFs**: `SqliteExt::define_scalar`, `SqliteExt::define_scalar_with_state`
-- **Aggregates**: `SqliteExt::define_aggregate`, `SqliteExt::define_aggregate_with_state`
-- **Table-Valued Functions**: `SqliteExt::define_tvf`, `SqliteExt::define_tvf_with_state`
-- **Virtual Tables**: `SqliteExt::define_vtab`, `SqliteExt::define_vtab_with_state`
-- **Shared State**: `SqliteExt::init_state`, `SqliteExt::get_state`
+### 17. Unified Umbrella Headers & Entry Points (`sqlite3_ext.h` / `sqlite3_ext.hpp`)
+Master umbrella headers providing full subsystem access:
+- **Pure C (`sqlite3_ext.h`)**: Unifies `sqlite3_atomic.h`, `sqlite3_tiny_lock.h`, `sqlite3_rw_lock.h`, `sqlite3_smart_ptr.h`, and `sqlite3_ext_state.h`.
+- **C++ (`sqlite3_ext.hpp`)**: Master umbrella header and unified registration facade (`SqliteExt`) providing symmetrical registration across all extension subsystems:
+  - **Scalar UDFs**: `SqliteExt::define_scalar`, `SqliteExt::define_scalar_with_state`
+  - **Aggregates**: `SqliteExt::define_aggregate`, `SqliteExt::define_aggregate_with_state`
+  - **Table-Valued Functions**: `SqliteExt::define_tvf`, `SqliteExt::define_tvf_with_state`
+  - **Virtual Tables**: `SqliteExt::define_vtab`, `SqliteExt::define_vtab_with_state`
+  - **Shared State**: `SqliteExt::init_state`, `SqliteExt::get_state`
 
 ## Building and Testing
 
@@ -246,9 +249,16 @@ To run the integration tests across all C and C++ subsystems:
 make test
 ```
 
-### 2. Run Extension Demo
-To compile and test the turnkey example extension in [`examples/`](examples/):
+### 2. Run C++ Extension Demo
+To compile and test the turnkey C++ example extension in [`examples/`](examples/):
 ```bash
 make example
 # or: cd examples && make run
+```
+
+### 3. Run Pure C Extension Demo
+To compile and test the turnkey pure C example extension in [`example-c/`](example-c/):
+```bash
+make example-c
+# or: cd example-c && make run
 ```

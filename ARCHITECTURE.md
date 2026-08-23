@@ -71,10 +71,11 @@ For a deeper dive into the specific mechanics and C++ paradigms used in individu
 - [**Statements**](docs/STATEMENT_ARCHITECTURE.md): Zero-cost query builders, iterators, and prepared statement caching.
 
 ### Extensibility (UDFs, Virtual Tables & Extensions)
-- [**Extension Creator (`sqlite3_ext_creator.hpp`)**](docs/EXTENSION_ARCHITECTURE.md): Zero-boilerplate entrypoint definition, dynamic symbol export, and routine dispatch initialization.
+- [**Extension Creators (`sqlite3_ext_creator.h` / `.hpp`)**](docs/EXTENSION_ARCHITECTURE.md): Zero-boilerplate entrypoint definition, dynamic symbol export, and routine dispatch initialization for Pure C and C++.
 - [**Scalar UDFs**](docs/UDF_ARCHITECTURE.md): Compile-time C-callback generation for User-Defined Functions.
 - [**Aggregate UDFs**](docs/AGGREGATE_ARCHITECTURE.md): Deterministic memory layouts for `xStep` and `xFinal` aggregations.
 - [**Table-Valued Functions (TVF)**](docs/TVF_ARCHITECTURE.md): Statically generated `sqlite3_module` structs mapping to strictly-typed C++ classes.
 - [**Virtual Tables (VTAB)**](docs/VTAB_ARCHITECTURE.md): Polymorphic standard-layout routing, transactions, savepoints, and direct context state injection.
-- [**Unified Extensibility (`SqliteExt`)**](include/sqlite3_ext.hpp): Symmetrical registration facade combining UDFs, Aggregates, TVFs, and Virtual Tables.
-- [**Extension Examples & Tutorial**](examples/README.md): Turnkey example showcasing compilation, testing, and multi-language loading of SQLite extensions.
+- [**Unified Extensibility (`SqliteExt` / `sqlite3_ext.h`)**](include/sqlite3_ext.hpp): Symmetrical registration facade combining UDFs, Aggregates, TVFs, and Virtual Tables.
+- [**C++ Extension Tutorial**](examples/README.md): Turnkey C++ example showcasing compilation, testing, and multi-language loading.
+- [**Pure C Extension Tutorial**](example-c/README.md): Turnkey Pure C (C99/C11) example demonstrating state management and UDF registration.

@@ -113,6 +113,12 @@ SQLITE_DEFAULT_EXTENSION_ENTRYPOINT(db) {
 }
 ```
 
+### Pure C Macro Suite (`sqlite3_ext_creator.h`)
+For extensions implemented in Pure C (C99/C11), dedicated macros provide raw `sqlite3*` dispatching without C++ name-mangling or class wrappers:
+- `SQLITE_C_EXTENSION_ENTRYPOINT(ext_name, db)`
+- `SQLITE_C_DEFAULT_EXTENSION_ENTRYPOINT(db)`
+- `SQLITE_C_EXTENSION_ENTRYPOINT_ERR(ext_name, db, err)`
+
 ---
 
 ## 4. Context Wrappers & Memory Layout

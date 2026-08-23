@@ -46,6 +46,9 @@ test-cpp-extension:
 example:
 	@$(MAKE) -C examples run
 
+example-c:
+	@$(MAKE) -C example-c run
+
 test-locks:
 	$(MAKE) -C tests/locks test
 
@@ -75,4 +78,5 @@ clean:
 	$(MAKE) -C tests/cpp_vtab clean
 	$(MAKE) -C tests/cpp_extension clean
 	$(MAKE) -C examples clean
+	$(MAKE) -C example-c clean
 

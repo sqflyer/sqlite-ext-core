@@ -1,41 +1,41 @@
-# SQLite C++ Extension Framework (`sqlite3_ext_creator.hpp`)
+# SQLite Native Extension Framework (`sqlite3_ext_creator.h` / `sqlite3_ext_creator.hpp`)
 
-`sqlite3_ext_creator.hpp` provides an industrial-grade, zero-overhead C++11 framework for developing native, dynamically loadable SQLite extensions (`.so`, `.dll`, `.dylib`). It eliminates the error-prone C boilerplate, symbol visibility decorators, and dispatch table initialization rituals traditionally required to write SQLite extensions, while remaining completely freestanding (`-nostdlib++`, `-fno-exceptions`, `-fno-rtti`).
+`sqlite3_ext_creator.h` (Pure C) and `sqlite3_ext_creator.hpp` (C++11) provide an industrial-grade, zero-overhead framework for developing native, dynamically loadable SQLite extensions (`.so`, `.dll`, `.dylib`). They eliminate the error-prone C boilerplate, symbol visibility decorators, and dispatch table initialization rituals traditionally required to write SQLite extensions, while remaining completely freestanding (`-nostdlib++`, `-fno-exceptions`, `-fno-rtti`).
 
 ---
 
 ## 1. Overview & Philosophy
 
-SQLite loadable extensions are compiled shared libraries dynamically linked at runtime via SQLite's `sqlite3_load_extension` C-API or the `.load` CLI command. Writing extensions in C++ has historically been fraught with subtle pitfalls:
+SQLite loadable extensions are compiled shared libraries dynamically linked at runtime via SQLite's `sqlite3_load_extension` C-API or the `.load` CLI command. Writing extensions has historically been fraught with subtle pitfalls:
 
 - **Dispatch Table Initialization**: Unlike host applications that link against SQLite directly (`-lsqlite3`), loadable extensions receive SQLite's API functions via an indirect routine dispatch table (`sqlite3_api`). A single misplaced include or missing initialization macro leads to undefined symbol crashes.
 - **ABI Name Mangling**: C++ compilers mangle function names by default, preventing SQLite's dynamic loader from resolving entrypoints without explicit `extern "C"` declarations.
 - **Platform Linker Export Decorators**: Dynamic symbols must be exported using compiler-specific attributes (`__declspec(dllexport)` on MSVC/MinGW, `__attribute__((visibility("default")))` on GCC/Clang).
-- **Macro Collisions**: SQLite internally reserves `SQLITE_EXTENSION_INIT1`, `SQLITE_EXTENSION_INIT2`, and `SQLITE_EXTENSION_INIT3`. Naming developer macros identically leads to macro shadowing and preprocessor conflicts.
-- **Freestanding Memory Constraints**: Standard C++ libraries (`<iostream>`, `<memory>`, `<vector>`) inject heavy runtime dependencies and exceptions.
+- **Macro Collisions**: SQLite internally reserves `SQLITE_EXTENSION_INIT1`, `SQLITE_EXTENSION_INIT2`, and `SQLITE_EXTENSION_INIT3`. The framework avoids macro name collisions by providing cleanly namespaced entrypoint macros.
+- **Freestanding Memory Constraints**: Standard libraries (`<iostream>`, `<memory>`, `<vector>`) inject heavy runtime dependencies and exceptions.
 
-`sqlite3_ext_creator.hpp` solves all of these challenges seamlessly.
+The extension framework solves all of these challenges seamlessly for both Pure C and C++ development.
 
 ---
 
 ## 2. Features Matrix
 
-| Feature | Description |
-| :--- | :--- |
-| **Zero Boilerplate** | Define full exported extension entrypoints in a single intuitive macro block. |
-| **Collision-Free Namespace** | Cleanly named `SQLITE_EXTENSION_ENTRYPOINT` to prevent colliding with SQLite's internal macros. |
-| **Cross-Platform Visibility** | Automatic symbol export for Windows (MSVC & MinGW), Linux (GCC & Clang), and macOS. |
-| **Modern C++ Lifecycle** | Direct access to `SqliteDatabaseView` and `SqliteContext` without raw pointer management. |
-| **Stateful Extensions** | Seamless integration with `SqliteExtState<T>` and `SqliteUdf::define_with_state`. |
-| **Freestanding & `-nostdlib++`** | 100% header-only, zero dependencies on `libstdc++`/`libc++`, zero dynamic heap overhead. |
-| **Safe Error Reporting** | Formatted diagnostic strings allocated via SQLite's internal string engine (`sqlite3_mprintf`). |
-| **Full Ecosystem Support** | Register Scalar UDFs, Aggregates, Table-Valued Functions (TVFs), and Virtual Tables in one place. |
+| Feature | C++ (`sqlite3_ext_creator.hpp`) | Pure C (`sqlite3_ext_creator.h`) |
+| :--- | :--- | :--- |
+| **Header Language** | Modern C++11 (`-nostdlib++`) | Pure C99/C11 (ANSI C) |
+| **Named Entrypoint** | `SQLITE_EXTENSION_ENTRYPOINT(ext, db)` | `SQLITE_C_EXTENSION_ENTRYPOINT(ext, db)` |
+| **Default Entrypoint** | `SQLITE_DEFAULT_EXTENSION_ENTRYPOINT(db)` | `SQLITE_C_DEFAULT_EXTENSION_ENTRYPOINT(db)` |
+| **Error Handling** | `SQLITE_EXTENSION_ENTRYPOINT_CTX(ext, ctx)` | `SQLITE_C_EXTENSION_ENTRYPOINT_ERR(ext, db, err)` |
+| **Database Parameter** | `SqliteDatabaseView` or `SqliteExtensionInitContext` | Raw `sqlite3*` handle |
+| **Symbol Visibility** | Automatic `dllexport` / `visibility("default")` | Automatic `dllexport` / `visibility("default")` |
+| **Ecosystem Support** | Scalar UDFs, Aggregates, TVFs, Virtual Tables | Scalar UDFs, Aggregates, Virtual Tables |
+| **Shared State** | `SqliteExtState<T>` (RAII guards) | `SQLITE_EXTENSION_STATE_DECLARE` / `DEFINE` |
 
 ---
 
-## 3. Quickstart Tutorial
+## 3. Quickstart Tutorials
 
-### Step 1: Write the Extension (`my_extension.cpp`)
+### 3.1 C++ Extension Quickstart (`my_extension.cpp`)
 
 ```cpp
 #include "sqlite3_ext_creator.hpp"
@@ -65,17 +65,49 @@ static void ext_greet(SqliteContext ctx, SqliteUdfArgs args) {
     res.result(ctx);
 }
 
-// 3. Define the Extension Entrypoint
+// 3. Define the Extension Entrypoint: sqlite3_my_extension_init
 SQLITE_EXTENSION_ENTRYPOINT(my_extension, db) {
-    int rc = SqliteUdf::define(db, "ext_add", 2, ext_add);
+    int rc = SqliteExt::define_scalar(db, "ext_add", 2, ext_add);
     if (rc != SQLITE_OK) return rc;
 
-    rc = SqliteUdf::define(db, "ext_greet", 1, ext_greet);
+    rc = SqliteExt::define_scalar(db, "ext_greet", 1, ext_greet);
     if (rc != SQLITE_OK) return rc;
 
     return SQLITE_OK;
 }
 ```
+
+*For complete turnkey examples, see [`examples/README.md`](../examples/README.md).*
+
+---
+
+### 3.2 Pure C Extension Quickstart (`my_c_extension.c`)
+
+```c
+#include "sqlite3_ext_creator.h"
+
+// 1. Scalar Function
+static void c_add_func(sqlite3_context *ctx, int argc, sqlite3_value **argv) {
+    if (argc < 2) {
+        sqlite3_result_error(ctx, "c_add requires 2 arguments", -1);
+        return;
+    }
+    sqlite3_int64 a = sqlite3_value_int64(argv[0]);
+    sqlite3_int64 b = sqlite3_value_int64(argv[1]);
+    sqlite3_result_int64(ctx, a + b);
+}
+
+// 2. Define Entrypoint: sqlite3_my_c_ext_init
+SQLITE_C_EXTENSION_ENTRYPOINT(my_c_ext, db) {
+    return sqlite3_create_function(
+        db, "c_add", 2, 
+        SQLITE_UTF8 | SQLITE_DETERMINISTIC, 
+        NULL, c_add_func, NULL, NULL
+    );
+}
+```
+
+*For complete Pure C state management examples, see [`example-c/README.md`](../example-c/README.md).*
 
 ---
 
@@ -83,16 +115,26 @@ SQLITE_EXTENSION_ENTRYPOINT(my_extension, db) {
 
 ### Linux / Unix (GCC / Clang)
 ```bash
+# C++ Extension
 g++ -shared -fPIC -O2 -std=c++11 -Wall -Wextra \
     -fno-exceptions -fno-rtti -nostdlib++ \
     -I./include -o libmy_extension.so my_extension.cpp
+
+# Pure C Extension
+gcc -shared -fPIC -O2 -std=c99 -Wall -Wextra \
+    -I./include -o libmy_c_ext.so my_c_extension.c
 ```
 
 ### Windows (MSYS2 / MinGW GCC)
 ```bash
+# C++ Extension
 g++ -shared -fPIC -O2 -std=c++11 -Wall -Wextra \
     -fno-exceptions -fno-rtti -nostdlib++ \
     -I./include -o libmy_extension.dll my_extension.cpp
+
+# Pure C Extension
+gcc -shared -fPIC -O2 -std=c99 -Wall -Wextra \
+    -I./include -o libmy_c_ext.dll my_c_extension.c
 ```
 
 ### Windows (MSVC `cl.exe`)
@@ -173,36 +215,30 @@ print(cur.fetchone()[0]) # 350
 
 ## 6. Comprehensive API Reference
 
-### 6.1 `SQLITE_EXTENSION_ENTRYPOINT(ext_name, db_var)`
+### 6.1 C++ Macros (`sqlite3_ext_creator.hpp`)
+
+#### `SQLITE_EXTENSION_ENTRYPOINT(ext_name, db_var)`
 Defines a named exported entrypoint function `sqlite3_<ext_name>_init`.
 
 ```cpp
 SQLITE_EXTENSION_ENTRYPOINT(my_analytics, db) {
     // db is an instance of SqliteDatabaseView
-    SqliteUdf::define(db, "calc_metric", 1, calc_metric_impl);
+    SqliteExt::define_scalar(db, "calc_metric", 1, calc_metric_impl);
     return SQLITE_OK;
 }
 ```
 
-**Parameters**:
-- `ext_name`: The unquoted identifier for the extension module (used in `sqlite3_<ext_name>_init`).
-- `db_var`: The variable name for the `SqliteDatabaseView` connection parameter.
-
----
-
-### 6.2 `SQLITE_DEFAULT_EXTENSION_ENTRYPOINT(db_var)`
+#### `SQLITE_DEFAULT_EXTENSION_ENTRYPOINT(db_var)`
 Defines the generic default fallback entrypoint `sqlite3_extension_init`. SQLite invokes this symbol when `.load <library>` or `sqlite3_load_extension(db, path, NULL, ...)` is called without specifying an explicit procedure name.
 
 ```cpp
 SQLITE_DEFAULT_EXTENSION_ENTRYPOINT(db) {
-    SqliteUdf::define(db, "helper_func", 1, helper_func_impl);
+    SqliteExt::define_scalar(db, "helper_func", 1, helper_func_impl);
     return SQLITE_OK;
 }
 ```
 
----
-
-### 6.3 `SQLITE_EXTENSION_ENTRYPOINT_CTX(ext_name, ctx_var)`
+#### `SQLITE_EXTENSION_ENTRYPOINT_CTX(ext_name, ctx_var)`
 Generates an entrypoint receiving `SqliteExtensionInitContext` directly, enabling custom error messaging and diagnostic failure reporting.
 
 ```cpp
@@ -211,25 +247,44 @@ SQLITE_EXTENSION_ENTRYPOINT_CTX(my_secure_plugin, ctx) {
         ctx.set_error("Plugin initialization failed: invalid license credentials");
         return SQLITE_AUTH;
     }
-    SqliteUdf::define(ctx.db(), "secure_hash", 1, hash_impl);
+    SqliteExt::define_scalar(ctx.db(), "secure_hash", 1, hash_impl);
     return SQLITE_OK;
 }
 ```
 
 ---
 
-### 6.4 `SqliteExtensionInitContext`
-Context wrapper providing safe access to the database connection and error assignment.
+### 6.2 Pure C Macros (`sqlite3_ext_creator.h`)
 
-```cpp
-class SqliteExtensionInitContext {
-public:
-    sqlite3* raw_db() const;                     // Get raw sqlite3* handle
-    SqliteDatabaseView db() const;               // Get SqliteDatabaseView wrapper
-    operator sqlite3*() const;                   // Implicit conversion to sqlite3*
-    operator SqliteDatabaseView() const;         // Implicit conversion to SqliteDatabaseView
-    void set_error(const char* message) const;   // Sets error message allocated via sqlite3_mprintf
-};
+#### `SQLITE_C_EXTENSION_ENTRYPOINT(ext_name, db_var)`
+Defines a named Pure C exported entrypoint function `sqlite3_<ext_name>_init` receiving `sqlite3 *db_var`.
+
+```c
+SQLITE_C_EXTENSION_ENTRYPOINT(my_c_ext, db) {
+    return sqlite3_create_function(db, "c_func", 1, SQLITE_UTF8, NULL, c_func, NULL, NULL);
+}
+```
+
+#### `SQLITE_C_DEFAULT_EXTENSION_ENTRYPOINT(db_var)`
+Defines the default Pure C `sqlite3_extension_init` export receiving `sqlite3 *db_var`.
+
+```c
+SQLITE_C_DEFAULT_EXTENSION_ENTRYPOINT(db) {
+    return sqlite3_create_function(db, "default_c_func", 0, SQLITE_UTF8, NULL, fn, NULL, NULL);
+}
+```
+
+#### `SQLITE_C_EXTENSION_ENTRYPOINT_ERR(ext_name, db_var, err_var)`
+Generates a named Pure C entrypoint receiving `sqlite3 *db_var` and `char **err_var` for custom `sqlite3_mprintf` error reporting.
+
+```c
+SQLITE_C_EXTENSION_ENTRYPOINT_ERR(my_c_ext, db, pzErr) {
+    if (init_subsystems() != 0) {
+        *pzErr = sqlite3_mprintf("Failed to allocate C subsystems");
+        return SQLITE_ERROR;
+    }
+    return SQLITE_OK;
+}
 ```
 
 ---
@@ -319,11 +374,10 @@ SQLITE_DEFAULT_EXTENSION_ENTRYPOINT(db) {
 
 1. **Host Applications vs Extensions**:
    - Host applications linking directly against SQLite (`-lsqlite3`) must define `#define SQLITE_CORE` **before** including `sqlite3_db.hpp` or `sqlite3_statement.hpp`.
-   - Loadable extension shared libraries must **not** define `SQLITE_CORE`, and must simply `#include "sqlite3_ext_creator.hpp"`.
+   - Loadable extension shared libraries must **not** define `SQLITE_CORE`, and must simply include `sqlite3_ext_creator.hpp` (C++) or `sqlite3_ext_creator.h` (C).
 
 2. **Always Use `SqliteContext` for Return Values**:
    - Prefer `ctx.result_int(...)`, `ctx.result_double(...)`, `ctx.result_text(...)`, and `str.result(ctx)` over raw C-APIs to guarantee exception safety and automated memory cleanup.
 
 3. **In-Memory Database Isolation**:
    - Separate `:memory:` database connections are guaranteed perfect isolation by `SqliteExtState` via pointer-keyed virtual path namespaces.
-
