@@ -67,6 +67,248 @@ public:
     inline int load_extension(const char* zFile, const char* zProc = nullptr, char** pzErrMsg = nullptr) const {
         return sqlite3_load_extension(m_db, zFile, zProc, pzErrMsg);
     }
+
+    // ========================================================================
+    // Connection Hooks & Event Handlers (Templatized & Strongly Typed)
+    // ========================================================================
+
+    using UpdateHookCallback = void (*)(void* user_data, int operation, const char* db_name, const char* table_name, sqlite3_int64 rowid);
+    using CommitHookCallback = int (*)(void* user_data);
+    using RollbackHookCallback = void (*)(void* user_data);
+    using WalHookCallback = int (*)(void* user_data, sqlite3* db, const char* db_name, int num_pages);
+    using ProgressCallback = int (*)(void* user_data);
+
+    /**
+     * @brief Registers an update hook with a strongly-typed UserData pointer.
+     */
+    template <typename UserData>
+    inline void* set_update_hook(void (*cb)(UserData* user_data, int operation, const char* db_name, const char* table_name, sqlite3_int64 rowid), UserData* user_data = nullptr) const {
+        typedef void (*RawUpdateCb)(void*, int, const char*, const char*, sqlite3_int64);
+        return sqlite3_update_hook(m_db, reinterpret_cast<RawUpdateCb>(cb), static_cast<void*>(user_data));
+    }
+
+    /**
+     * @brief Registers an update hook using a zero-overhead compile-time function template.
+     */
+    template <void (*Func)(int operation, const char* db_name, const char* table_name, sqlite3_int64 rowid)>
+    inline void* set_update_hook() const {
+        struct Trampoline {
+            static void callback(void*, int op, const char* db, const char* tbl, sqlite3_int64 rowid) {
+                Func(op, db, tbl, rowid);
+            }
+        };
+        return sqlite3_update_hook(m_db, Trampoline::callback, nullptr);
+    }
+
+    /**
+     * @brief Registers a raw void* update hook callback.
+     */
+    inline void* set_update_hook(UpdateHookCallback cb, void* user_data = nullptr) const {
+        return sqlite3_update_hook(m_db, cb, user_data);
+    }
+
+    /**
+     * @brief Registers a commit hook with a strongly-typed UserData pointer.
+     */
+    template <typename UserData>
+    inline void* set_commit_hook(int (*cb)(UserData* user_data), UserData* user_data = nullptr) const {
+        typedef int (*RawCommitCb)(void*);
+        return sqlite3_commit_hook(m_db, reinterpret_cast<RawCommitCb>(cb), static_cast<void*>(user_data));
+    }
+
+    /**
+     * @brief Registers a commit hook using a zero-overhead compile-time function template.
+     */
+    template <int (*Func)()>
+    inline void* set_commit_hook() const {
+        struct Trampoline {
+            static int callback(void*) { return Func(); }
+        };
+        return sqlite3_commit_hook(m_db, Trampoline::callback, nullptr);
+    }
+
+    /**
+     * @brief Registers a raw void* commit hook callback.
+     */
+    inline void* set_commit_hook(CommitHookCallback cb, void* user_data = nullptr) const {
+        return sqlite3_commit_hook(m_db, cb, user_data);
+    }
+
+    /**
+     * @brief Registers a rollback hook with a strongly-typed UserData pointer.
+     */
+    template <typename UserData>
+    inline void* set_rollback_hook(void (*cb)(UserData* user_data), UserData* user_data = nullptr) const {
+        typedef void (*RawRollbackCb)(void*);
+        return sqlite3_rollback_hook(m_db, reinterpret_cast<RawRollbackCb>(cb), static_cast<void*>(user_data));
+    }
+
+    /**
+     * @brief Registers a rollback hook using a zero-overhead compile-time function template.
+     */
+    template <void (*Func)()>
+    inline void* set_rollback_hook() const {
+        struct Trampoline {
+            static void callback(void*) { Func(); }
+        };
+        return sqlite3_rollback_hook(m_db, Trampoline::callback, nullptr);
+    }
+
+    /**
+     * @brief Registers a raw void* rollback hook callback.
+     */
+    inline void* set_rollback_hook(RollbackHookCallback cb, void* user_data = nullptr) const {
+        return sqlite3_rollback_hook(m_db, cb, user_data);
+    }
+
+    /**
+     * @brief Registers a WAL hook with a strongly-typed UserData pointer.
+     */
+    template <typename UserData>
+    inline void* set_wal_hook(int (*cb)(UserData* user_data, sqlite3* db, const char* db_name, int num_pages), UserData* user_data = nullptr) const {
+        typedef int (*RawWalCb)(void*, sqlite3*, const char*, int);
+        return sqlite3_wal_hook(m_db, reinterpret_cast<RawWalCb>(cb), static_cast<void*>(user_data));
+    }
+
+    /**
+     * @brief Registers a WAL hook using a zero-overhead compile-time function template.
+     */
+    template <int (*Func)(sqlite3* db, const char* db_name, int num_pages)>
+    inline void* set_wal_hook() const {
+        struct Trampoline {
+            static int callback(void*, sqlite3* db, const char* db_name, int pages) {
+                return Func(db, db_name, pages);
+            }
+        };
+        return sqlite3_wal_hook(m_db, Trampoline::callback, nullptr);
+    }
+
+    /**
+     * @brief Registers a raw void* WAL hook callback.
+     */
+    inline void* set_wal_hook(WalHookCallback cb, void* user_data = nullptr) const {
+        return sqlite3_wal_hook(m_db, cb, user_data);
+    }
+
+    /**
+     * @brief Registers a progress handler with a strongly-typed UserData pointer.
+     */
+    template <typename UserData>
+    inline void set_progress_handler(int num_ops, int (*cb)(UserData* user_data), UserData* user_data = nullptr) const {
+        typedef int (*RawProgressCb)(void*);
+        sqlite3_progress_handler(m_db, num_ops, reinterpret_cast<RawProgressCb>(cb), static_cast<void*>(user_data));
+    }
+
+    /**
+     * @brief Registers a progress handler using a zero-overhead compile-time function template.
+     */
+    template <int (*Func)()>
+    inline void set_progress_handler(int num_ops) const {
+        struct Trampoline {
+            static int callback(void*) { return Func(); }
+        };
+        sqlite3_progress_handler(m_db, num_ops, Trampoline::callback, nullptr);
+    }
+
+    /**
+     * @brief Registers a raw void* progress handler callback.
+     */
+    inline void set_progress_handler(int num_ops, ProgressCallback cb, void* user_data = nullptr) const {
+        sqlite3_progress_handler(m_db, num_ops, cb, user_data);
+    }
+
+    /**
+     * @brief Sets a busy handler timeout in milliseconds.
+     * @param ms Timeout in milliseconds.
+     * @return SQLITE_OK on success.
+     */
+    inline int busy_timeout(int ms) const {
+        return sqlite3_busy_timeout(m_db, ms);
+    }
+
+    /**
+     * @brief Interrupts any active operation on this database connection.
+     */
+    inline void interrupt() const {
+        sqlite3_interrupt(m_db);
+    }
+
+    /**
+     * @brief Retrieves the numeric error code of the most recent failed SQLite operation.
+     */
+    inline int errcode() const {
+        return sqlite3_errcode(m_db);
+    }
+
+    /**
+     * @brief Retrieves the extended error code of the most recent failed SQLite operation.
+     */
+    inline int extended_errcode() const {
+        return sqlite3_extended_errcode(m_db);
+    }
+
+    /**
+     * @brief Retrieves the English-language error message describing the most recent failure.
+     */
+    inline const char* errmsg() const {
+        return sqlite3_errmsg(m_db);
+    }
+
+    /**
+     * @brief Formats an SQLite result code into an English text description.
+     */
+    static inline const char* errstr(int rc) {
+        return sqlite3_errstr(rc);
+    }
+
+    /**
+     * @brief Returns true if the connection is in autocommit mode (i.e. not inside a transaction).
+     */
+    inline bool is_autocommit() const {
+        return sqlite3_get_autocommit(m_db) != 0;
+    }
+
+    /**
+     * @brief Checks if a database schema (e.g. "main" or an attached DB) is read-only.
+     * @param zDbName Database name (defaults to "main").
+     * @return True if read-only, false if writable or unknown.
+     */
+    inline bool is_readonly(const char* zDbName = "main") const {
+        return sqlite3_db_readonly(m_db, zDbName) == 1;
+    }
+
+    /**
+     * @brief Performs a WAL checkpoint on the specified database.
+     * @param zDb Database name (defaults to "main").
+     * @param eMode Checkpoint mode (SQLITE_CHECKPOINT_PASSIVE, FULL, RESTART, TRUNCATE).
+     * @param pnLog Pointer to receive total number of frames in WAL (optional).
+     * @param pnCkpt Pointer to receive total number of check-pointed frames (optional).
+     * @return SQLITE_OK on success, or an SQLite error code.
+     */
+    inline int wal_checkpoint(const char* zDb = "main", int eMode = SQLITE_CHECKPOINT_PASSIVE, int* pnLog = nullptr, int* pnCkpt = nullptr) const {
+        return sqlite3_wal_checkpoint_v2(m_db, zDb, eMode, pnLog, pnCkpt);
+    }
+
+    /**
+     * @brief Retrieves the rowid of the most recent successful INSERT.
+     */
+    inline sqlite3_int64 last_insert_rowid() const {
+        return sqlite3_last_insert_rowid(m_db);
+    }
+
+    /**
+     * @brief Returns the number of rows modified by the most recent statement.
+     */
+    inline sqlite3_int64 changes() const {
+        return sqlite3_changes64(m_db);
+    }
+
+    /**
+     * @brief Returns the total number of rows modified since the database was opened.
+     */
+    inline sqlite3_int64 total_changes() const {
+        return sqlite3_total_changes64(m_db);
+    }
 };
 
 /**

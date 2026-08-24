@@ -48,3 +48,82 @@ stmt.bind(1, 42);          // Resolves to bind_int overload
 stmt.bind(2, "Alice");     // Resolves to bind_text overload
 stmt.step();               // Executes!
 ```
+
+## 4. Connection Hooks & Event Handlers
+
+`SqliteDatabaseView` and `SqliteDatabaseOwned` provide zero-overhead, templatized helpers to bind into SQLite's connection-level event pipeline:
+
+### Compile-Time Zero-Overhead Trampolines
+```cpp
+// Static or free functions without void* boilerplate
+void on_update(int op, const char* db, const char* table, sqlite3_int64 rowid) {
+    printf("Operation %d on %s.%s, rowid = %lld\n", op, db, table, rowid);
+}
+
+int on_commit() {
+    return 0; // 0 = allow commit, non-zero = rollback
+}
+
+void on_rollback() {
+    printf("Transaction rolled back!\n");
+}
+
+int on_progress() {
+    return 0; // 0 = continue, non-zero = cancel query
+}
+
+// Bind directly using compile-time function pointer templates:
+SqliteDatabaseOwned db(":memory:");
+db.set_update_hook<on_update>();
+db.set_commit_hook<on_commit>();
+db.set_rollback_hook<on_rollback>();
+db.set_progress_handler<on_progress>(100); // Trigger every 100 VM ops
+```
+
+### Strongly-Typed `UserData*` Templates
+```cpp
+struct AppTracker {
+    int count = 0;
+};
+
+AppTracker tracker;
+
+// Strongly-typed pointer - no manual static_cast<AppTracker*>(void*) needed!
+db.set_update_hook<AppTracker>([](AppTracker* t, int op, const char* db, const char* table, sqlite3_int64 rowid) {
+    t->count++;
+}, &tracker);
+```
+
+## 5. Error Inspection, Status & Diagnostics
+
+`SqliteDatabaseView` provides direct methods to inspect error states, transaction status, and perform administrative operations:
+
+```cpp
+SqliteDatabaseOwned db(":memory:");
+
+// 1. Error Inspection
+int bad_rc = db.exec("SELECT * FROM non_existent_table;");
+if (bad_rc != SQLITE_OK) {
+    int code = db.errcode();                    // e.g. SQLITE_ERROR (1)
+    int ext_code = db.extended_errcode();       // Extended error code
+    const char* msg = db.errmsg();              // "no such table: non_existent_table"
+    const char* str = SqliteDatabaseView::errstr(bad_rc); // "SQL logic error"
+}
+
+// 2. Transaction & Read-Only Status
+bool autocommit = db.is_autocommit();           // true if NOT inside an active transaction
+bool readonly = db.is_readonly("main");         // checks if attached database is read-only
+
+// 3. Explicit WAL Checkpointing
+db.wal_checkpoint("main", SQLITE_CHECKPOINT_PASSIVE);
+
+// 4. Operational Diagnostics
+db.busy_timeout(5000);                          // 5s busy timeout
+sqlite3_int64 last_id = db.last_insert_rowid(); // Most recent INSERT rowid
+sqlite3_int64 rows_mod = db.changes();          // Rows modified by last statement
+sqlite3_int64 total_mod = db.total_changes();   // Total modifications since open
+db.interrupt();                                 // Thread-safe query cancellation
+```
+
+
+

@@ -68,7 +68,7 @@ For a deeper dive into the specific mechanics and C++ paradigms used in individu
 - [**Pluggable State Synchronization**](docs/EXT_STATE_ARCHITECTURE.md): Pluggable lock policy architecture across Pure C (`_RW`, `_TINY`, `_MUTEX`) and C++ (`SqliteExtState<T, LockPolicy>`).
 
 ### Database Interaction
-- [**Database Lifecycle**](docs/DB_ARCHITECTURE.md): The `Owned`/`View` model for robust connection management.
+- [**Database Lifecycle & Event Hooks**](docs/DB_ARCHITECTURE.md): The `Owned`/`View` model for robust connection management, diagnostics, and compile-time template trampolines for `update`, `commit`, `rollback`, `wal`, and `progress` hooks.
 - [**Transactions & Savepoints**](docs/TRANSACTION_ARCHITECTURE.md): Exception-safe RAII rollbacks and hierarchical nested transactions.
 - [**Statements**](docs/STATEMENT_ARCHITECTURE.md): Zero-cost query builders, iterators, and prepared statement caching.
 

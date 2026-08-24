@@ -169,12 +169,19 @@ A zero-dependency C++ RAII wrapper for SQLite Transactions and Savepoints that p
 - [Transaction Wrapper README](docs/TRANSACTION_README.md)
 - [Transaction Architecture Guide](docs/TRANSACTION_ARCHITECTURE.md)
 
-### 11. Database Connection Lifecycle (`sqlite3_db.hpp`)
-A clean, object-oriented RAII wrapper for managing SQLite connection handles and rapidly building query statements.
+### 11. Database Connection Lifecycle & Event Hooks (`sqlite3_db.hpp`)
+A clean, object-oriented RAII wrapper for managing SQLite connection handles, executing queries, and intercepting database-level events.
 
 #### Key Features:
 - **Owned vs View Patterns**: `SqliteDatabaseOwned` safely manages `sqlite3_open_v2` and `sqlite3_close_v2`, while `SqliteDatabaseView` provides zero-cost C++ wrappers over existing C-API handles.
-- **Statement Builders**: Integrates seamlessly with Statements, Transactions, and Savepoints. You can directly call `.prepare()` or `.prepare_cached()` on any Database, Transaction, or Savepoint object to instantly generate a safe `SqliteStatement` without juggling raw pointers.
+- **Statement Builders**: Integrates seamlessly with Statements, Transactions, and Savepoints. You can directly call `.prepare()` on any Database, Transaction, or Savepoint object to instantly generate a safe `SqliteStatement` without juggling raw pointers.
+- **Templatized Connection Hooks**: Clean compile-time function pointer trampolines (`<Func>`) and strongly-typed context templates (`<UserData>`) for:
+  - **`set_update_hook`**: Change-Data-Capture (CDC) on `INSERT`, `UPDATE`, `DELETE` operations.
+  - **`set_commit_hook`**: Transaction commit interception (return 0 to allow, non-zero to abort).
+  - **`set_rollback_hook`**: Rollback event notifications.
+  - **`set_wal_hook`**: Write-Ahead-Log frame commit notifications.
+  - **`set_progress_handler`**: Instruction-level query timeouts and cancellation.
+- **Connection Diagnostics**: Built-in helpers for `busy_timeout(ms)`, `interrupt()`, `last_insert_rowid()`, `changes()`, and `total_changes()`.
 
 #### Documentation
 - [Database Wrapper README](docs/DB_README.md)
