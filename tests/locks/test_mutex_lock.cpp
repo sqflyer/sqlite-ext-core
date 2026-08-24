@@ -19,20 +19,55 @@ int main() {
             assert(mutex.try_lock() == true);
         }
         
-        mutex.unlock();
-        
-        // Test Guard
+        // Test SqliteMutexGuard
         {
             SqliteMutexGuard guard(mutex);
         } // Unlocks automatically
+
+        // Test generic SqliteLockGuard<SqliteMutex>
+        {
+            SqliteLockGuard<SqliteMutex> guard(mutex);
+        }
+
+        // Test read/write methods and basic guards
+        mutex.lock_read();
+        mutex.unlock_read();
+        mutex.lock_write();
+        mutex.unlock_write();
+
+        {
+            SqliteBasicReadGuard<SqliteMutex> read_guard(mutex);
+        }
+        {
+            SqliteBasicWriteGuard<SqliteMutex> write_guard(mutex);
+        }
+
+        // Verify SqliteLockBase inheritance
+        SqliteLockBase* base_ptr = &mutex;
+        assert(base_ptr != nullptr);
     }
 
     // 2. Test single-threaded null safety explicitly
     {
-        // Even if SQLite is multi-threaded, we can manually pass a nullptr
-        // to the Guard to prove that the C++ wrapper safely no-ops it without segfaulting.
         sqlite3_mutex* null_mutex = nullptr;
         SqliteMutexGuard guard(null_mutex); 
+    }
+
+    // 3. Test Pure C sqlite3_mutex_lock API
+    {
+        sqlite3_mutex_lock c_mutex;
+        sqlite3_mutex_lock_init(&c_mutex);
+        if (c_mutex.handle) {
+            sqlite3_mutex_lock_lock(&c_mutex);
+            sqlite3_mutex_lock_unlock(&c_mutex);
+            assert(sqlite3_mutex_lock_try_lock(&c_mutex) == 1);
+            sqlite3_mutex_lock_unlock(&c_mutex);
+            sqlite3_mutex_lock_read_acquire(&c_mutex);
+            sqlite3_mutex_lock_read_release(&c_mutex);
+            sqlite3_mutex_lock_write_acquire(&c_mutex);
+            sqlite3_mutex_lock_write_release(&c_mutex);
+        }
+        sqlite3_mutex_lock_destroy(&c_mutex);
     }
 
     printf("test_mutex_lock: PASSED\n");

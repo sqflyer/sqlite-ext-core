@@ -16,16 +16,44 @@ int main() {
     assert(lock.try_lock() == true);
     lock.unlock();
 
-    // 4. Test RAII Guard
+    // 4. Test RAII Guard (SqliteTinyLockGuard)
     {
         SqliteTinyLockGuard guard(lock);
-        // Lock should be held by the guard
         assert(lock.try_lock() == false); 
     }
-    
-    // 5. Guard went out of scope, should be unlocked
     assert(lock.try_lock() == true);
     lock.unlock();
+
+    // 5. Test Generic SqliteLockGuard<SqliteTinyLock>
+    {
+        SqliteLockGuard<SqliteTinyLock> generic_guard(lock);
+        assert(lock.try_lock() == false);
+    }
+    assert(lock.try_lock() == true);
+    lock.unlock();
+
+    // 6. Test Read/Write Locking interface
+    lock.lock_read();
+    assert(lock.try_lock() == false);
+    lock.unlock_read();
+
+    lock.lock_write();
+    assert(lock.try_lock() == false);
+    lock.unlock_write();
+
+    // 7. Test Generic Basic Read/Write Guards
+    {
+        SqliteBasicReadGuard<SqliteTinyLock> read_guard(lock);
+        assert(lock.try_lock() == false);
+    }
+    {
+        SqliteBasicWriteGuard<SqliteTinyLock> write_guard(lock);
+        assert(lock.try_lock() == false);
+    }
+
+    // 8. Verify SqliteLockBase inheritance
+    SqliteLockBase* base_ptr = &lock;
+    assert(base_ptr != nullptr);
 
     printf("test_tiny_lock: PASSED\n");
     return 0;

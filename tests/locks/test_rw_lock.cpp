@@ -31,9 +31,17 @@ void test_cpp_class() {
     // Test Write Lock
     rw_lock.lock_write();
     rw_lock.unlock_write();
+
+    // Test Exclusive lock/unlock
+    rw_lock.lock();
+    rw_lock.unlock();
     
     // Verify native handle exists
     assert(rw_lock.native_handle() != nullptr);
+
+    // Verify SqliteLockBase inheritance
+    SqliteLockBase* base_ptr = &rw_lock;
+    assert(base_ptr != nullptr);
 }
 
 void test_cpp_raii_guards() {
@@ -42,12 +50,23 @@ void test_cpp_raii_guards() {
     // Test Read Guard
     {
         SqliteReadGuard read_guard(rw_lock);
+        SqliteGuardBase* g_base = &read_guard;
+        assert(g_base != nullptr);
     } 
     
     // Test Write Guard
     {
         SqliteWriteGuard write_guard(rw_lock);
+        SqliteGuardBase* g_base = &write_guard;
+        assert(g_base != nullptr);
     } 
+
+    // Test Generic Lock Guard
+    {
+        SqliteLockGuard<SqliteRwLock> lock_guard(rw_lock);
+        SqliteGuardBase* g_base = &lock_guard;
+        assert(g_base != nullptr);
+    }
 }
 
 int main() {

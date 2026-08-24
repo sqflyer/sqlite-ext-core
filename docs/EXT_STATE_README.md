@@ -99,10 +99,29 @@ static void test_counter_func(sqlite3_context *ctx, int argc, sqlite3_value **ar
 }
 ```
 
+## Pluggable Lock Selection
+
+Both Pure C and C++ state registries allow you to select the locking policy that best fits your workload:
+
+| Lock Policy | Pure C (`.h`) Macro | C++ (`.hpp`) Template | Optimal Workload |
+| :--- | :--- | :--- | :--- |
+| **Read/Write Lock** (Default) | `SQLITE_EXTENSION_STATE_DECLARE(State)` / `..._DECLARE_RW` | `SqliteExtState<T>` / `SqliteExtStateRw<T>` | Read-heavy datasets, caches, lookup tables |
+| **Tiny Lock** (1-Byte Spinlock) | `SQLITE_EXTENSION_STATE_DECLARE_TINY(State)` | `SqliteExtStateTiny<T>` / `SqliteExtState<T, SqliteTinyLock>` | In-memory key-value stores (`memkv`), counters, metrics |
+| **SQLite Mutex** | `SQLITE_EXTENSION_STATE_DECLARE_MUTEX(State)` | `SqliteExtStateMutex<T>` / `SqliteExtState<T, SqliteMutex>` | Engine-level mutex profiling and single-thread optimization |
+
+### Generic Macro Syntax (Pure C)
+```c
+// Use any custom or built-in lock type implementing the lock adapter interface:
+SQLITE_EXTENSION_STATE_DECLARE_WITH_LOCK(MemKVState, sqlite3_tiny_lock)
+SQLITE_EXTENSION_STATE_DEFINE_WITH_LOCK(MemKVState, sqlite3_tiny_lock)
+```
+
 ## Features
-- **Cross-Platform**: Uses native Read/Write locks on Windows (`SRWLOCK`), macOS/Linux (`pthread_rwlock_t`), and WebAssembly (`sqlite3_mutex`).
+- **Pluggable Synchronization**: Select between RW locks, 1-byte TinyLocks, or native SQLite mutexes.
+- **Cross-Platform**: Uses native Read/Write locks on Windows (`SRWLOCK`), macOS/Linux (`pthread_rwlock_t`), and WebAssembly (futex/mutex).
 - **Lock-Free Ref Counting**: The registry's internal reference counter is entirely lock-free, managed via `sqlite3_atomic.h`.
 - **Zero-Overhead Hot Path**: Caches state lookups in SQLite's O(1) auxdata.
-- **Memory Safe**: Automatically manages memory via SQLite's `xDestroy` hooks. No leaks.
+- **Memory Safe**: Automatically manages memory via SQLite's `xDestroy` hooks. Zero leaks.
 
 For a detailed breakdown of the internal architecture, see `EXT_STATE_ARCHITECTURE.md`.
+

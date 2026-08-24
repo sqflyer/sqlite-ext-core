@@ -1,14 +1,16 @@
-# SQLite Mutex Lock (`sqlite3_mutex_lock.hpp`)
+# SQLite Mutex Lock (`sqlite3_mutex_lock.h` / `sqlite3_mutex_lock.hpp`)
 
-This header provides a standard C++ abstraction (`SqliteMutex` and `SqliteMutexGuard`) over SQLite's native C mutex API (`sqlite3_mutex*`). 
+These headers provide a zero-dependency abstraction (`sqlite3_mutex_lock` for Pure C, `SqliteMutex` and `SqliteMutexGuard` for C++) over SQLite's native C mutex API (`sqlite3_mutex*`).
 
-It is designed to give you the exact same developer experience as `std::mutex` and `std::lock_guard`, but using SQLite's internal allocators and thread-safety configurations.
+It is designed to give you the exact same developer experience as `std::mutex` and `std::lock_guard`, but using SQLite's internal allocators and thread-safety configurations. In C++, all locks inherit from `SqliteLockBase` and all guards inherit from `SqliteGuardBase` (`sqlite3_lock_base.hpp`).
 
 ## Features
+- **Pure C + C++ Support**: Use `sqlite3_mutex_lock` in C99/C11 and `SqliteMutex` in C++11.
 - **`std::mutex` Parity**: Provides standard `lock()`, `unlock()`, and `try_lock()` methods.
+- **Base Lock Architecture**: Inherits from `SqliteLockBase` and `SqliteGuardBase` without virtual function overhead (`-nostdlib++` compliant).
 - **SQLite Engine Integration**: Uses `sqlite3_mutex_alloc` to ensure the mutex primitive perfectly matches how SQLite was compiled for the target platform.
 - **Single-Threaded Safety**: Natively understands SQLite's single-threaded compilation modes (which return `nullptr` for mutexes) and safely transforms locks into no-ops without crashing.
-- **RAII Guards**: Ensures exception-safe unlocking via `SqliteMutexGuard`.
+- **RAII Guards**: Ensures exception-safe unlocking via `SqliteMutexGuard` and `SqliteLockGuard<SqliteMutex>`.
 
 ## Usage: `SqliteMutex`
 

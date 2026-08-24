@@ -2,6 +2,8 @@
 #define SQLITE3_MUTEX_LOCK_HPP
 
 #include <sqlite3.h>
+#include "sqlite3_lock_base.hpp"
+#include "sqlite3_mutex_lock.h"
 
 /**
  * @brief An owning C++ wrapper around a dynamic sqlite3_mutex.
@@ -9,7 +11,7 @@
  * Allocates a fast mutex on construction and frees it on destruction.
  * Provides standard C++ lock(), unlock(), and try_lock() methods.
  */
-class SqliteMutex {
+class SqliteMutex : public SqliteLockBase {
 private:
     sqlite3_mutex* m_mutex;
 
@@ -33,10 +35,6 @@ public:
             sqlite3_mutex_free(m_mutex);
         }
     }
-
-    // Locks cannot be copied or moved.
-    SqliteMutex(const SqliteMutex&) = delete;
-    SqliteMutex& operator=(const SqliteMutex&) = delete;
 
     /**
      * @brief Blocks the current thread until the mutex is acquired.
@@ -71,6 +69,11 @@ public:
         }
     }
 
+    void lock_read() noexcept { lock(); }
+    void unlock_read() noexcept { unlock(); }
+    void lock_write() noexcept { lock(); }
+    void unlock_write() noexcept { unlock(); }
+
     /**
      * @brief Provides access to the raw underlying SQLite mutex pointer.
      * Useful for passing into standard SQLite C-APIs.
@@ -84,7 +87,7 @@ public:
 /**
  * @brief Exception-safe RAII Guard for standard SQLite Mutexes.
  */
-class SqliteMutexGuard {
+class SqliteMutexGuard : public SqliteGuardBase {
 private:
     sqlite3_mutex* m_mutex;
 
@@ -112,10 +115,6 @@ public:
             sqlite3_mutex_leave(m_mutex);
         }
     }
-
-    // Locks cannot be copied or moved safely.
-    SqliteMutexGuard(const SqliteMutexGuard&) = delete;
-    SqliteMutexGuard& operator=(const SqliteMutexGuard&) = delete;
 };
 
 #endif // SQLITE3_MUTEX_LOCK_HPP

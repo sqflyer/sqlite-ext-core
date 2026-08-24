@@ -1,6 +1,7 @@
 #ifndef SQLITE3_TINY_LOCK_HPP
 #define SQLITE3_TINY_LOCK_HPP
 
+#include "sqlite3_lock_base.hpp"
 #include "sqlite3_tiny_lock.h"
 
 /**
@@ -8,7 +9,7 @@
  * Provides standard C++ object-oriented methods (lock, unlock, try_lock) 
  * over the highly optimized 4-byte C struct.
  */
-class SqliteTinyLock {
+class SqliteTinyLock : public SqliteLockBase {
     sqlite3_tiny_lock m_lock;
 
 public:
@@ -16,9 +17,7 @@ public:
         sqlite3_tiny_lock_init(&m_lock);
     }
 
-    // Non-copyable and non-movable (locks shouldn't be copied)
-    SqliteTinyLock(const SqliteTinyLock&) = delete;
-    SqliteTinyLock& operator=(const SqliteTinyLock&) = delete;
+    ~SqliteTinyLock() = default;
 
     void lock() noexcept {
         sqlite3_tiny_lock_lock(&m_lock);
@@ -32,6 +31,11 @@ public:
         sqlite3_tiny_lock_unlock(&m_lock);
     }
 
+    void lock_read() noexcept { lock(); }
+    void unlock_read() noexcept { unlock(); }
+    void lock_write() noexcept { lock(); }
+    void unlock_write() noexcept { unlock(); }
+
     // Allow access to the underlying C-struct if needed for C-APIs
     sqlite3_tiny_lock* native_handle() noexcept {
         return &m_lock;
@@ -40,24 +44,11 @@ public:
 
 /**
  * @brief RAII Guard for SqliteTinyLock
- * Automatically acquires the lock upon construction and releases it upon destruction.
- * Guarantees exception-safe unlocking (even with -fno-exceptions, it handles early returns gracefully).
  */
-class SqliteTinyLockGuard {
-    SqliteTinyLock& m_lock;
-
+class SqliteTinyLockGuard : public SqliteLockGuard<SqliteTinyLock> {
 public:
-    explicit SqliteTinyLockGuard(SqliteTinyLock& lock) noexcept : m_lock(lock) {
-        m_lock.lock();
-    }
-
-    ~SqliteTinyLockGuard() noexcept {
-        m_lock.unlock();
-    }
-
-    // Non-copyable
-    SqliteTinyLockGuard(const SqliteTinyLockGuard&) = delete;
-    SqliteTinyLockGuard& operator=(const SqliteTinyLockGuard&) = delete;
+    explicit SqliteTinyLockGuard(SqliteTinyLock& lock) noexcept 
+        : SqliteLockGuard<SqliteTinyLock>(lock) {}
 };
 
 #endif // SQLITE3_TINY_LOCK_HPP

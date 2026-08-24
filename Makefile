@@ -1,4 +1,4 @@
-.PHONY: test test-ext-state test-cpp-value test-cpp-value-keys test-locks test-allocator test-smart-ptr test-cpp-udf test-cpp-aggregate test-cpp-statement test-cpp-tvf test-cpp-transaction test-cpp-db test-cpp-buffer test-blob-stream test-backup test-vtab test-cpp-extension leak-check-integration clean
+.PHONY: test test-ext-state test-cpp-value test-cpp-value-keys test-locks test-allocator test-smart-ptr test-cpp-udf test-cpp-aggregate test-cpp-statement test-cpp-tvf test-cpp-transaction test-cpp-db test-cpp-buffer test-blob-stream test-backup test-vtab test-cpp-extension example example-c leak-check-integration clean
 
 test: test-ext-state test-cpp-value test-locks test-allocator test-smart-ptr test-cpp-udf test-cpp-aggregate test-cpp-statement test-cpp-tvf test-cpp-transaction test-cpp-db test-cpp-buffer test-blob-stream test-backup test-vtab test-cpp-extension
 

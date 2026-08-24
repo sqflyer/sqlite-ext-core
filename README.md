@@ -20,32 +20,39 @@ A fully freestanding C++ allocator that brings `std::allocator` and `std::constr
 - [Allocator Quickstart](docs/ALLOCATOR_README.md)
 - [Allocator Architecture](docs/ALLOCATOR_ARCHITECTURE.md)
 
-### 2. Synchronization Primitives (`sqlite3_atomic.h` / `.hpp`, `sqlite3_tiny_lock`, `sqlite3_mutex_lock`, `sqlite3_rw_lock`)
-A zero-dependency, freestanding suite of cross-platform atomics and locks designed for high-concurrency extensions, WebAssembly ports, and OS kernels.
+### 2. Synchronization Primitives (`sqlite3_lock_base.hpp`, `sqlite3_atomic.h` / `.hpp`, `sqlite3_tiny_lock`, `sqlite3_mutex_lock`, `sqlite3_rw_lock`)
+A zero-dependency, freestanding suite of cross-platform atomics, locks, and generic RAII guards designed for high-concurrency extensions, WebAssembly ports, and OS kernels.
 
 #### Key Features:
+- **`sqlite3_lock_base.hpp`**: Provides non-copyable, non-movable base classes (`SqliteLockBase`, `SqliteGuardBase`) and generic RAII guard templates (`SqliteLockGuard<T>`, `SqliteBasicReadGuard<T>`, `SqliteBasicWriteGuard<T>`) without virtual function overhead (`-nostdlib++` compliant).
 - **`sqlite3_atomic.h` / `.hpp`**: Explicitly sized (8, 16, 32, 64-bit) C atomics wrapping GCC/Clang built-ins and MSVC intrinsics. The `.hpp` header adds a zero-dependency C++ SFINAE engine that perfectly mimics the polymorphism of `<atomic>` automatically detecting variable widths at compile-time.
-- **`sqlite3_tiny_lock`**: A microscopic (1-byte) hybrid lock. On native hardware, it acts as a blistering-fast, cache-friendly TTAS (Test and Test-And-Set) spinlock to prevent MESI bouncing storms. On WebAssembly, it dynamically scales to 4-bytes and transforms into a true 0% CPU sleeping mutex via `memory.atomic.wait32`.
-- **`sqlite3_mutex_lock`**: An owning C++ wrapper over SQLite's native `sqlite3_mutex_alloc`. Mimics `std::mutex` and `std::lock_guard` perfectly, while safely handling `nullptr` mutexes in single-threaded SQLite compilations.
-- **`sqlite3_rw_lock`**: A cross-platform Read/Write lock that seamlessly maps to Windows `SRWLOCK`, POSIX `pthread_rwlock_t`, and WASM `memory.atomic.wait32` (via `TinyLock`). Includes zero-overhead C++ RAII wrappers (`SqliteReadGuard` / `SqliteWriteGuard`) to maximize read concurrency while guaranteeing exception-safe locking.
+- **`sqlite3_tiny_lock.h` / `.hpp`**: A microscopic (1-byte) hybrid lock. On native hardware, it acts as a blistering-fast, cache-friendly TTAS (Test and Test-And-Set) spinlock to prevent MESI bouncing storms. On WebAssembly, it dynamically scales to 4-bytes and transforms into a true 0% CPU sleeping mutex via `memory.atomic.wait32`. Inherits from `SqliteLockBase`.
+- **`sqlite3_mutex_lock.h` / `.hpp`**: An owning Pure C struct (`sqlite3_mutex_lock`) and C++ wrapper (`SqliteMutex : public SqliteLockBase`) over SQLite's native `sqlite3_mutex_alloc`. Mimics `std::mutex` and `std::lock_guard` perfectly, while safely handling `nullptr` mutexes in single-threaded SQLite compilations.
+- **`sqlite3_rw_lock.h` / `.hpp`**: A cross-platform Read/Write lock (`SqliteRwLock : public SqliteLockBase`) that seamlessly maps to Windows `SRWLOCK`, POSIX `pthread_rwlock_t`, and WASM `memory.atomic.wait32` (via `TinyLock`). Includes zero-overhead C++ RAII wrappers (`SqliteReadGuard` / `SqliteWriteGuard`) to maximize read concurrency while guaranteeing exception-safe locking.
 
 #### Documentation
 - [Atomic Quickstart](docs/ATOMIC_README.md)
 - [Atomic Architecture](docs/ATOMIC_ARCHITECTURE.md)
 - [TinyLock Quickstart](docs/TINY_LOCK_README.md)
 - [TinyLock Architecture](docs/TINY_LOCK_ARCHITECTURE.md)
+- [Mutex Lock Quickstart](docs/MUTEX_LOCK_README.md)
 - [Mutex Lock Architecture](docs/MUTEX_LOCK_ARCHITECTURE.md)
 - [Read/Write Lock Quickstart](docs/READWRITE_LOCK_README.md)
 - [Read/Write Lock Architecture](docs/READWRITE_LOCK_ARCHITECTURE.md)
 
 ### 3. Per-Database Shared State Manager (`sqlite3_ext_state.h` / `.hpp`)
-Maintaining state (like connection pools, LRU caches, or simple counters) inside a SQLite extension is notoriously difficult due to SQLite's architecture, where extensions are loaded once per process but are used concurrently across multiple database connections.
+Maintaining state (like connection pools, in-memory key-value stores (`memkv`), LRU caches, or query metrics) inside a SQLite extension is notoriously difficult due to SQLite's architecture, where extensions are loaded once per process but are used concurrently across multiple database connections.
 
-The state manager solves this by automatically generating a thread-safe, garbage-collected, **Per-Database Shared State Registry**.
+The state manager solves this by automatically generating a thread-safe, garbage-collected, **Per-Database Shared State Registry** with pluggable lock selection.
 
 #### Key Features:
+- **Pluggable Lock Selection**: Both Pure C and C++ state registries allow choosing the optimal synchronization primitive for your workload:
+  - **Read/Write Lock** (Default): `SQLITE_EXTENSION_STATE_DECLARE(State)` / `SqliteExtState<T>`
+  - **1-Byte Spinlock (TinyLock)**: `SQLITE_EXTENSION_STATE_DECLARE_TINY(State)` / `SqliteExtStateTiny<T>` (ideal for fast in-memory KV stores and metrics)
+  - **SQLite Native Mutex**: `SQLITE_EXTENSION_STATE_DECLARE_MUTEX(State)` / `SqliteExtStateMutex<T>`
+  - **Generic Lock Adapter**: `SQLITE_EXTENSION_STATE_DECLARE_WITH_LOCK(State, LockType)` / `SqliteExtState<T, LockPolicy>`
 - **ODR-Safe C API**: Available as a split macro suite (`SQLITE_EXTENSION_STATE_DECLARE` / `DEFINE`) for pure C extensions to perfectly prevent One-Definition Rule violations across multiple translation units.
-- **C++ Template API**: Available as a pure C++ template (`SqliteExtState<T>`) for C++ extensions. (Strict compile-time boundaries prevent accidental cross-language misuse).
+- **C++ Template API**: Available as a pure C++ template (`SqliteExtState<T, LockPolicy = SqliteRwLock>`) for C++ extensions. (Strict compile-time boundaries prevent accidental cross-language misuse).
 - **3-Layer Caching Architecture**: Implements O(1) nanosecond-fast state retrieval using SQLite's `sqlite3_set_auxdata` cache, falling back to a global registry.
 - **Automated Garbage Collection**: Integrates directly with SQLite's `xDestroy` connection hooks to automatically free memory when the last connection to a database closes.
 - **Embedded C++ Objects**: The C++ template seamlessly manages memory lifecycles via `sqlite_new` and `sqlite_delete` (fully relying on standard C++ destructors without needing custom `free_fn` callbacks) to support nested C++ objects (like `std::string`).

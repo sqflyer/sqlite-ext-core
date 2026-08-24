@@ -32,13 +32,13 @@
 #include <stddef.h>
 #include <stdio.h>
 #include "sqlite3_tiny_lock.h"
+#include "sqlite3_rw_lock.h"
+#include "sqlite3_mutex_lock.h"
 
 #ifndef SQLITE_EXT_STATE_AUXDATA_SLOT
 /* Use a high pseudo-random slot to avoid colliding with argument caching (slot 0..N) */
 #define SQLITE_EXT_STATE_AUXDATA_SLOT 0x45585400
 #endif
-
-#include "sqlite3_rw_lock.h"
 
 /*
  * DEFINE_SQLITE_EXT_STATE(StateType, Prefix)
@@ -136,11 +136,11 @@
     static_assert(false, "Do not use SQLITE_EXTENSION_STATE macro in C++. Include sqlite3_ext_state.hpp and use SqliteExtState<T> instead.");
 #else
 
-#define SQLITE_EXTENSION_STATE_DECLARE(StateType) \
+#define SQLITE_EXTENSION_STATE_DECLARE_WITH_LOCK(StateType, LockType) \
     typedef struct StateType##_Entry { \
         char *db_path; \
         int refcount; \
-        sqlite3_rw_lock state_mutex; \
+        LockType state_mutex; \
         void (*free_fn)(StateType*); \
         struct StateType##_Entry *next; \
         StateType state; \
@@ -150,20 +150,20 @@
     extern sqlite3_mutex *StateType##_registry_mutex; \
     \
     /* Function declarations for external visibility */ \
-    static void* StateType##_init(sqlite3 *db, void (*init_fn)(StateType*), void (*free_fn)(StateType*)); \
-    static StateType* StateType##_from_db(sqlite3_context *ctx, sqlite3 *db); \
-    static StateType* StateType##_from_context(sqlite3_context *ctx); \
-    static void StateType##_read_acquire(StateType *state); \
-    static void StateType##_read_release(StateType *state); \
-    static void StateType##_write_acquire(StateType *state); \
-    static void StateType##_write_release(StateType *state); \
-    static void StateType##_destructor(void *p);
+    static inline void* StateType##_init(sqlite3 *db, void (*init_fn)(StateType*), void (*free_fn)(StateType*)); \
+    static inline StateType* StateType##_from_db(sqlite3_context *ctx, sqlite3 *db); \
+    static inline StateType* StateType##_from_context(sqlite3_context *ctx); \
+    static inline void StateType##_read_acquire(StateType *state); \
+    static inline void StateType##_read_release(StateType *state); \
+    static inline void StateType##_write_acquire(StateType *state); \
+    static inline void StateType##_write_release(StateType *state); \
+    static inline void StateType##_destructor(void *p);
 
-#define SQLITE_EXTENSION_STATE_DEFINE(StateType) \
+#define SQLITE_EXTENSION_STATE_DEFINE_WITH_LOCK(StateType, LockType) \
     StateType##_Entry *StateType##_registry_head = NULL; \
     sqlite3_mutex *StateType##_registry_mutex = NULL; \
     \
-    static const char* __##StateType##_get_db_path(sqlite3 *db, char *resolved_path_buf) { \
+    static inline const char* __##StateType##_get_db_path(sqlite3 *db, char *resolved_path_buf) { \
         const char *raw_path = sqlite3_db_filename(db, "main"); \
         /* \
          * In-Memory / Temp DB Isolation: \
@@ -179,7 +179,7 @@
         return raw_path; \
     } \
     \
-    static void __##StateType##_ensure_mutex_init(void) { \
+    static inline void __##StateType##_ensure_mutex_init(void) { \
         if (!StateType##_registry_mutex) { \
             /* \
              * SQLITE_MUTEX_STATIC_MASTER is a global, pre-allocated SQLite mutex. \
@@ -198,7 +198,7 @@
     /* \
      * Internal helper: Thread-safely increments the reference count of an entry. \
      */ \
-    static StateType##_Entry* __##StateType##_entry_retain(StateType##_Entry *entry) { \
+    static inline StateType##_Entry* __##StateType##_entry_retain(StateType##_Entry *entry) { \
         if (!entry) return NULL; \
         sqlite_atomic_increment_32(&entry->refcount); \
         return entry; \
@@ -208,7 +208,7 @@
      * Internal helper: Destroys a state entry, frees all associated memory/mutexes, \
      * and removes it from the global registry linked list. \
      */ \
-    static void __##StateType##_entry_free(StateType##_Entry *entry) { \
+    static inline void __##StateType##_entry_free(StateType##_Entry *entry) { \
         __##StateType##_ensure_mutex_init(); \
         \
         /* Step 1: Acquire registry lock to prevent new threads from finding the entry */ \
@@ -236,8 +236,8 @@
         } \
         sqlite3_mutex_leave(StateType##_registry_mutex); \
         \
-        /* Step 2: Destroy the cross-platform read-write lock */ \
-        sqlite3_rw_lock_destroy(&entry->state_mutex); \
+        /* Step 2: Destroy the state lock */ \
+        LockType##_destroy(&entry->state_mutex); \
         \
         /* Step 3: Run the user's custom cleanup routine, if any */ \
         if (entry->free_fn) { \
@@ -253,7 +253,7 @@
      * Internal helper: Thread-safely decrements the reference count of an entry. \
      * If the reference count drops to 0, it delegates to __entry_free to destroy it. \
      */ \
-    static void __##StateType##_entry_release(StateType##_Entry *entry) { \
+    static inline void __##StateType##_entry_release(StateType##_Entry *entry) { \
         if (!entry) return; \
         if (sqlite_atomic_decrement_32(&entry->refcount) == 0) { \
             __##StateType##_entry_free(entry); \
@@ -262,11 +262,11 @@
     \
     /* \
      * Internal helper: Allocates and initializes a new state entry along with its \
-     * internal mutexes and read-write locks. Does NOT lock the registry itself, \
+     * internal mutexes and locks. Does NOT lock the registry itself, \
      * but assumes the caller holds the registry lock as it links the new entry \
      * directly into the global registry linked list. \
      */ \
-    static StateType##_Entry* __##StateType##_entry_alloc(const char *db_path, void (*init_fn)(StateType*), void (*free_fn)(StateType*)) { \
+    static inline StateType##_Entry* __##StateType##_entry_alloc(const char *db_path, void (*init_fn)(StateType*), void (*free_fn)(StateType*)) { \
         /* Step 1: Allocate the main entry struct */ \
         StateType##_Entry *entry = (StateType##_Entry*) sqlite3_malloc(sizeof(StateType##_Entry)); \
         if (entry) { \
@@ -281,8 +281,8 @@
             } \
         } \
         if (entry) { \
-            /* Step 4: Initialize the cross-platform state R/W lock */ \
-            sqlite3_rw_lock_init(&entry->state_mutex); \
+            /* Step 4: Initialize the state lock */ \
+            LockType##_init(&entry->state_mutex); \
             \
             /* Step 5: Run the user's custom init routine, or zero-init */ \
             if (init_fn) { \
@@ -300,7 +300,7 @@
         return entry; \
     } \
     \
-    static void StateType##_destructor(void *p) { \
+    static inline void StateType##_destructor(void *p) { \
         /* Bridge destructor used by sqlite3_set_auxdata and sqlite3_create_function_v2 */ \
         StateType##_Entry *entry = (StateType##_Entry *)p; \
         __##StateType##_entry_release(entry); \
@@ -311,7 +311,7 @@
      * matching state entry if it exists. Assumes the caller holds the registry lock. \
      * Automatically increments the reference count if found. \
      */ \
-    static StateType##_Entry* __##StateType##_entry_find_locked(const char *db_path) { \
+    static inline StateType##_Entry* __##StateType##_entry_find_locked(const char *db_path) { \
         StateType##_Entry *entry = NULL; \
         StateType##_Entry *curr = StateType##_registry_head; \
         while (curr) { \
@@ -330,7 +330,7 @@
      * by its database path. Returns NULL if no state exists for this database. \
      * Automatically increments the reference count if found. \
      */ \
-    static StateType##_Entry* __##StateType##_entry_get(const char *db_path) { \
+    static inline StateType##_Entry* __##StateType##_entry_get(const char *db_path) { \
         __##StateType##_ensure_mutex_init(); \
         sqlite3_mutex_enter(StateType##_registry_mutex); \
         StateType##_Entry *entry = __##StateType##_entry_find_locked(db_path); \
@@ -342,7 +342,7 @@
      * Internal helper: Retrieves an existing state entry or creates a new one if it \
      * does not exist. Thread-safe against concurrent initialization. \
      */ \
-    static StateType##_Entry* __##StateType##_entry_get_or_create(const char *db_path, void (*init_fn)(StateType*), void (*free_fn)(StateType*)) { \
+    static inline StateType##_Entry* __##StateType##_entry_get_or_create(const char *db_path, void (*init_fn)(StateType*), void (*free_fn)(StateType*)) { \
         __##StateType##_ensure_mutex_init(); \
         sqlite3_mutex_enter(StateType##_registry_mutex); \
         StateType##_Entry *entry = __##StateType##_entry_find_locked(db_path); \
@@ -359,7 +359,7 @@
      * Returns a raw pointer that must be passed to sqlite3_create_function_v2 \
      * along with StateType##_destructor. \
      */ \
-    static void* StateType##_init(sqlite3 *db, void (*init_fn)(StateType*), void (*free_fn)(StateType*)) { \
+    static inline void* StateType##_init(sqlite3 *db, void (*init_fn)(StateType*), void (*free_fn)(StateType*)) { \
         if (!db) return NULL; \
         char resolved_path[128]; \
         const char *db_path = __##StateType##_get_db_path(db, resolved_path); \
@@ -370,7 +370,7 @@
      * Fetches the state for the current query context. \
      * Implements the highly optimized 3-layer lookup. \
      */ \
-    static StateType* StateType##_from_db(sqlite3_context *ctx, sqlite3 *db) { \
+    static inline StateType* StateType##_from_db(sqlite3_context *ctx, sqlite3 *db) { \
         if (!db) return NULL; \
         StateType##_Entry *entry = NULL; \
         /* Layer 1 (Hot Path): Try fetching from SQLite's query-scoped auxdata cache */ \
@@ -402,48 +402,76 @@
      * Fast-path helper to extract the state directly from sqlite3_user_data \
      * when it was passed via sqlite3_create_function_v2. \
      */ \
-    static StateType* StateType##_from_context(sqlite3_context *ctx) { \
+    static inline StateType* StateType##_from_context(sqlite3_context *ctx) { \
         if (!ctx) return NULL; \
         StateType##_Entry *entry = (StateType##_Entry *)sqlite3_user_data(ctx); \
         return entry ? &entry->state : NULL; \
     } \
     \
     /* \
-     * Locks the state's internal read-write lock for SHARED (read) access. \
+     * Locks the state for SHARED (read) access. \
      * Uses offsetof to jump backwards from the state pointer to find the lock. \
      */ \
-    static void StateType##_read_acquire(StateType *state) { \
+    static inline void StateType##_read_acquire(StateType *state) { \
         if (!state) return; \
         StateType##_Entry *entry = (StateType##_Entry *)((char *)state - offsetof(StateType##_Entry, state)); \
-        sqlite3_rw_lock_read_acquire(&entry->state_mutex); \
+        LockType##_read_acquire(&entry->state_mutex); \
     } \
     \
     /* \
-     * Unlocks the state's internal read-write lock from a SHARED (read) access. \
+     * Unlocks the state from a SHARED (read) access. \
      */ \
-    static void StateType##_read_release(StateType *state) { \
+    static inline void StateType##_read_release(StateType *state) { \
         if (!state) return; \
         StateType##_Entry *entry = (StateType##_Entry *)((char *)state - offsetof(StateType##_Entry, state)); \
-        sqlite3_rw_lock_read_release(&entry->state_mutex); \
+        LockType##_read_release(&entry->state_mutex); \
     } \
     \
     /* \
-     * Locks the state's internal read-write lock for EXCLUSIVE (write) access. \
+     * Locks the state for EXCLUSIVE (write) access. \
      */ \
-    static void StateType##_write_acquire(StateType *state) { \
+    static inline void StateType##_write_acquire(StateType *state) { \
         if (!state) return; \
         StateType##_Entry *entry = (StateType##_Entry *)((char *)state - offsetof(StateType##_Entry, state)); \
-        sqlite3_rw_lock_write_acquire(&entry->state_mutex); \
+        LockType##_write_acquire(&entry->state_mutex); \
     } \
     \
     /* \
-     * Unlocks the state's internal read-write lock from an EXCLUSIVE (write) access. \
+     * Unlocks the state from an EXCLUSIVE (write) access. \
      */ \
-    static void StateType##_write_release(StateType *state) { \
+    static inline void StateType##_write_release(StateType *state) { \
         if (!state) return; \
         StateType##_Entry *entry = (StateType##_Entry *)((char *)state - offsetof(StateType##_Entry, state)); \
-        sqlite3_rw_lock_write_release(&entry->state_mutex); \
+        LockType##_write_release(&entry->state_mutex); \
     }
+
+// ----------------------------------------------------------------------------
+// Lock Selection Macros (Pure C)
+// ----------------------------------------------------------------------------
+
+// 1. Default (Reader/Writer Lock: SRWLOCK / pthread_rwlock_t / TinyLock on WASM)
+#define SQLITE_EXTENSION_STATE_DECLARE(StateType) \
+    SQLITE_EXTENSION_STATE_DECLARE_WITH_LOCK(StateType, sqlite3_rw_lock)
+#define SQLITE_EXTENSION_STATE_DEFINE(StateType) \
+    SQLITE_EXTENSION_STATE_DEFINE_WITH_LOCK(StateType, sqlite3_rw_lock)
+
+// 2. Explicit Read/Write Lock
+#define SQLITE_EXTENSION_STATE_DECLARE_RW(StateType) \
+    SQLITE_EXTENSION_STATE_DECLARE_WITH_LOCK(StateType, sqlite3_rw_lock)
+#define SQLITE_EXTENSION_STATE_DEFINE_RW(StateType) \
+    SQLITE_EXTENSION_STATE_DEFINE_WITH_LOCK(StateType, sqlite3_rw_lock)
+
+// 3. Tiny Lock (1-Byte TTAS Spinlock on Native / 4-Byte 0% CPU Futex on WASM)
+#define SQLITE_EXTENSION_STATE_DECLARE_TINY(StateType) \
+    SQLITE_EXTENSION_STATE_DECLARE_WITH_LOCK(StateType, sqlite3_tiny_lock)
+#define SQLITE_EXTENSION_STATE_DEFINE_TINY(StateType) \
+    SQLITE_EXTENSION_STATE_DEFINE_WITH_LOCK(StateType, sqlite3_tiny_lock)
+
+// 4. SQLite Native Mutex Lock (sqlite3_mutex_alloc)
+#define SQLITE_EXTENSION_STATE_DECLARE_MUTEX(StateType) \
+    SQLITE_EXTENSION_STATE_DECLARE_WITH_LOCK(StateType, sqlite3_mutex_lock)
+#define SQLITE_EXTENSION_STATE_DEFINE_MUTEX(StateType) \
+    SQLITE_EXTENSION_STATE_DEFINE_WITH_LOCK(StateType, sqlite3_mutex_lock)
 
 // For backwards compatibility
 #define SQLITE_EXTENSION_STATE(StateType) \

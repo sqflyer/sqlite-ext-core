@@ -4,6 +4,11 @@
 // ============================================================================
 // 1. Connection-Bound Shared State
 // ============================================================================
+// Shared state is managed via SqliteExtState<T, LockPolicy>.
+// Lock Policy Options:
+// - Default (Read/Write Lock):  SqliteExtState<AnalyticsState> (or SqliteExtStateRw<AnalyticsState>)
+// - 1-Byte Spinlock (TinyLock): SqliteExtStateTiny<AnalyticsState> (or SqliteExtState<AnalyticsState, SqliteTinyLock>)
+// - SQLite Native Mutex:        SqliteExtStateMutex<AnalyticsState> (or SqliteExtState<AnalyticsState, SqliteMutex>)
 struct AnalyticsState {
     int total_queries;
     double running_sum;

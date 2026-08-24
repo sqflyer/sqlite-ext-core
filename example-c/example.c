@@ -4,6 +4,11 @@
 // ============================================================================
 // 1. Connection Shared State (Pure C State Registry)
 // ============================================================================
+// Pluggable Synchronization Options (Pure C):
+// - Default (Read/Write Lock):  SQLITE_EXTENSION_STATE_DECLARE(CAnalyticsState) / _DECLARE_RW
+// - 1-Byte Spinlock (TinyLock): SQLITE_EXTENSION_STATE_DECLARE_TINY(CAnalyticsState)
+// - SQLite Native Mutex:        SQLITE_EXTENSION_STATE_DECLARE_MUTEX(CAnalyticsState)
+// - Generic with custom lock:   SQLITE_EXTENSION_STATE_DECLARE_WITH_LOCK(CAnalyticsState, lock_type)
 typedef struct {
     int query_count;
     double total_sum;

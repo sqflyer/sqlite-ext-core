@@ -85,3 +85,17 @@ mkdir -p build
 gcc -shared -fPIC -O2 -std=c99 -Wall -Wextra \
     -I../include -o build/libc_example.dll example.c
 ```
+
+---
+
+## 4. Shared State & Pluggable Lock Policies (Pure C)
+
+The example uses `sqlite3_ext_state.h` to maintain per-database shared state with zero global variable contamination. You can choose the synchronization primitive that best fits your workload:
+
+| Lock Policy | Macro Declaration | Optimal Workload |
+| :--- | :--- | :--- |
+| **Read/Write Lock** (Default) | `SQLITE_EXTENSION_STATE_DECLARE(State)` / `_DECLARE_RW` | Read-heavy state, lookup tables, caches |
+| **Tiny Lock** (1-Byte Spinlock) | `SQLITE_EXTENSION_STATE_DECLARE_TINY(State)` | In-memory key-value stores (`memkv`), counters, metrics |
+| **SQLite Mutex** | `SQLITE_EXTENSION_STATE_DECLARE_MUTEX(State)` | Native engine mutex integration & profiling |
+| **Custom Lock Adapter** | `SQLITE_EXTENSION_STATE_DECLARE_WITH_LOCK(State, LockType)` | Custom locking primitives |
+

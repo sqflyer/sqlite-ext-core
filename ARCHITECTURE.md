@@ -60,10 +60,12 @@ For a deeper dive into the specific mechanics and C++ paradigms used in individu
 - [**Custom Allocators**](docs/ALLOCATOR_ARCHITECTURE.md): Hooking into SQLite's memory arena via `sqlite3_malloc64` and `sqlite3_free`.
 
 ### Concurrency & Locks
+- [**Lock Base & RAII Hierarchy (`SqliteLockBase` / `SqliteGuardBase`)**](include/sqlite3_lock_base.hpp): Non-copyable, non-movable base classes providing zero-overhead, vtable-free interfaces for all locks and generic template guards (`SqliteLockGuard`, `SqliteBasicReadGuard`, `SqliteBasicWriteGuard`).
 - [**Atomics**](docs/ATOMIC_ARCHITECTURE.md): Lock-free reference counting across GCC, MSVC, and Clang intrinsics.
-- [**Mutex Locks**](docs/MUTEX_LOCK_ARCHITECTURE.md): RAII wrappers over SQLite's extremely fast recursive `sqlite3_mutex`.
-- [**Read-Write Locks**](docs/READWRITE_LOCK_ARCHITECTURE.md): Thread-safe concurrent readers and exclusive writers.
-- [**Tiny Lock**](docs/TINY_LOCK_ARCHITECTURE.md): A blazing-fast spinlock fallback for systems lacking native RW-locks.
+- [**Mutex Locks**](docs/MUTEX_LOCK_ARCHITECTURE.md): Pure C `sqlite3_mutex_lock` and C++ `SqliteMutex` RAII wrappers over SQLite's native `sqlite3_mutex`.
+- [**Read-Write Locks**](docs/READWRITE_LOCK_ARCHITECTURE.md): Thread-safe concurrent readers and exclusive writers with OS native optimizations (`SRWLOCK`, `pthread_rwlock_t`).
+- [**Tiny Lock**](docs/TINY_LOCK_ARCHITECTURE.md): A blazing-fast 1-byte spinlock fallback on native hardware and 0% CPU futex on WebAssembly.
+- [**Pluggable State Synchronization**](docs/EXT_STATE_ARCHITECTURE.md): Pluggable lock policy architecture across Pure C (`_RW`, `_TINY`, `_MUTEX`) and C++ (`SqliteExtState<T, LockPolicy>`).
 
 ### Database Interaction
 - [**Database Lifecycle**](docs/DB_ARCHITECTURE.md): The `Owned`/`View` model for robust connection management.

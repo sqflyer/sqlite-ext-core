@@ -116,6 +116,13 @@ static inline void sqlite3_tiny_lock_unlock(sqlite3_tiny_lock* lock) {
     SQLITE_CPU_NOTIFY(&lock->state);
 }
 
+// Uniform locking adapters for generic state manager integration
+#define sqlite3_tiny_lock_destroy(lock_ptr)        ((void)0)
+#define sqlite3_tiny_lock_read_acquire(lock_ptr)   sqlite3_tiny_lock_lock(lock_ptr)
+#define sqlite3_tiny_lock_read_release(lock_ptr)   sqlite3_tiny_lock_unlock(lock_ptr)
+#define sqlite3_tiny_lock_write_acquire(lock_ptr)  sqlite3_tiny_lock_lock(lock_ptr)
+#define sqlite3_tiny_lock_write_release(lock_ptr)  sqlite3_tiny_lock_unlock(lock_ptr)
+
 #ifdef __cplusplus
 }
 #endif

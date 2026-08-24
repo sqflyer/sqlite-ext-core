@@ -40,19 +40,25 @@
 #include "sqlite3_tiny_lock.hpp"
 #include "sqlite3_mutex_lock.hpp"
 
+#ifndef SQLITE_EXT_STATE_FWD_DECLARED
+#define SQLITE_EXT_STATE_FWD_DECLARED
+template <typename T, typename LockPolicy = SqliteRwLock>
+class SqliteExtState;
+#endif
+
 /**
  * @brief Zero-dependency C++ template for per-database shared extension state.
  * 
  * Replaces the SQLITE_EXTENSION_STATE(T) macro by using C++ template mechanics
  * to isolate static state registries perfectly per-type.
  */
-template <typename T>
+template <typename T, typename LockPolicy>
 class SqliteExtState {
 private:
     struct Entry {
         char *db_path = nullptr;
         int refcount = 0;
-        SqliteRwLock state_mutex;
+        LockPolicy state_mutex;
         Entry *next = nullptr;
         T state;
         
@@ -375,10 +381,20 @@ public:
     };
 };
 
+template <typename T, typename LockPolicy>
+typename SqliteExtState<T, LockPolicy>::Entry* SqliteExtState<T, LockPolicy>::registry_head = nullptr;
+
+template <typename T, typename LockPolicy>
+SqliteMutex* SqliteExtState<T, LockPolicy>::registry_mutex = nullptr;
+
+// Convenient Type Aliases for Lock Policies
 template <typename T>
-typename SqliteExtState<T>::Entry* SqliteExtState<T>::registry_head = nullptr;
+using SqliteExtStateRw = SqliteExtState<T, SqliteRwLock>;
 
 template <typename T>
-SqliteMutex* SqliteExtState<T>::registry_mutex = nullptr;
+using SqliteExtStateTiny = SqliteExtState<T, SqliteTinyLock>;
+
+template <typename T>
+using SqliteExtStateMutex = SqliteExtState<T, SqliteMutex>;
 
 #endif // SQLITE3_EXT_STATE_HPP

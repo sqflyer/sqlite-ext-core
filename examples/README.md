@@ -67,7 +67,10 @@ struct AnalyticsState {
 };
 ```
 
-- **Thread Safety**: `SqliteExtState<AnalyticsState>` wraps instances in a reader-writer spinlock (`ReadGuard` and `WriteGuard`).
+- **Thread Safety & Pluggable Lock Policies**: `SqliteExtState<AnalyticsState, LockPolicy>` manages thread safety with zero overhead:
+  - **`SqliteRwLock` (Default)**: `SqliteExtState<AnalyticsState>` / `SqliteExtStateRw<AnalyticsState>` — Ideal for read-heavy workloads with concurrent `ReadGuard` and exclusive `WriteGuard`.
+  - **`SqliteTinyLock` (1-Byte Spinlock)**: `SqliteExtStateTiny<AnalyticsState>` — Recommended for micro-states, fast in-memory key-value stores (`memkv`), and atomic counters with only 1 byte memory footprint.
+  - **`SqliteMutex` (SQLite Native)**: `SqliteExtStateMutex<AnalyticsState>` — Delegates locking directly to SQLite's native `sqlite3_mutex_alloc`.
 - **Connection Isolation**: Separate database connections (e.g., separate `:memory:` databases or threads) receive completely independent instances of `AnalyticsState`.
 
 ---

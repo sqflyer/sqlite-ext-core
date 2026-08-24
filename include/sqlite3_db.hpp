@@ -125,8 +125,11 @@ public:
     }
 };
 
-// Forward declaration of the extension state manager
-template <typename T> class SqliteExtState;
+#ifndef SQLITE_EXT_STATE_FWD_DECLARED
+#define SQLITE_EXT_STATE_FWD_DECLARED
+class SqliteRwLock;
+template <typename T, typename LockPolicy = SqliteRwLock> class SqliteExtState;
+#endif
 
 /**
  * @brief Zero-allocation, lightweight RAII wrapper for sqlite3_context inside UDFs, Aggregates, and Virtual Tables.
