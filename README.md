@@ -72,6 +72,7 @@ Zero-dependency C++ RAII wrappers for SQLite core data types designed for zero-a
 - **SQLite Integration APIs**: Provides zero-overhead `bind()` and `result()` methods directly on wrappers to easily interoperate with `sqlite3_stmt` parameters and `sqlite3_context` returns.
 - **Zero-Allocation Lookups**: Provides non-owning `View` wrappers (`SqliteStringView`, `SqliteBlobView`, `SqliteValueView`) to prevent expensive memory allocations during C++ map key lookups.
 - **Small Buffer Optimization (SBO)**: Uses union-based zero-allocation storage for integers and floats, falling back to `sqlite3_value_dup` only for strings and blobs.
+- **Owned Value Arrays**: `SqliteValueOwnedStaticArray<N>` (pure stack, 0 mallocs) and `SqliteValueOwnedDynamicArray` (`sqlite3_realloc64`-managed heap) provide RAII-managed contiguous `SqliteValueOwned` buffers. A unified `SqliteValueOwnedArray<N>` alias maps `N>0` to static and `N=0` to dynamic. These arrays are the common base from which the Row classes in `sqlite3_row.hpp` are derived.
 - **Heterogeneous Lookups**: Natively supports comparing `View`s against heavy, memory-managed `Owned` classes. Includes 144+ macro-generated operator overloads to instantly compare variants against strings, blobs, and C++ primitives (`int`, `double`) using all 6 standard relational operators (`==`, `!=`, `<`, `>`, `<=`, `>=`).
 - **Transparent Map Lookups**: Fully unlocks C++14 `std::less<>` and C++20 `std::unordered_map` heterogeneous lookup capabilities. Query polymorphic maps or hash tables using `my_map.find(5)` or `my_map.find("hello")` natively, without ever instantiating a memory-managed wrapper, thanks to the built-in `SqliteValueHash` and `SqliteValueEqual` functors.
 - **Accurate Collation**: Fully conforms to official SQLite collation sorting rules (`NULL < NUMERIC < TEXT < BLOB`), complete with stable `NaN` sorting constraints.
@@ -82,6 +83,22 @@ Zero-dependency C++ RAII wrappers for SQLite core data types designed for zero-a
 #### Documentation
 - [Value Types README](docs/VALUE_README.md)
 - [Value Types Architecture](docs/VALUE_ARCHITECTURE.md)
+
+### 4.5. C++ RAII Row Types (`sqlite3_row.hpp`)
+Zero-dependency, `-nostdlib++` compliant wrappers for multi-column SQLite tabular rows, designed for zero-allocation row inspection, stack-allocated fixed-schema rows, and runtime heap-allocated dynamic rows.
+
+#### Key Features:
+- **Universal Non-Owning Row View**: `SqliteRowView` (24 Bytes) multiplexes all SQLite row sources — prepared statements (`sqlite3_stmt*`), UDF argument vectors (`sqlite3_value**`), and in-memory contiguous `SqliteValueOwned` / `SqliteValueView` arrays — behind a single uniform API.
+- **Stack-Allocated Fixed-Schema Rows**: `SqliteRowStatic<N>` stores exactly $N \times 16$ bytes directly on the stack with 0 heap allocations. `SqliteRowStatic<4>` fits exactly into a single 64-byte L1 cache line.
+- **Heap-Allocated Dynamic Rows**: `SqliteRowDynamic` manages runtime-sized column arrays via `sqlite3_malloc64` / `sqlite3_realloc64` with 1-cycle move semantics.
+- **Two-Tier Owned Class Architecture**: Both row classes inherit from foundational value-array base classes (`SqliteValueOwnedStaticArray<N>` / `SqliteValueOwnedDynamicArray`) defined in `sqlite3_value.hpp`, eliminating boilerplate while keeping identical memory footprints.
+- **Shared Construction Utility**: `SqliteRowUtil::copy_from_view` provides a single source-type-dispatching copy loop used by both `SqliteRowStatic<N>` and `SqliteRowDynamic` constructors, with the source-type branch hoisted outside the per-column loop.
+- **Unified Template Alias**: `SqliteRowOwned<N>` maps `N>0` to `SqliteRowStatic<N>` and `N=0` to `SqliteRowDynamic`.
+- **Seamless View Conversion**: All owned row types implicitly convert to `SqliteRowView` via `operator SqliteRowView()` with zero allocation.
+
+#### Documentation:
+- [Row Types README](docs/ROW_README.md)
+- [Row Types Architecture](docs/ROW_ARCHITECTURE.md)
 
 ### 5. Smart Pointers (`sqlite3_smart_ptr.h` / `.hpp`)
 Zero-dependency, thread-safe, reference-counted memory allocation that integrates directly into SQLite's memory manager (`sqlite3_malloc`). Allows safely sharing dynamic payloads across User-Defined Function (UDF) boundaries.

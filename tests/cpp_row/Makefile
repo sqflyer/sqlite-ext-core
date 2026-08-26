@@ -1,5 +1,3 @@
-.PHONY: test clean
-
 # OS Detection
 UNAME_S ?= $(shell uname -s 2>/dev/null || echo Windows)
 
@@ -24,27 +22,18 @@ else
 endif
 
 CXXFLAGS := -std=c++11 -Wall -Wextra -I../../include -fno-exceptions -fno-rtti $(SAN_FLAGS)
-LDFLAGS := -lsqlite3 $(SAN_FLAGS)
-BIN_DIR = bin
+LIBS := -lsqlite3 $(SAN_FLAGS)
 
-test: $(BIN_DIR)/test_value $(BIN_DIR)/test_value_std
-	./$(BIN_DIR)/test_value
-	./$(BIN_DIR)/test_value_std
+.PHONY: all test clean
 
-test-nostd: $(BIN_DIR)/test_value
-	./$(BIN_DIR)/test_value
+all: test
 
-test-std: $(BIN_DIR)/test_value_std
-	./$(BIN_DIR)/test_value_std
+test: bin/test_row
+	./bin/test_row
 
-$(BIN_DIR)/test_value: test_value.cpp | $(BIN_DIR)
-	$(CXX) $(CXXFLAGS) -o $@ $< $(LDFLAGS)
-
-$(BIN_DIR)/test_value_std: test_value_std.cpp | $(BIN_DIR)
-	$(CXX) -std=c++14 -Wall -Wextra -I../../include $(SAN_FLAGS) -o $@ $< $(LDFLAGS)
-
-$(BIN_DIR):
-	mkdir -p $(BIN_DIR)
+bin/test_row: test_row.cpp
+	mkdir -p bin
+	$(CXX) $(CXXFLAGS) -o $@ $< $(LIBS)
 
 clean:
-	rm -rf $(BIN_DIR)
+	rm -rf bin

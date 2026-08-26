@@ -20,8 +20,8 @@ Core Guarantees:
 
 Because we cannot rely on `std::string_view` or `std::unique_ptr` in a `-nostdlib++` environment, we reinvented a zero-cost ownership model applied uniformly across the entire library (Values, Strings, Buffers, and Databases).
 
-- **`View` Classes**: (e.g., `SqliteValueView`, `SqliteDatabaseView`, `SqliteStringView`, `SqliteBlobView`)
-  - Hold a raw pointer.
+- **`View` Classes**: (e.g., `SqliteValueView`, `SqliteDatabaseView`, `SqliteStringView`, `SqliteBlobView`, `SqliteRowView`)
+  - Hold a raw pointer or a tagged union of pointers.
   - Never allocate memory, and never free it.
   - Used when SQLite hands you data (e.g., in a UDF callback) and you just want C++ convenience methods.
 
@@ -31,6 +31,11 @@ Because we cannot rely on `std::string_view` or `std::unique_ptr` in a `-nostdli
   - Move constructors and move assignment operators cleanly transfer ownership via `sqlite_move(other)`.
   - Their destructors safely clean up the resource (e.g., `sqlite3_close_v2` or `sqlite3_value_free`).
   - By inheriting from `View`, they support **object slicing**. You can pass an `Owned` object by value into any function expecting a `View`, which compiles down to a raw 8-byte pointer copy with zero overhead!
+
+- **`OwnedArray` Classes**: (e.g., `SqliteValueOwnedStaticArray<N>`, `SqliteValueOwnedDynamicArray`, `SqliteValueOwnedArray<N>`)
+  - Manage contiguous RAII arrays of `SqliteValueOwned` elements.
+  - Static variant lives entirely on the stack (0 mallocs); dynamic variant uses `sqlite3_realloc64` for in-place growth.
+  - Act as the **foundational base classes** for `SqliteRowStatic<N>` and `SqliteRowDynamic` in `sqlite3_row.hpp`, which inherit from them and add row-domain APIs (`.view()`, `.column_count()`, `operator SqliteRowView()`).
 
 ## 3. Strict RAII (Resource Acquisition Is Initialization)
 
@@ -56,7 +61,8 @@ This provides:
 For a deeper dive into the specific mechanics and C++ paradigms used in individual components, refer to their dedicated architecture guides:
 
 ### Memory & State Management
-- [**Value System (`SqliteValue`)**](docs/VALUE_ARCHITECTURE.md): The core zero-cost `Owned`/`View` wrappers over `sqlite3_value` powering heterogeneous lookups.
+- [**Value System (`SqliteValue`)**](docs/VALUE_ARCHITECTURE.md): The core zero-cost `Owned`/`View` wrappers over `sqlite3_value`, heterogeneous lookups, and the `SqliteValueOwnedStaticArray<N>` / `SqliteValueOwnedDynamicArray` contiguous array classes that form the base of the Row system.
+- [**Row System (`SqliteRow`)**](docs/ROW_ARCHITECTURE.md): Two-tier hierarchy — `SqliteValueOwnedStaticArray<N>` / `SqliteValueOwnedDynamicArray` (value.hpp base) → `SqliteRowStatic<N>` / `SqliteRowDynamic` (row.hpp extension). Universal `SqliteRowView` (24B) multiplexes statements, argv vectors, and owned arrays. `SqliteRowUtil::copy_from_view` provides loop-optimized shared construction.
 - [**Dynamic Buffers (`SqliteBuffer`)**](docs/BUFFER_ARCHITECTURE.md): `-nostdlib++` replacements for `std::string` and `std::vector` using `sqlite3_realloc64` that natively hook into the Value System's FNV-1a hashing engine.
 - [**Blob Streams (`SqliteBlobStream`)**](docs/BLOB_STREAM_ARCHITECTURE.md): Zero-copy stream interfaces for handling large SQLite blobs without loading them entirely into memory.
 - [**Online Backup (`SqliteBackup`)**](docs/BACKUP_ARCHITECTURE.md): RAII wrappers for the SQLite Online Backup API to ensure safe resource disposal during long-running background tasks.

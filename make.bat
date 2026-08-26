@@ -21,6 +21,7 @@ if "%TARGET%"=="test-oom" ( call :test_oom & goto end )
 if "%TARGET%"=="test-multi-tu" ( call :test_multi_tu & goto end )
 if "%TARGET%"=="test-ext-state" ( call :test_ext_state & goto end )
 if "%TARGET%"=="test-cpp-value" ( call :test_cpp_value & goto end )
+if "%TARGET%"=="test-cpp-row" ( call :test_cpp_row & goto end )
 if "%TARGET%"=="test-locks" ( call :test_locks & goto end )
 if "%TARGET%"=="test-cpp-allocator" ( call :test_cpp_allocator & goto end )
 if "%TARGET%"=="test-cpp-smart-ptr" ( call :test_cpp_smart_ptr & goto end )
@@ -46,6 +47,8 @@ exit /b 1
 call :test_ext_state
 if %ERRORLEVEL% neq 0 exit /b %ERRORLEVEL%
 call :test_cpp_value
+if %ERRORLEVEL% neq 0 exit /b %ERRORLEVEL%
+call :test_cpp_row
 if %ERRORLEVEL% neq 0 exit /b %ERRORLEVEL%
 call :test_locks
 if %ERRORLEVEL% neq 0 exit /b %ERRORLEVEL%
@@ -124,6 +127,11 @@ goto :eof
 :test_cpp_value
 echo [Running test-cpp-value]
 cd tests\cpp_value && call make.bat && cd ..\..
+goto :eof
+
+:test_cpp_row
+echo [Running test-cpp-row]
+cd tests\cpp_row && call make.bat && cd ..\..
 goto :eof
 
 :test_locks

@@ -909,6 +909,82 @@ void test_owned_move_and_self_assign_safety(sqlite3* db) {
     sqlite3_finalize(stmt);
 }
 
+void test_owned_value_arrays() {
+    // 1. Static Array (Stack, 0 heap allocations)
+    static_assert(sizeof(SqliteValueOwnedStaticArray<3>) == 48, "SqliteValueOwnedStaticArray<3> must be exactly 48 bytes!");
+    static_assert(sizeof(SqliteValueOwnedStaticArray<4>) == 64, "SqliteValueOwnedStaticArray<4> must be exactly 64 bytes!");
+
+    SqliteValueOwnedStaticArray<3> static_arr;
+    assert(static_arr.size() == 3);
+    assert(static_arr.count() == 3);
+    assert(!static_arr.empty());
+    assert(static_arr[0].is_null());
+
+    static_arr[0] = 500LL;
+    static_arr[1] = SqliteValueOwned::from_text("static_test");
+    static_arr[2] = 3.14159;
+
+    assert(static_arr.as_int64(0) == 500);
+    assert(static_arr.as_text(1) == "static_test");
+    assert(static_arr.as_double(2) == 3.14159);
+    assert(static_arr.type(0) == SQLITE_INTEGER);
+    assert(static_arr.type(1) == SQLITE_TEXT);
+    assert(static_arr.type(2) == SQLITE_FLOAT);
+
+    // 2. Dynamic Array (Heap, sqlite3_malloc64)
+    SqliteValueOwnedDynamicArray dyn_arr(3);
+    assert(dyn_arr.size() == 3);
+    assert(!dyn_arr.empty());
+
+    dyn_arr[0] = 100LL;
+    dyn_arr[1] = SqliteValueOwned::from_text("dyn_test");
+    dyn_arr[2] = 99.9;
+
+    assert(dyn_arr.as_int64(0) == 100);
+    assert(dyn_arr.as_text(1) == "dyn_test");
+    assert(dyn_arr.as_double(2) == 99.9);
+
+    // Copy Constructor
+    SqliteValueOwnedDynamicArray dyn_copy = dyn_arr;
+    assert(dyn_copy.size() == 3);
+    assert(dyn_copy.as_int64(0) == 100);
+    assert(dyn_copy.as_text(1) == "dyn_test");
+
+    // Move Constructor
+    SqliteValueOwnedDynamicArray dyn_moved = sqlite_move(dyn_arr);
+    assert(dyn_moved.size() == 3);
+    assert(dyn_moved.as_int64(0) == 100);
+    assert(dyn_arr.empty());
+    assert(dyn_arr.size() == 0);
+
+    // Dynamic Resize (Grow & Shrink)
+    dyn_moved.resize(5);
+    assert(dyn_moved.size() == 5);
+    assert(dyn_moved.as_int64(0) == 100);
+    assert(dyn_moved.is_null(3));
+    assert(dyn_moved.is_null(4));
+
+    // Dynamic Shrink
+    dyn_moved.resize(2);
+    assert(dyn_moved.size() == 2);
+    assert(dyn_moved.as_int64(0) == 100);
+    assert(dyn_moved.as_text(1) == "dyn_test");
+
+    // 3. Unified Template Alias SqliteValueOwnedArray
+    SqliteValueOwnedArray<2> unified_static;
+    unified_static[0] = 42LL;
+    unified_static[1] = 2.718;
+    assert(unified_static.size() == 2);
+    assert(unified_static.as_int64(0) == 42);
+
+    SqliteValueOwnedArray<0> unified_dyn(2);
+    unified_dyn[0] = 777LL;
+    unified_dyn[1] = SqliteValueOwned::from_text("unified");
+    assert(unified_dyn.size() == 2);
+    assert(unified_dyn.as_int64(0) == 777);
+    assert(unified_dyn.as_text(1) == "unified");
+}
+
 int main() {
     sqlite3_initialize();
     
@@ -983,6 +1059,9 @@ int main() {
 
     printf("Testing Owned Move & Self-Assignment Lifetime Safety...\n");
     test_owned_move_and_self_assign_safety(db);
+
+    printf("Testing SqliteValueOwned Arrays (Static, Dynamic, Unified)...\n");
+    test_owned_value_arrays();
     
     sqlite3_close(db);
     sqlite3_shutdown();

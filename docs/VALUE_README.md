@@ -34,6 +34,20 @@ In SQLite extension development, values appear in two distinct contexts:
 │  (16B Dual Layout)     (sqlite3_str dynamic)       (sqlite3_malloc bytes)   │
 │  [16 Bytes]            [8 Bytes]                   [16 Bytes]               │
 └─────────────────────────────────────────────────────────────────────────────┘
+                                     │
+         Compose via SqliteValueOwnedStaticArray<N> / SqliteValueOwnedDynamicArray
+                                     ▼
+┌──────────────────────────────────────────────────────────────────────────────────┐
+│                            OWNED ARRAY CLASSES                                   │
+│ (Contiguous N × 16B arrays of SqliteValueOwned, RAII-managed)                    │
+│                                                                                  │
+│  SqliteValueOwnedStaticArray<N>           SqliteValueOwnedDynamicArray           │
+│  (Stack — N columns, 0 mallocs)           (Heap — sqlite3_realloc64-managed)     │
+│  [N × 16 Bytes on Stack/In-Situ]          [16 Bytes handle → Heap Array]         │
+│                                                                                  │
+│          SqliteValueOwnedArray<N>         (Unified template alias)               │
+│  N > 0 → SqliteValueOwnedStaticArray<N>    N == 0 → SqliteValueOwnedDynamicArray │
+└──────────────────────────────────────────────────────────────────────────────────┘
 ```
 
 ---
@@ -50,6 +64,14 @@ In SQLite extension development, values appear in two distinct contexts:
 | **Direct Extraction** | `.as_text()`, `.as_blob()` | `.as_text()`, `.as_blob()` | `.data()`, `.c_str()` | `.data()` |
 | **UDF / Statement Interop** | `.result()`, `.bind()` | `.result()`, `.bind()` | `.result()`, `.bind()` | `.result()`, `.bind()` |
 | **Heterogeneous Lookups** | 144+ operators | 144+ operators | Operators for `std::map` | Operators for `std::map` |
+
+### Owned Array Summary
+
+| Type | Storage | Allocation | Use Case |
+| :--- | :--- | :--- | :--- |
+| `SqliteValueOwnedStaticArray<N>` | Stack / In-Situ | **0 Mallocs** | Fixed-schema caches, VTable rows |
+| `SqliteValueOwnedDynamicArray` | Heap (`sqlite3_realloc64`) | 1 `sqlite3_malloc64` | Runtime-sized row materialization |
+| `SqliteValueOwnedArray<N>` | Alias: Static ($N>0$) / Dynamic ($N=0$) | — | Generic algorithms |
 
 ---
 
@@ -180,7 +202,71 @@ assert(a.is_null()); // Moved-from instance is safely reset to NULL
 
 ---
 
-## 5. Dynamic String Building (`SqliteStringOwned`)
+## 5. Owned Value Arrays (`SqliteValueOwnedStaticArray`, `SqliteValueOwnedDynamicArray`)
+
+These classes provide contiguous RAII-managed arrays of `SqliteValueOwned` elements — the foundational building blocks from which the Row classes in `sqlite3_row.hpp` are derived.
+
+### `SqliteValueOwnedStaticArray<N>` — Stack-Allocated Array
+
+```cpp
+// Exactly N * 16 bytes on the stack — zero heap allocations
+SqliteValueOwnedStaticArray<4> static_arr;
+static_arr[0] = 42LL;
+static_arr[1] = SqliteValueOwned::from_text("hello");
+static_arr[2] = 3.14;
+static_arr[3] = SqliteValueOwned(); // SQLITE_NULL
+
+assert(static_arr.size() == 4);
+
+// Element access
+SqliteValueOwned& elem = static_arr[2];
+SqliteValueView   view = static_arr.view_at(2); // non-owning view
+```
+
+### `SqliteValueOwnedDynamicArray` — Heap-Allocated Resizable Array
+
+```cpp
+// Allocates N * 16 bytes via sqlite3_malloc64
+SqliteValueOwnedDynamicArray dyn_arr(3);
+dyn_arr[0] = 1LL;
+dyn_arr[1] = SqliteValueOwned::from_text("world");
+dyn_arr[2] = 2.71828;
+
+// Resize preserving existing elements (uses sqlite3_realloc64 for in-place growth)
+dyn_arr.resize(5);
+assert(dyn_arr.size() == 5);
+assert(dyn_arr[0].as_int64() == 1);
+assert(dyn_arr[3].is_null()); // New elements are SQLITE_NULL
+
+// 1-cycle move (transfers 8-byte pointer)
+SqliteValueOwnedDynamicArray moved = sqlite_move(dyn_arr);
+assert(dyn_arr.empty()); // Source safely zeroed
+```
+
+### `SqliteValueOwnedArray<N>` — Unified Template Alias
+
+```cpp
+template <size_t N = 0>
+using SqliteValueOwnedArray = /* SqliteValueOwnedStaticArray<N> (N > 0)
+                                  SqliteValueOwnedDynamicArray  (N == 0) */;
+
+// Use identical API regardless of allocation model:
+SqliteValueOwnedArray<3> stack_arr;   // Stack
+SqliteValueOwnedArray<0> heap_arr(3); // Heap
+```
+
+### Relationship to Row Classes
+
+`SqliteRowStatic<N>` and `SqliteRowDynamic` are thin subclasses of these array types, adding only row-domain methods (`view()`, `column_count()`, `operator SqliteRowView()`):
+
+```
+SqliteValueOwnedStaticArray<N>  ←─── SqliteRowStatic<N>
+SqliteValueOwnedDynamicArray    ←─── SqliteRowDynamic
+```
+
+---
+
+## 6. Dynamic String Building (`SqliteStringOwned`)
 
 `SqliteStringOwned` leverages SQLite's native `sqlite3_str` builder, enabling dynamic string formatting that transfers directly into UDF results or statements with **zero buffer copying**:
 
@@ -197,7 +283,7 @@ sb.result(ctx);
 
 ---
 
-## 6. Zero-Allocation Heterogeneous Map Lookups
+## 7. Zero-Allocation Heterogeneous Map Lookups
 
 Standard C++ `std::map<std::string, T>` forces a dynamic allocation whenever a search key is created from a SQLite value. By using `SqliteStringOwned` (or `SqliteValueOwned`) with `std::less<>`, lookups using transient `SqliteStringView` or `SqliteValueView` execute with **0 heap allocations**:
 
@@ -228,7 +314,7 @@ void get_score_udf(sqlite3_context* ctx, int argc, sqlite3_value** argv) {
 
 ---
 
-## 7. Polymorphic Variant Maps
+## 8. Polymorphic Variant Maps
 
 Store heterogeneous SQLite datatypes in a single `std::map` sorted strictly by SQLite's native collation order ($\text{NULL} < \text{NUMERIC} < \text{TEXT} < \text{BLOB}$):
 
@@ -247,7 +333,7 @@ auto it2 = poly_map.find(SqliteStringView("hello", 5)); // Found!
 
 ---
 
-## 8. Performance Benchmarks (Cycle-Accurate)
+## 9. Performance Benchmarks (Cycle-Accurate)
 
 | Operation | Standard C++ / SQLite Baseline | `sqlite3_value.hpp` | Improvement |
 | :--- | :--- | :--- | :--- |

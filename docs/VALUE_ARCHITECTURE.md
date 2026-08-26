@@ -252,11 +252,77 @@ auto type_rank = [](int t) -> int {
 
 ---
 
-## 9. Freestanding Memory Guarantees (`-nostdlib++`)
+## 9. Owned Value Array Architecture (`SqliteValueOwnedStaticArray` / `SqliteValueOwnedDynamicArray`)
+
+These classes extend the single-element `SqliteValueOwned` into RAII-managed **contiguous multi-element arrays**, forming the common base from which the Row classes in `sqlite3_row.hpp` are derived.
+
+### Memory Layout
+
+**`SqliteValueOwnedStaticArray<N>`** (Stack / In-Situ):
+```
+Byte 0                   16             32            N*16
+┌────────────────────────┬──────────────┬───...─────────┐
+│ m_values[0]            │ m_values[1]  │ m_values[N-1] │
+│ [SqliteValueOwned 16B] ...                            │
+└────────────────────────┴──────────────┴───...─────────┘
+```
+- Lives entirely on the stack or inline in a parent struct. **0 allocations**.
+
+**`SqliteValueOwnedDynamicArray`** (Heap Handle):
+```
+Stack:  [ m_values* (8B) | m_len (4B) | pad (4B) ]  ← 16 Bytes
+                │
+                └─► sqlite3_malloc64(N * 16)
+Heap:   [ SqliteValueOwned[0] | ... | SqliteValueOwned[N-1] ]
+```
+
+### `resize()` \u2014 `sqlite3_realloc64` In-Place Growth
+
+```cpp
+void resize(int new_count) noexcept {
+    // 1. Attempt in-place growth via sqlite3_realloc64 (avoids copy when allocator
+    //    can extend the current page in-place)
+    void* p = sqlite3_realloc64(m_values, new_count * sizeof(SqliteValueOwned));
+    if (p) {
+        m_values = static_cast<SqliteValueOwned*>(p);
+        // Default-construct newly added tail elements
+        for (int i = m_len; i < new_count; ++i)
+            sqlite_construct_at(&m_values[i]);
+        m_len = new_count;
+    }
+    // On OOM: m_values is unchanged (sqlite3_realloc64 guarantee); no-op
+}
+```
+
+The use of `sqlite3_realloc64` instead of a fresh `malloc` + `memcpy` is safe because `SqliteValueOwned` elements are **trivially relocatable** (their internal 8-byte payload is a raw value/pointer; there are no internal self-referential pointers).
+
+### Inheritance Hierarchy
+
+```
+sqlite3_value.hpp
+  SqliteValueOwnedStaticArray<N>  ───────────────────────────┐
+  SqliteValueOwnedDynamicArray    ──────────────────────┐    │
+                                                        │    │
+sqlite3_row.hpp (inherits, adds view()/column_count())  │    │
+  SqliteRowDynamic  ◄───────────────────────────────────┘    │
+  SqliteRowStatic<N> ◄───────────────────────────────────────┘
+```
+
+`SqliteRowStatic<N>` and `SqliteRowDynamic` add **only** three row-domain methods:
+- `view()` → `SqliteRowView`
+- `column_count()` → `int` (alias for `size()`)
+- `operator SqliteRowView()` → implicit conversion
+
+No data members are added; the row classes have an identical memory footprint to their base array classes.
+
+---
+
+## 10. Freestanding Memory Guarantees (`-nostdlib++`)
 
 All classes strictly adhere to freestanding `-nostdlib++` requirements:
 - Memory for `SqliteStringOwned` is managed via `sqlite3_str_new` / `sqlite3_free`.
 - Memory for `SqliteBlobOwned` is managed via `sqlite3_malloc` / `sqlite3_free`.
 - Dynamic values in `SqliteValueOwned` duplicate via `sqlite3_value_dup` and free via `sqlite3_value_free`.
+- `SqliteValueOwnedDynamicArray` uses `sqlite3_malloc64` / `sqlite3_realloc64` / `sqlite3_free` exclusively.
 - Move operations utilize `sqlite_move` from `sqlite3_allocator.hpp` with zero dependency on `<utility>`.
 - Exceptions are disabled (`-fno-exceptions`); memory failures produce safe deterministic null states verified via `.is_valid()` and `explicit operator bool()`.

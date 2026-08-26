@@ -3,6 +3,7 @@
 
 #include <sqlite3.h>
 #include "sqlite3_value.hpp"
+#include "sqlite3_row.hpp"
 
 /**
  * @brief Zero-dependency C++ RAII wrapper over SQLite prepared statements (`sqlite3_stmt*`).
@@ -512,6 +513,28 @@ public:
         return m_stmt ? sqlite3_column_value(m_stmt, col) : nullptr;
     }
 
+    /**
+     * @brief Extracts a column value as a zero-allocation SqliteValueView.
+     * 
+     * Enables fluent typed extraction: stmt.get_column(0).as_double(), stmt.get_column(1).as_text(), etc.
+     * 
+     * @param col 0-based column index.
+     * @return Non-owning SqliteValueView.
+     */
+    inline SqliteValueView get_column(int col) const noexcept {
+        return SqliteValueView::from_column(m_stmt, col);
+    }
+
+    /**
+     * @brief Alias for get_column().
+     * 
+     * @param col 0-based column index.
+     * @return Non-owning SqliteValueView.
+     */
+    inline SqliteValueView column(int col) const noexcept {
+        return get_column(col);
+    }
+
     // =========================================================================
     // Zero-Allocation View & Owned Wrapper Extractions
     // =========================================================================
@@ -560,6 +583,15 @@ public:
      */
     inline SqliteValueOwned column_value_owned(int col) const {
         return SqliteValueOwned(column_value(col));
+    }
+
+    /**
+     * @brief Returns a zero-allocation SqliteRowView wrapping the active step row.
+     * 
+     * @return SqliteRowView for fast multi-column inspection.
+     */
+    inline SqliteRowView row() const noexcept {
+        return SqliteRowView(m_stmt);
     }
 };
 

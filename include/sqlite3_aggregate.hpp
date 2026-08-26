@@ -7,10 +7,6 @@
 #include "sqlite3_allocator.hpp"
 #include "sqlite3_ext_state.hpp"
 
-/**
- * @brief Forward declaration of SqliteUdfArgs.
- */
-class SqliteUdfArgs;
 
 /**
  * @brief Base marker tag struct for compile-time inheritance verification.

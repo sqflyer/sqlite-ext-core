@@ -69,7 +69,7 @@ void test_sqlite_value_owned_null_safety() {
     SqliteValueOwned val_null(static_cast<const sqlite3_value*>(nullptr));
     assert(val_null.type() == SQLITE_NULL);
     assert(val_null.is_valid());
-    assert((bool)val_null);
+    assert(!val_null);
     assert(val_null.as_int64() == 0);
     assert(val_null.as_double() == 0.0);
     assert(val_null.as_text().length() == 0);
