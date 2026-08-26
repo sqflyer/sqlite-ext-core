@@ -270,22 +270,66 @@ Master umbrella headers providing full subsystem access:
 
 ## Building and Testing
 
-### 1. Run Complete Integration Test Suite
-To run the integration tests across all C and C++ subsystems:
+`sqlite-ext-core` features dual cross-platform build systems supporting both GCC/Clang (`Makefile`) and Microsoft Visual C++ (`make.bat`), with strict `-nostdlib++` verification enforced across all compilers.
+
+### 1. POSIX / MSYS2 / MinGW (`Makefile`)
+Uses `gcc` / `g++` or `clang` / `clang++` with `-nostdlib++ -fno-exceptions -fno-rtti`:
+
 ```bash
+# Run all subsystem integration tests
 make test
+
+# Run individual subsystem test suites
+make test-time
+make test-locks
+make test-cpp-allocator
+make test-cpp-smart-ptr
+make test-cpp-value
+make test-cpp-udf
+make test-cpp-aggregate
+make test-cpp-statement
+make test-cpp-tvf
+make test-cpp-transaction
+make test-cpp-db
+make test-cpp-buffer
+make test-cpp-blob-stream
+make test-cpp-backup
+make test-cpp-vtab
+make test-cpp-extension
+make test-ext-state
+
+# Run turnkey extension demos
+make example      # C++ extension demo
+make example-c    # Pure C extension demo
 ```
 
-### 2. Run C++ Extension Demo
-To compile and test the turnkey C++ example extension in [`examples/`](examples/):
-```bash
-make example
-# or: cd examples && make run
-```
+### 2. Native Windows MSVC (`make.bat`)
+Uses MSVC `cl.exe` with `/GR-` (no RTTI), `/EHs-c-` (no exceptions), and `/link /NODEFAULTLIB:msvcprt.lib /NODEFAULTLIB:libcpmt.lib` (strictly prohibiting any link against the MSVC C++ standard library):
 
-### 3. Run Pure C Extension Demo
-To compile and test the turnkey pure C example extension in [`example-c/`](example-c/):
-```bash
-make example-c
-# or: cd example-c && make run
+```cmd
+:: Run all subsystem integration tests
+make.bat test
+
+:: Run individual subsystem test suites
+make.bat test-time
+make.bat test-locks
+make.bat test-cpp-allocator
+make.bat test-cpp-smart-ptr
+make.bat test-cpp-value
+make.bat test-cpp-udf
+make.bat test-cpp-aggregate
+make.bat test-cpp-statement
+make.bat test-cpp-tvf
+make.bat test-cpp-transaction
+make.bat test-cpp-db
+make.bat test-cpp-buffer
+make.bat test-cpp-blob-stream
+make.bat test-cpp-backup
+make.bat test-cpp-vtab
+make.bat test-cpp-extension
+make.bat test-ext-state
+
+:: Run turnkey extension demos
+make.bat example      :: C++ extension demo
+make.bat example-c    :: Pure C extension demo
 ```

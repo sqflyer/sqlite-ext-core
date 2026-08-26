@@ -271,7 +271,7 @@
         StateType##_Entry *entry = (StateType##_Entry*) sqlite3_malloc(sizeof(StateType##_Entry)); \
         if (entry) { \
             /* Step 2: Deep copy the database path to serve as the registry key */ \
-            int path_len = strlen(db_path); \
+            int path_len = (int)strlen(db_path); \
             entry->db_path = (char*)sqlite3_malloc(path_len + 1); \
             if (entry->db_path) { \
                 memcpy(entry->db_path, db_path, path_len + 1); \

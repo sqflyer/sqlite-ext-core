@@ -51,7 +51,7 @@ static void udf_state_accumulate(SqliteContext ctx, SqliteUdfArgs args) {
     int val = 0;
     {
         SqliteExtState<SharedAppState>::WriteGuard lock(state);
-        lock->accumulator += args[0].as_int64();
+        lock->accumulator += static_cast<int>(args[0].as_int64());
         val = lock->accumulator;
     }
     ctx.result_int(val);
@@ -73,7 +73,7 @@ static void udf_state_set_tag(SqliteContext ctx, SqliteUdfArgs args) {
     SqliteStringView str = args[0].as_text();
     {
         SqliteExtState<SharedAppState>::WriteGuard lock(state);
-        int copy_len = str.length() < 63 ? str.length() : 63;
+        int copy_len = str.length() < 63 ? static_cast<int>(str.length()) : 63;
         memcpy(lock->tag, str.data(), copy_len);
         lock->tag[copy_len] = '\0';
     }
@@ -96,7 +96,7 @@ static void udf_state_get_stats(SqliteContext ctx, SqliteUdfArgs args) {
         SqliteExtState<SharedAppState>::ReadGuard lock(state);
         c = lock->counter;
         a = lock->accumulator;
-        int len = strlen(lock->tag);
+        int len = static_cast<int>(strlen(lock->tag));
         if (len > 63) len = 63;
         memcpy(t, lock->tag, len);
         t[len] = '\0';

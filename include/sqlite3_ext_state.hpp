@@ -155,7 +155,7 @@ private:
     static Entry* entry_alloc(const char *db_path, void (*init_fn)(T*)) {
         Entry *entry = sqlite_new<Entry>();
         if (entry) {
-            int path_len = strlen(db_path);
+            int path_len = (int)strlen(db_path);
             entry->db_path = (char*)sqlite3_malloc(path_len + 1);
             if (entry->db_path) {
                 memcpy(entry->db_path, db_path, path_len + 1);

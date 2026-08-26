@@ -32,7 +32,7 @@ struct MetricsStreamer : public SqliteTvfIterator {
     int min_threshold = 0;
 
     void init(SqliteUdfArgs args) override {
-        min_threshold = args.size() > 0 && args[0].type() != SQLITE_NULL ? args[0].as_int64() : 0;
+        min_threshold = (args.size() > 0 && args[0].type() != SQLITE_NULL) ? static_cast<int>(args[0].as_int64()) : 0;
         current_idx = 0;
     }
 
@@ -168,8 +168,8 @@ static void udf_set_metric(SqliteContext ctx, SqliteUdfArgs args) {
     TvfSharedState* state = ctx.state<TvfSharedState>();
     if (!state) return;
 
-    int idx = args[0].as_int64();
-    int val = args[1].as_int64();
+    int idx = static_cast<int>(args[0].as_int64());
+    int val = static_cast<int>(args[1].as_int64());
 
     if (idx >= 0 && idx < 4) {
         SqliteExtState<TvfSharedState>::WriteGuard lock(state);

@@ -36,7 +36,7 @@ void udf_repeat_str(SqliteContext ctx, SqliteUdfArgs args) {
     }
 
     SqliteStringView str = args[0].as_text();
-    int count = args[1].as_int64();
+    int count = static_cast<int>(args[1].as_int64());
 
     SqliteStringOwned result(ctx.get());
     for (int i = 0; i < count; i++) {

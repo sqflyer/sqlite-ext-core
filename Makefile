@@ -1,6 +1,6 @@
-.PHONY: test test-ext-state test-cpp-value test-cpp-value-keys test-locks test-allocator test-smart-ptr test-cpp-udf test-cpp-aggregate test-cpp-statement test-cpp-tvf test-cpp-transaction test-cpp-db test-cpp-buffer test-blob-stream test-backup test-vtab test-cpp-extension test-time example example-c leak-check-integration clean
+.PHONY: test test-ext-state test-cpp-value test-cpp-value-keys test-locks test-cpp-allocator test-cpp-smart-ptr test-cpp-udf test-cpp-aggregate test-cpp-statement test-cpp-tvf test-cpp-transaction test-cpp-db test-cpp-buffer test-cpp-blob-stream test-cpp-backup test-cpp-vtab test-cpp-extension test-time example example-c leak-check-integration clean
 
-test: test-ext-state test-cpp-value test-locks test-time test-allocator test-smart-ptr test-cpp-udf test-cpp-aggregate test-cpp-statement test-cpp-tvf test-cpp-transaction test-cpp-db test-cpp-buffer test-blob-stream test-backup test-vtab test-cpp-extension
+test: test-ext-state test-cpp-value test-locks test-time test-cpp-allocator test-cpp-smart-ptr test-cpp-udf test-cpp-aggregate test-cpp-statement test-cpp-tvf test-cpp-transaction test-cpp-db test-cpp-buffer test-cpp-blob-stream test-cpp-backup test-cpp-vtab test-cpp-extension
 
 test-time:
 	$(MAKE) -C tests/time test
@@ -12,6 +12,12 @@ test-cpp-value:
 	$(MAKE) -C tests/cpp_value test
 
 test-cpp-value-keys: test-cpp-value
+
+test-cpp-allocator:
+	$(MAKE) -C tests/allocator test
+
+test-cpp-smart-ptr:
+	$(MAKE) -C tests/smart_ptr test
 
 test-cpp-udf:
 	$(MAKE) -C tests/cpp_udf test
@@ -34,13 +40,13 @@ test-cpp-db:
 test-cpp-buffer:
 	$(MAKE) -C tests/cpp_buffer test
 
-test-blob-stream:
+test-cpp-blob-stream:
 	@$(MAKE) -C tests/cpp_blob_stream test
 
-test-backup:
+test-cpp-backup:
 	@$(MAKE) -C tests/cpp_backup test
 
-test-vtab:
+test-cpp-vtab:
 	@$(MAKE) -C tests/cpp_vtab test
 
 test-cpp-extension:
@@ -54,12 +60,6 @@ example-c:
 
 test-locks:
 	$(MAKE) -C tests/locks test
-
-test-allocator:
-	$(MAKE) -C tests/allocator test
-
-test-smart-ptr:
-	$(MAKE) -C tests/smart_ptr test
 
 leak-check-integration:
 	$(MAKE) -C tests/ext_state leak-check

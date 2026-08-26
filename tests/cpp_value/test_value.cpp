@@ -279,7 +279,8 @@ void test_coverage_edge_cases(sqlite3* db) {
     sqlite3_prepare_v2(db, "SELECT NULL, 5, 5.0, 'hello';", -1, &stmt, nullptr);
     sqlite3_step(stmt);
     
-    double nan_d = 0.0/0.0;
+    volatile double zero_val = 0.0;
+    double nan_d = zero_val / zero_val;
     SqliteValueOwned val_nan(nan_d); // Uses our new zero-allocation double constructor!
     SqliteValueOwned val_null(sqlite3_column_value(stmt, 0));
     SqliteValueOwned val_int(sqlite3_column_value(stmt, 1));
@@ -370,13 +371,14 @@ void test_value_move_semantics() {
 void test_hashing() {
     SqliteValueOwned val_int(42);
     SqliteValueOwned val_float(42.0);
-    SqliteValueOwned val_nan(0.0/0.0);
+    volatile double zero_val = 0.0;
+    SqliteValueOwned val_nan(zero_val / zero_val);
     
     // Hashes of identical numeric values must be completely different for map stability
     assert(val_int.hash() != val_float.hash());
     
     // NaN hash must be stable
-    SqliteValueOwned val_nan2(0.0/0.0);
+    SqliteValueOwned val_nan2(zero_val / zero_val);
     assert(val_nan.hash() == val_nan2.hash());
 }
 

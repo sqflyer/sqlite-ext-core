@@ -4,9 +4,13 @@
 
 The entire framework is architected around a set of extremely strict constraints designed to make the library embeddable in any environment, especially those lacking a standard library or exception support.
 
-## 1. Zero-Cost Abstractions (`-nostdlib++`)
+## 1. Zero-Cost Abstractions (`-nostdlib++` & `/NODEFAULTLIB`)
 
-This library is designed to compile cleanly with `-fno-exceptions`, `-fno-rtti`, and `-nostdlib++`. 
+This library is architected to compile cleanly with complete elimination of C++ standard runtime dependencies across all major toolchains:
+- **GCC / Clang**: `-nostdlib++ -fno-exceptions -fno-rtti`
+- **MSVC (`cl.exe`)**: `/GR- /EHs-c- /link /NODEFAULTLIB:msvcprt.lib /NODEFAULTLIB:libcpmt.lib`
+
+Core Guarantees:
 - **No standard library containers**: We do not use `std::string`, `std::vector`, or `std::unique_ptr`. 
 - **Zero dynamic allocations**: The core wrappers NEVER call `new` or `delete`. 
 - **Header-only**: All classes and methods are marked `inline`, allowing the compiler's `-O2` optimization pass to completely erase the abstraction layers. A C++ `SqliteStatement` compiles down to the exact same machine-code assembly as manually calling `sqlite3_step()` on a raw `sqlite3_stmt*`.
@@ -82,3 +86,14 @@ For a deeper dive into the specific mechanics and C++ paradigms used in individu
 - [**Unified Extensibility (`SqliteExt` / `sqlite3_ext.h`)**](include/sqlite3_ext.hpp): Symmetrical registration facade combining UDFs, Aggregates, TVFs, and Virtual Tables.
 - [**C++ Extension Tutorial**](examples/README.md): Turnkey C++ example showcasing compilation, testing, and multi-language loading.
 - [**Pure C Extension Tutorial**](example-c/README.md): Turnkey Pure C (C99/C11) example demonstrating state management and UDF registration.
+
+## 6. Dual Build System & Compiler Parity
+
+The repository maintains strict parity across two native build pipelines:
+- **POSIX / MSYS2 (`Makefile`)**: Drives `gcc` and `clang` compilers with `-nostdlib++` flags.
+- **Windows Native (`make.bat`)**: Drives Microsoft Visual C++ (`cl.exe`) batch scripts.
+
+### MSVC Architectural Model
+1. **Isolated C-Runtime Isolation**: Pre-compiled SQLite headers and import libraries are staged under `deps/sqlite3/` (tracked via Git LFS), avoiding any cross-pollution with MinGW CRT headers.
+2. **Link-Time Standard Library Prohibition**: Passing `/link /NODEFAULTLIB:msvcprt.lib /NODEFAULTLIB:libcpmt.lib` ensures the Microsoft Linker immediately rejects any code paths attempting to introduce standard C++ runtime symbols.
+3. **Deterministic DLL Discovery**: Windows `.bat` test scripts co-locate required SQLite runtime DLLs directly into local `bin/` execution folders to guarantee isolated, collision-free runtime execution across concurrent test runs.

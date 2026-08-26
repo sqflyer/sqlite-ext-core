@@ -123,8 +123,8 @@ public:
 
         // Handling INSERT: args[0] is NULL, args[1] is new rowid, args[2..N] are column values
         if (args[0].type() == SQLITE_NULL && args.size() >= 4) {
-            int slot = args[2].as_int64();
-            int val = args[3].as_int64();
+            int slot = static_cast<int>(args[2].as_int64());
+            int val = static_cast<int>(args[3].as_int64());
 
             if (slot >= 0 && slot < 5) {
                 SqliteExtState<VTabSharedState>::WriteGuard lock(m_bound_state);

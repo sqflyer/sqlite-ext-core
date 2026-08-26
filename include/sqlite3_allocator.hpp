@@ -168,7 +168,7 @@ inline T* sqlite_new_array(size_t count) {
     if (count > static_cast<size_t>(-1) / sizeof(T)) {
         return nullptr; // Out of memory / overflow prevented
     }
-    return static_cast<T*>(sqlite3_malloc(sizeof(T) * count));
+    return static_cast<T*>(sqlite3_malloc64(sizeof(T) * count));
 }
 
 /**
