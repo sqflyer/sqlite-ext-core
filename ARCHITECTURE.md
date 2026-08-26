@@ -71,7 +71,7 @@ For a deeper dive into the specific mechanics and C++ paradigms used in individu
 - [**Smart Pointers**](docs/SMART_PTR_ARCHITECTURE.md): Exception-safe `SqliteUniquePtr` and `SqliteSharedPtr` implementations without `<memory>`.
 - [**Custom Allocators**](docs/ALLOCATOR_ARCHITECTURE.md): Hooking into SQLite's memory arena via `sqlite3_malloc64` and `sqlite3_free`.
 
-### Synchronization & Timing
+- [**Threading & Async Subsystem (`SqliteThread`)**](docs/THREAD_ARCHITECTURE.md): Freestanding C99 and C++11 threading primitives, condition variables (`SqliteConditionVariable`), and non-virtual lambda closure trampolines mapping to native Win32/POSIX kernel APIs without `<thread>`.
 - [**Time & High-Resolution Clock (`SqliteClock`)**](docs/TIME_ARCHITECTURE.md): Monotonic timers, wall-clock epoch timestamps, and system timezone detection without `<chrono>`.
 - [**Lock Base & RAII Hierarchy (`SqliteLockBase` / `SqliteGuardBase`)**](include/sqlite3_lock_base.hpp): Non-copyable, non-movable base classes providing zero-overhead, vtable-free interfaces for all locks and generic template guards (`SqliteLockGuard`, `SqliteBasicReadGuard`, `SqliteBasicWriteGuard`).
 - [**Atomics**](docs/ATOMIC_ARCHITECTURE.md): Lock-free reference counting across GCC, MSVC, and Clang intrinsics.

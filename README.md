@@ -276,7 +276,21 @@ Zero-dependency, high-resolution monotonic clocks, wall-clock epoch timestamps, 
 - [Time & Clock README](docs/TIME_README.md)
 - [Time & Clock Architecture](docs/TIME_ARCHITECTURE.md)
 
-### 18. Unified Umbrella Headers & Entry Points (`sqlite3_ext.h` / `sqlite3_ext.hpp`)
+### 18. Freestanding Threading & Async Subsystem (`include/async/sqlite3_thread.h` / `sqlite3_thread.hpp`)
+Zero-dependency, cross-platform C99 and C++11 threading primitives, condition variables, and native OS mutexes for background task scheduling and write-behind pipelines without `<thread>` or `<condition_variable>`.
+
+#### Key Features:
+- **`std::thread` Parity**: `SqliteThread` spawns threads with free functions, stateless lambdas, or stateful capturing closures with 1-cycle move semantics (`sqlite_move`).
+- **Zero VTable Closure Trampoline**: Capturing closures are executed and cleaned up via static function pointer trampolines routed through `sqlite_new` and `sqlite_delete` (`sqlite3_malloc`/`sqlite3_free`) with zero virtual table overhead.
+- **`std::condition_variable` Parity**: `SqliteConditionVariable` provides predicate-based `wait()`, timed `wait_for()`, `notify_one()`, and `notify_all()`.
+- **Native OS Thread Mutex**: `SqliteThreadMutex` and `SqliteThreadMutexGuard` provide zero-overhead RAII wrappers over Windows `CRITICAL_SECTION` and POSIX `pthread_mutex_t`, inheriting from `SqliteLockBase`.
+- **Pure C ABI Support**: Full C99 API suite (`sqlite3_thread_t`, `sqlite3_cond_t`, `sqlite3_thread_mutex_t`).
+
+#### Documentation:
+- [Threading & Async README](docs/THREAD_README.md)
+- [Threading & Async Architecture](docs/THREAD_ARCHITECTURE.md)
+
+### 19. Unified Umbrella Headers & Entry Points (`sqlite3_ext.h` / `sqlite3_ext.hpp`)
 Master umbrella headers providing full subsystem access:
 - **Pure C (`sqlite3_ext.h`)**: Unifies `sqlite3_atomic.h`, `sqlite3_time.h`, `sqlite3_tiny_lock.h`, `sqlite3_rw_lock.h`, `sqlite3_mutex_lock.h`, `sqlite3_smart_ptr.h`, and `sqlite3_ext_state.h`.
 - **C++ (`sqlite3_ext.hpp`)**: Master umbrella header and unified registration facade (`SqliteExt`) providing symmetrical registration across all extension subsystems:
@@ -305,9 +319,11 @@ make test-time
 make test-oom
 make test-multi-tu
 make test-locks
+make test-threads
 make test-cpp-allocator
 make test-cpp-smart-ptr
 make test-cpp-value
+make test-cpp-row
 make test-cpp-udf
 make test-cpp-aggregate
 make test-cpp-statement
@@ -341,9 +357,11 @@ make.bat test-time
 make.bat test-oom
 make.bat test-multi-tu
 make.bat test-locks
+make.bat test-threads
 make.bat test-cpp-allocator
 make.bat test-cpp-smart-ptr
 make.bat test-cpp-value
+make.bat test-cpp-row
 make.bat test-cpp-udf
 make.bat test-cpp-aggregate
 make.bat test-cpp-statement

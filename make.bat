@@ -84,6 +84,8 @@ call :test_cpp_vtab
 if %ERRORLEVEL% neq 0 exit /b %ERRORLEVEL%
 call :test_cpp_extension
 if %ERRORLEVEL% neq 0 exit /b %ERRORLEVEL%
+call :test_threads
+if %ERRORLEVEL% neq 0 exit /b %ERRORLEVEL%
 echo.
 echo All MSVC tests passed successfully!
 goto end

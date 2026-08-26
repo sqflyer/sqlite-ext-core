@@ -23,9 +23,9 @@ endif
 
 export PATH UNAME_S CXX CC SAN_FLAGS
 
-.PHONY: test test-asan test-ext-state test-cpp-value test-cpp-row test-locks test-cpp-allocator test-cpp-smart-ptr test-cpp-udf test-cpp-aggregate test-cpp-statement test-cpp-tvf test-cpp-transaction test-cpp-db test-cpp-buffer test-cpp-blob-stream test-cpp-backup test-cpp-vtab test-cpp-extension test-time test-oom test-multi-tu example example-c leak-check-integration clean
+.PHONY: test test-asan test-ext-state test-cpp-value test-cpp-row test-locks test-cpp-allocator test-cpp-smart-ptr test-cpp-udf test-cpp-aggregate test-cpp-statement test-cpp-tvf test-cpp-transaction test-cpp-db test-cpp-buffer test-cpp-blob-stream test-cpp-backup test-cpp-vtab test-cpp-extension test-threads test-time test-oom test-multi-tu example example-c leak-check-integration clean
 
-test: test-ext-state test-cpp-value test-cpp-row test-locks test-time test-oom test-multi-tu test-cpp-allocator test-cpp-smart-ptr test-cpp-udf test-cpp-aggregate test-cpp-statement test-cpp-tvf test-cpp-transaction test-cpp-db test-cpp-buffer test-cpp-blob-stream test-cpp-backup test-cpp-vtab test-cpp-extension
+test: test-ext-state test-cpp-value test-cpp-row test-locks test-time test-oom test-multi-tu test-cpp-allocator test-cpp-smart-ptr test-cpp-udf test-cpp-aggregate test-cpp-statement test-cpp-tvf test-cpp-transaction test-cpp-db test-cpp-buffer test-cpp-blob-stream test-cpp-backup test-cpp-vtab test-cpp-extension test-threads
 
 test-asan:
 	@echo "=== Running AddressSanitizer (ASan) Memory Verification ==="
@@ -89,6 +89,9 @@ test-cpp-vtab:
 test-cpp-extension:
 	@$(MAKE) -C tests/cpp_extension test
 
+test-threads:
+	$(MAKE) -C tests/threads test
+
 example:
 	@$(MAKE) -C examples run
 
@@ -105,6 +108,7 @@ clean:
 	rm -rf bin
 	$(MAKE) -C tests/ext_state clean
 	$(MAKE) -C tests/cpp_value clean
+	$(MAKE) -C tests/cpp_row clean
 	$(MAKE) -C tests/cpp_udf clean
 	$(MAKE) -C tests/cpp_aggregate clean
 	$(MAKE) -C tests/cpp_statement clean
