@@ -2,6 +2,7 @@
 #define SQLITE3_ALLOCATOR_HPP
 
 #include <sqlite3.h>
+#include <stddef.h>
 
 /**
  * @brief Cross-platform, zero-dependency optimized memory copy.
@@ -47,6 +48,11 @@ struct sqlite_is_trivially_copyable {
  * @param arg The object to be moved.
  * @return An rvalue reference to the object.
  */
+template<typename T>
+inline typename sqlite_remove_reference<T>::type&& sqlite_move(T&& arg) noexcept {
+    return static_cast<typename sqlite_remove_reference<T>::type&&>(arg);
+}
+
 template<typename T>
 inline typename sqlite_remove_reference<T>::type&& sqlite_move_ptr(T&& arg) noexcept {
     return static_cast<typename sqlite_remove_reference<T>::type&&>(arg);
@@ -125,7 +131,7 @@ inline T* sqlite_new(Args&&... args) {
 template <typename T>
 inline void sqlite_delete(T* ptr) {
     if (ptr) {
-        ptr->~T();
+        ptr->T::~T();
         sqlite3_free(ptr);
     }
 }
@@ -137,7 +143,7 @@ inline void sqlite_delete(T* ptr) {
 template <typename T>
 inline void sqlite_destroy_at(T* p) noexcept {
     if (p) {
-        p->~T();
+        p->T::~T();
     }
 }
 

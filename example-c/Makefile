@@ -1,17 +1,30 @@
-CC = gcc
-CFLAGS = -std=c99 -Wall -Wextra -O2 -I../include
+# OS Detection
+UNAME_S ?= $(shell uname -s 2>/dev/null || echo Windows)
 
-# OS-specific extension suffix
-ifeq ($(OS),Windows_NT)
-    EXT_SUFFIX := .dll
+# Compiler & Sanitizer Selection:
+# - Linux: Uses GCC with AddressSanitizer & LeakSanitizer (-fsanitize=address,leak)
+# - macOS (Darwin) & Windows (MSYS2): Uses Clang with AddressSanitizer (-fsanitize=address)
+ifeq ($(UNAME_S),Linux)
+    CC := gcc
+    SAN_FLAGS := -fsanitize=address,leak
+    EXT_SUFFIX := .so
 else
-    UNAME_S := $(shell uname -s)
+    # macOS (Darwin) & Windows (MSYS2 / MinGW / CYGWIN)
+    ifneq ($(wildcard /clang64/bin),)
+        export PATH := /clang64/bin:$(PATH)
+        CC := /clang64/bin/clang
+    else
+        CC := clang
+    endif
+    SAN_FLAGS := -fsanitize=address
     ifeq ($(UNAME_S),Darwin)
         EXT_SUFFIX := .dylib
     else
-        EXT_SUFFIX := .so
+        EXT_SUFFIX := .dll
     endif
 endif
+
+CFLAGS := -std=c99 -Wall -Wextra -O2 -I../include $(SAN_FLAGS)
 
 BUILD_DIR = build
 TARGET = $(BUILD_DIR)/libc_example$(EXT_SUFFIX)

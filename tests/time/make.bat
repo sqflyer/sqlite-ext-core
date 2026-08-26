@@ -8,10 +8,10 @@ if %ERRORLEVEL% neq 0 if exist "C:\Program Files\Microsoft Visual Studio\2022\Co
 
 if not exist bin mkdir bin
 
-cl /nologo /O2 /W4 /I"../../include" /std:c11 /Fe:bin\test_time_c.exe test_time_c.c
+cl /nologo /O2 /W4 /Zi /fsanitize=address /MD /I"../../include" /std:c11 /Fe:bin\test_time_c.exe test_time_c.c
 if %ERRORLEVEL% neq 0 exit /b %ERRORLEVEL%
 
-cl /nologo /O2 /W4 /I"../../include" /std:c++14 /GR- /EHs-c- /Fe:bin\test_time.exe test_time.cpp /link /NODEFAULTLIB:msvcprt.lib /NODEFAULTLIB:libcpmt.lib
+cl /nologo /O2 /W4 /Zi /fsanitize=address /MD /I"../../include" /std:c++14 /Fe:bin\test_time.exe test_time.cpp
 if %ERRORLEVEL% neq 0 exit /b %ERRORLEVEL%
 
 bin\test_time_c.exe

@@ -14,34 +14,34 @@ if exist "%~dp0..\..\deps\sqlite3\lib" set "PATH=%~dp0..\..\deps\sqlite3\lib;%PA
 if not exist bin mkdir bin
 if exist "%~dp0..\..\deps\sqlite3\lib\*.dll" copy "%~dp0..\..\deps\sqlite3\lib\*.dll" bin\ >nul
 
-cl /nologo /O2 /W4 /I"../../include" /I"%SQLITE_INC%" /std:c11 /Fe:bin\test_atomic.exe test_atomic.c "%SQLITE_LIB%"
+cl /nologo /O2 /W4 /Zi /fsanitize=address /MD /I"../../include" /I"%SQLITE_INC%" /std:c11 /Fe:bin\test_atomic.exe test_atomic.c "%SQLITE_LIB%"
 if %ERRORLEVEL% neq 0 exit /b %ERRORLEVEL%
 
-cl /nologo /O2 /W4 /I"../../include" /I"%SQLITE_INC%" /std:c++14 /GR- /EHs-c- /Fe:bin\test_atomic_cpp.exe test_atomic_cpp.cpp "%SQLITE_LIB%" /link /NODEFAULTLIB:msvcprt.lib /NODEFAULTLIB:libcpmt.lib
+cl /nologo /O2 /W4 /Zi /fsanitize=address /MD /I"../../include" /I"%SQLITE_INC%" /std:c++14 /Fe:bin\test_atomic_cpp.exe test_atomic_cpp.cpp "%SQLITE_LIB%"
 if %ERRORLEVEL% neq 0 exit /b %ERRORLEVEL%
 
-cl /nologo /O2 /W4 /I"../../include" /I"%SQLITE_INC%" /std:c++14 /GR- /EHs-c- /Fe:bin\test_tiny_lock.exe test_tiny_lock.cpp "%SQLITE_LIB%" /link /NODEFAULTLIB:msvcprt.lib /NODEFAULTLIB:libcpmt.lib
+cl /nologo /O2 /W4 /Zi /fsanitize=address /MD /I"../../include" /I"%SQLITE_INC%" /std:c++14 /Fe:bin\test_tiny_lock.exe test_tiny_lock.cpp "%SQLITE_LIB%"
 if %ERRORLEVEL% neq 0 exit /b %ERRORLEVEL%
 
-cl /nologo /O2 /W4 /I"../../include" /I"%SQLITE_INC%" /std:c11 /Fe:bin\test_tiny_lock_c.exe test_tiny_lock_c.c "%SQLITE_LIB%"
+cl /nologo /O2 /W4 /Zi /fsanitize=address /MD /I"../../include" /I"%SQLITE_INC%" /std:c11 /Fe:bin\test_tiny_lock_c.exe test_tiny_lock_c.c "%SQLITE_LIB%"
 if %ERRORLEVEL% neq 0 exit /b %ERRORLEVEL%
 
-cl /nologo /O2 /W4 /I"../../include" /I"%SQLITE_INC%" /std:c++14 /GR- /EHs-c- /Fe:bin\test_mutex_lock.exe test_mutex_lock.cpp "%SQLITE_LIB%" /link /NODEFAULTLIB:msvcprt.lib /NODEFAULTLIB:libcpmt.lib
+cl /nologo /O2 /W4 /Zi /fsanitize=address /MD /I"../../include" /I"%SQLITE_INC%" /std:c++14 /Fe:bin\test_mutex_lock.exe test_mutex_lock.cpp "%SQLITE_LIB%"
 if %ERRORLEVEL% neq 0 exit /b %ERRORLEVEL%
 
-cl /nologo /O2 /W4 /I"../../include" /I"%SQLITE_INC%" /std:c11 /Fe:bin\test_mutex_lock_c.exe test_mutex_lock_c.c "%SQLITE_LIB%"
+cl /nologo /O2 /W4 /Zi /fsanitize=address /MD /I"../../include" /I"%SQLITE_INC%" /std:c11 /Fe:bin\test_mutex_lock_c.exe test_mutex_lock_c.c "%SQLITE_LIB%"
 if %ERRORLEVEL% neq 0 exit /b %ERRORLEVEL%
 
-cl /nologo /O2 /W4 /I"../../include" /I"%SQLITE_INC%" /std:c++14 /GR- /EHs-c- /Fe:bin\test_rw_lock.exe test_rw_lock.cpp "%SQLITE_LIB%" /link /NODEFAULTLIB:msvcprt.lib /NODEFAULTLIB:libcpmt.lib
+cl /nologo /O2 /W4 /Zi /fsanitize=address /MD /I"../../include" /I"%SQLITE_INC%" /std:c++14 /Fe:bin\test_rw_lock.exe test_rw_lock.cpp "%SQLITE_LIB%"
 if %ERRORLEVEL% neq 0 exit /b %ERRORLEVEL%
 
-cl /nologo /O2 /W4 /I"../../include" /I"%SQLITE_INC%" /std:c11 /Fe:bin\test_rw_lock_c.exe test_rw_lock_c.c "%SQLITE_LIB%"
+cl /nologo /O2 /W4 /Zi /fsanitize=address /MD /I"../../include" /I"%SQLITE_INC%" /std:c11 /Fe:bin\test_rw_lock_c.exe test_rw_lock_c.c "%SQLITE_LIB%"
 if %ERRORLEVEL% neq 0 exit /b %ERRORLEVEL%
 
-cl /nologo /O2 /W4 /I"../../include" /I"%SQLITE_INC%" /std:c++14 /GR- /EHs-c- /Fe:bin\test_lock_policies.exe test_lock_policies.cpp "%SQLITE_LIB%" /link /NODEFAULTLIB:msvcprt.lib /NODEFAULTLIB:libcpmt.lib
+cl /nologo /O2 /W4 /Zi /fsanitize=address /MD /I"../../include" /I"%SQLITE_INC%" /std:c++14 /Fe:bin\test_lock_policies.exe test_lock_policies.cpp "%SQLITE_LIB%"
 if %ERRORLEVEL% neq 0 exit /b %ERRORLEVEL%
 
-cl /nologo /O2 /W4 /I"../../include" /I"%SQLITE_INC%" /std:c11 /Fe:bin\test_lock_policies_c.exe test_lock_policies_c.c "%SQLITE_LIB%"
+cl /nologo /O2 /W4 /Zi /fsanitize=address /MD /I"../../include" /I"%SQLITE_INC%" /std:c11 /Fe:bin\test_lock_policies_c.exe test_lock_policies_c.c "%SQLITE_LIB%"
 if %ERRORLEVEL% neq 0 exit /b %ERRORLEVEL%
 
 bin\test_atomic.exe

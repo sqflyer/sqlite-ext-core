@@ -1,8 +1,8 @@
 #include <sqlite3.h>
 #define SQLITE_CORE
-#include "sqlite3_value.hpp"
-#include "sqlite3_buffer.hpp"
-#include "sqlite3_statement.hpp"
+#include "../../include/sqlite3_value.hpp"
+#include "../../include/sqlite3_buffer.hpp"
+#include "../../include/sqlite3_statement.hpp"
 #include <assert.h>
 #include <stdio.h>
 
@@ -143,6 +143,10 @@ void test_sqlite_statement_null_safety() {
 }
 
 int main() {
+    sqlite3* db = nullptr;
+    int rc = sqlite3_open(":memory:", &db);
+    assert(rc == SQLITE_OK);
+
     printf("=================================================================\n");
     printf("Running Constructor OOM & Null-Safety Test Suite\n");
     printf("=================================================================\n");
@@ -154,5 +158,8 @@ int main() {
     test_sqlite_statement_null_safety();
 
     printf("\nAll 5 OOM & Null-Safety Test Suites Passed Successfully!\n");
+    if (db) {
+        sqlite3_close(db);
+    }
     return 0;
 }

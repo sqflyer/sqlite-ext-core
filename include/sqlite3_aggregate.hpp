@@ -205,8 +205,20 @@ namespace SqliteAggregateDetail {
         invoke_finalize_impl(agg, ctx, PriorityRank0{});
     }
 
+#if defined(_MSC_VER)
+#pragma warning(push)
+// MSVC /W4 emits warning C4324 ('structure was padded due to alignment specifier')
+// when padding bytes are inserted between 'bool initialized' (1 byte) and 'storage'
+// to satisfy alignas(T). This padding is intentional and strictly required to ensure
+// aligned placement-new construction of user aggregate types in SQLite memory arenas.
+#pragma warning(disable: 4324)
+#endif
+
     /**
      * @brief Internal holder stored inside sqlite3_aggregate_context.
+     * 
+     * Encapsulates initialization state and raw aligned memory storage for placement-new
+     * instantiation of user aggregate classes.
      */
     template <typename T>
     struct AggregateHolder {
@@ -217,6 +229,10 @@ namespace SqliteAggregateDetail {
             return reinterpret_cast<T*>(storage);
         }
     };
+
+#if defined(_MSC_VER)
+#pragma warning(pop)
+#endif
 }
 
 /**
@@ -321,7 +337,7 @@ private:
         
         if (holder && holder->initialized) {
             SqliteAggregateDetail::invoke_finalize(holder->instance(), ctx);
-            holder->instance()->~T();
+            holder->instance()->T::~T();
             holder->initialized = false;
         } else {
             // No rows stepped: evaluate finalize on a default-constructed instance

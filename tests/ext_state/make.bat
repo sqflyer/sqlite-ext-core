@@ -78,7 +78,7 @@ echo Building C++ extension...
 where cl >nul 2>nul
 if %ERRORLEVEL% neq 0 if exist "C:\Program Files\Microsoft Visual Studio\2022\Community\VC\Auxiliary\Build\vcvarsall.bat" call "C:\Program Files\Microsoft Visual Studio\2022\Community\VC\Auxiliary\Build\vcvarsall.bat" x64 >nul
 if not defined SQLITE_INC if exist "%~dp0..\..\deps\sqlite3\include\sqlite3.h" set "SQLITE_INC=%~dp0..\..\deps\sqlite3\include"
-cl /nologo /O2 /W4 /I"../../include" /I"%SQLITE_INC%" /std:c++14 /GR- /EHs-c- /LD /Fe:bin\cpp_ext\libmyext.dll cpp_extension\myext.cpp /link /NODEFAULTLIB:msvcprt.lib /NODEFAULTLIB:libcpmt.lib
+cl /nologo /O2 /W4 /I"../../include" /I"%SQLITE_INC%" /std:c++14 /LD /Fe:bin\cpp_ext\libmyext.dll cpp_extension\myext.cpp
 if %ERRORLEVEL% neq 0 exit /b %ERRORLEVEL%
 goto :eof
 

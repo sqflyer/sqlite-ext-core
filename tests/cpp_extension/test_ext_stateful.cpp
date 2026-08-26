@@ -93,7 +93,7 @@ struct StatefulTaggedConcat : public SqliteAggregateBase<void> {
             res.appendall(lock->session_tag);
             res.appendall(":");
         }
-        res.append(buffer, len);
+        res.append(buffer, static_cast<int>(len));
         res.result(ctx);
     }
 };

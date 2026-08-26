@@ -2,7 +2,6 @@
 #include <stdio.h>
 #include <assert.h>
 #include <string.h>
-#include <utility>
 #include "sqlite3_buffer.hpp"
 
 void test_buffer() {
@@ -36,18 +35,25 @@ void test_buffer() {
     assert(buf.capacity() == cap_before); // Should not shrink
     
     // Test move constructor
-    SqliteBuffer buf2(std::move(buf));
+    SqliteBuffer buf2(sqlite_move(buf));
     assert(buf2.capacity() == cap_before);
     assert(buf.capacity() == 0);
     
     // Test move assignment
     SqliteBuffer buf3;
-    buf3 = std::move(buf2);
+    buf3 = sqlite_move(buf2);
     assert(buf3.capacity() == cap_before);
     assert(buf2.capacity() == 0);
     
     // Test self-assignment (no-op)
-    buf3 = std::move(buf3);
+#if defined(__clang__)
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wself-move"
+#endif
+    buf3 = sqlite_move(buf3);
+#if defined(__clang__)
+#pragma clang diagnostic pop
+#endif
     assert(buf3.capacity() == cap_before);
     
     // Test equality
@@ -192,7 +198,7 @@ void test_string() {
     // Test Move semantics hash preservation
     SqliteString mov_str("moving string");
     unsigned long long mov_hash = mov_str.hash();
-    SqliteString moved_str = std::move(mov_str);
+    SqliteString moved_str = sqlite_move(mov_str);
     assert(moved_str.hash() == mov_hash);
     assert(mov_str.hash() == empty_str.hash()); // Moved-from is empty
     assert(mov_str == nullptr); // Moved-from safely acts as null
@@ -214,18 +220,25 @@ void test_string() {
     
     // Test move constructor
     str.append("Moved");
-    SqliteString str2(std::move(str));
+    SqliteString str2(sqlite_move(str));
     assert(str2 == "Moved");
     assert(str.length() == 0);
     
     // Test move assignment
     SqliteString str3;
-    str3 = std::move(str2);
+    str3 = sqlite_move(str2);
     assert(str3 == "Moved");
     assert(str2.length() == 0);
     
     // Test self-assignment
-    str3 = std::move(str3);
+#if defined(__clang__)
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wself-move"
+#endif
+    str3 = sqlite_move(str3);
+#if defined(__clang__)
+#pragma clang diagnostic pop
+#endif
     assert(str3 == "Moved");
 }
 

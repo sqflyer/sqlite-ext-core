@@ -1,7 +1,28 @@
-CC ?= gcc
-CXX ?= g++
-CFLAGS ?= -std=c99 -Wall -Wextra -O2 -I../../include
-CXXFLAGS ?= -std=c++11 -Wall -Wextra -O2 -I../../include -fno-exceptions -fno-rtti -nostdlib++
+# OS Detection
+UNAME_S ?= $(shell uname -s 2>/dev/null || echo Windows)
+
+# Compiler & Sanitizer Selection:
+# - Linux: Uses GCC with AddressSanitizer & LeakSanitizer (-fsanitize=address,leak)
+# - macOS (Darwin) & Windows (MSYS2): Uses Clang with AddressSanitizer (-fsanitize=address)
+ifeq ($(UNAME_S),Linux)
+    CXX := g++
+    CC := gcc
+    SAN_FLAGS := -fsanitize=address,leak
+else
+    # macOS (Darwin) & Windows (MSYS2 / MinGW / CYGWIN)
+    ifneq ($(wildcard /clang64/bin),)
+        export PATH := /clang64/bin:$(PATH)
+        CXX := /clang64/bin/clang++
+        CC := /clang64/bin/clang
+    else
+        CXX := clang++
+        CC := clang
+    endif
+    SAN_FLAGS := -fsanitize=address
+endif
+
+CFLAGS := -std=c99 -Wall -Wextra -O2 -I../../include $(SAN_FLAGS)
+CXXFLAGS := -std=c++11 -Wall -Wextra -O2 -I../../include -fno-exceptions -fno-rtti $(SAN_FLAGS)
 
 BIN_DIR = bin
 

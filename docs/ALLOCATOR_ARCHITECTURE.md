@@ -37,13 +37,15 @@ This entirely hides the `sqlite_new_tag{}` boilerplate from the rest of the code
 ### `sqlite_new` and `sqlite_delete`
 These are the primary entry points for dynamic allocation.
 - `sqlite_new` calls `sqlite3_malloc(sizeof(T))`, then safely delegates to `sqlite_construct_at` to initialize the object.
-- `sqlite_delete` explicitly invokes the pseudo-destructor (`ptr->~T()`) before routing the memory to `sqlite3_free`.
+- `sqlite_delete` explicitly invokes the qualified pseudo-destructor (`ptr->T::~T()`) before routing the memory to `sqlite3_free`, ensuring safe destruction while silencing compiler warnings (`-Wdelete-non-abstract-non-virtual-dtor`).
 
 ### Zero-Dependency Utilities
-To support variadic perfect forwarding in `sqlite_construct_at`, the allocator implements lightweight type traits:
-- `sqlite_remove_reference` (Mimics `std::remove_reference`)
-- `sqlite_move_ptr` (Mimics `std::move`)
-- `sqlite_forward` (Mimics `std::forward`)
+To support variadic perfect forwarding and move semantics without `<utility>` or `<type_traits>`, the allocator implements lightweight traits and helpers:
+- `sqlite_remove_reference<T>` (Mimics `std::remove_reference`)
+- `sqlite_move` / `sqlite_move_ptr` (Mimics `std::move` for rvalue reference casts)
+- `sqlite_forward` (Mimics `std::forward` for perfect forwarding)
+- `sqlite_is_trivially_copyable<T>` (Leverages compiler intrinsic `__is_trivially_copyable`)
+- `SQLITE_FAST_MEMCPY` (Cross-platform SIMD memory copy leveraging `__builtin_memcpy` on GCC/Clang and `__movsb` on MSVC)
 
 ## Decoupled Array Architecture
 
@@ -51,7 +53,7 @@ For contiguous arrays, `sqlite3_allocator.hpp` adopts a strict "decoupled memory
 
 1. **`sqlite_new_array`**: Strictly acts as a typed wrapper around `sqlite3_malloc`. It allocates an uninitialized memory buffer and performs integer overflow checks (`size_t` multiplication boundary checks) for safety.
 2. **`sqlite_construct_at` (Manual)**: The user manually loops over the array to invoke constructors only when needed.
-3. **`sqlite_destroy_at` and `sqlite_destroy_n`**: Safely invoke the C++ pseudo-destructors (`~T()`) on constructed memory without freeing the buffer. Mirrors C++20 `std::destroy_n`.
+3. **`sqlite_destroy_at` and `sqlite_destroy_n`**: Safely invoke the C++ pseudo-destructors (`ptr->T::~T()`) on constructed memory without freeing the buffer. Mirrors C++20 `std::destroy_n`.
 4. **`sqlite_delete_array`**: Strictly acts as a typed wrapper around `sqlite3_free`.
 
 By isolating these utilities into `sqlite3_allocator.hpp`, complex components like `sqlite3_ext_state.hpp` and `sqlite3_smart_ptr.hpp` can enjoy modern C++ ergonomics while maintaining 100% C ABI compatibility and zero-std compliance.

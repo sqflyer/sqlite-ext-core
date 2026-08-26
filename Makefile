@@ -1,6 +1,36 @@
-.PHONY: test test-ext-state test-cpp-value test-cpp-value-keys test-locks test-cpp-allocator test-cpp-smart-ptr test-cpp-udf test-cpp-aggregate test-cpp-statement test-cpp-tvf test-cpp-transaction test-cpp-db test-cpp-buffer test-cpp-blob-stream test-cpp-backup test-cpp-vtab test-cpp-extension test-time test-oom test-multi-tu example example-c leak-check-integration clean
+# OS Detection
+UNAME_S := $(shell uname -s 2>/dev/null || echo Windows)
+
+# Compiler & Sanitizer Selection:
+# - Linux: Uses GCC (g++/gcc) with AddressSanitizer & LeakSanitizer (-fsanitize=address,leak)
+# - macOS (Darwin) & Windows (MSYS2): Uses Clang (clang++/clang) with AddressSanitizer (-fsanitize=address)
+ifeq ($(UNAME_S),Linux)
+    CXX := g++
+    CC := gcc
+    SAN_FLAGS := -fsanitize=address,leak
+else
+    # macOS (Darwin) & Windows (MSYS2 / MinGW / CYGWIN)
+    ifneq ($(wildcard /clang64/bin),)
+        export PATH := /clang64/bin:$(PATH)
+        CXX := /clang64/bin/clang++
+        CC := /clang64/bin/clang
+    else
+        CXX := clang++
+        CC := clang
+    endif
+    SAN_FLAGS := -fsanitize=address
+endif
+
+export UNAME_S CXX CC SAN_FLAGS
+
+.PHONY: test test-asan test-ext-state test-cpp-value test-cpp-value-keys test-locks test-cpp-allocator test-cpp-smart-ptr test-cpp-udf test-cpp-aggregate test-cpp-statement test-cpp-tvf test-cpp-transaction test-cpp-db test-cpp-buffer test-cpp-blob-stream test-cpp-backup test-cpp-vtab test-cpp-extension test-time test-oom test-multi-tu example example-c leak-check-integration clean
 
 test: test-ext-state test-cpp-value test-locks test-time test-oom test-multi-tu test-cpp-allocator test-cpp-smart-ptr test-cpp-udf test-cpp-aggregate test-cpp-statement test-cpp-tvf test-cpp-transaction test-cpp-db test-cpp-buffer test-cpp-blob-stream test-cpp-backup test-cpp-vtab test-cpp-extension
+
+test-asan:
+	@echo "=== Running AddressSanitizer (ASan) Memory Verification ==="
+	@export PATH=/clang64/bin:$$PATH; \
+	$(MAKE) test ASAN=1
 
 test-oom:
 	$(MAKE) -C tests/oom_safety test
@@ -81,6 +111,11 @@ clean:
 	$(MAKE) -C tests/cpp_transaction clean
 	$(MAKE) -C tests/cpp_db clean
 	$(MAKE) -C tests/cpp_buffer clean
+	$(MAKE) -C tests/cpp_blob_stream clean
+	$(MAKE) -C tests/cpp_backup clean
+	$(MAKE) -C tests/oom_safety clean
+	$(MAKE) -C tests/multi_tu clean
+	$(MAKE) -C tests/threads clean
 	$(MAKE) -C tests/locks clean
 	$(MAKE) -C tests/time clean
 	$(MAKE) -C tests/allocator clean

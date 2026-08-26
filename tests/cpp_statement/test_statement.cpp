@@ -49,7 +49,14 @@ void test_lifecycle_and_moves(sqlite3* db) {
     assert(stmt3.column_int(0) == 42);
 
     // 6. Self move-assignment check
-    stmt3 = static_cast<SqliteStatement&&>(stmt3);
+#if defined(__clang__)
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wself-move"
+#endif
+    stmt3 = sqlite_move(stmt3);
+#if defined(__clang__)
+#pragma clang diagnostic pop
+#endif
     assert(stmt3);
     assert(stmt3.column_int(0) == 42);
 

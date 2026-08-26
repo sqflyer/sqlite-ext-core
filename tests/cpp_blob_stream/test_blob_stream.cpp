@@ -46,7 +46,7 @@ void test_blob_stream() {
 }
 
 void test_blob_reopen_and_move() {
-    printf("2. Testing SqliteBlobStream reopen() and std::move...\n");
+    printf("2. Testing SqliteBlobStream reopen() and sqlite_move...\n");
     
     SqliteDatabaseOwned db(":memory:");
     db.exec("CREATE TABLE files (id INTEGER PRIMARY KEY, data BLOB);");
@@ -63,7 +63,7 @@ void test_blob_reopen_and_move() {
     assert(stream.bytes() == 10);
     
     // Test Move Semantics
-    SqliteBlobStream stream2(std::move(stream));
+    SqliteBlobStream stream2(sqlite_move(stream));
     assert(!stream);
     assert(stream2);
     assert(stream2.bytes() == 10);

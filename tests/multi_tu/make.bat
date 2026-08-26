@@ -14,16 +14,16 @@ if exist "%~dp0..\..\deps\sqlite3\lib" set "PATH=%~dp0..\..\deps\sqlite3\lib;%PA
 if not exist bin mkdir bin
 if exist "%~dp0..\..\deps\sqlite3\lib\*.dll" copy "%~dp0..\..\deps\sqlite3\lib\*.dll" bin\ >nul
 
-cl /nologo /O2 /W4 /I"../../include" /I"%SQLITE_INC%" /std:c++14 /GR- /EHs-c- /c /Fo:bin\test_tu_a.obj test_tu_a.cpp
+cl /nologo /O2 /W4 /Zi /fsanitize=address /MD /I"../../include" /I"%SQLITE_INC%" /std:c++14 /c /Fo:bin\test_tu_a.obj test_tu_a.cpp
 if %ERRORLEVEL% neq 0 exit /b %ERRORLEVEL%
 
-cl /nologo /O2 /W4 /I"../../include" /I"%SQLITE_INC%" /std:c++14 /GR- /EHs-c- /c /Fo:bin\test_tu_b.obj test_tu_b.cpp
+cl /nologo /O2 /W4 /Zi /fsanitize=address /MD /I"../../include" /I"%SQLITE_INC%" /std:c++14 /c /Fo:bin\test_tu_b.obj test_tu_b.cpp
 if %ERRORLEVEL% neq 0 exit /b %ERRORLEVEL%
 
-cl /nologo /O2 /W4 /I"../../include" /I"%SQLITE_INC%" /std:c++14 /GR- /EHs-c- /c /Fo:bin\test_tu_main.obj test_tu_main.cpp
+cl /nologo /O2 /W4 /Zi /fsanitize=address /MD /I"../../include" /I"%SQLITE_INC%" /std:c++14 /c /Fo:bin\test_tu_main.obj test_tu_main.cpp
 if %ERRORLEVEL% neq 0 exit /b %ERRORLEVEL%
 
-cl /nologo /Fe:bin\test_multi_tu.exe bin\test_tu_a.obj bin\test_tu_b.obj bin\test_tu_main.obj "%SQLITE_LIB%" /link /NODEFAULTLIB:msvcprt.lib /NODEFAULTLIB:libcpmt.lib
+cl /nologo /fsanitize=address /MD /Fe:bin\test_multi_tu.exe bin\test_tu_a.obj bin\test_tu_b.obj bin\test_tu_main.obj "%SQLITE_LIB%"
 if %ERRORLEVEL% neq 0 exit /b %ERRORLEVEL%
 
 bin\test_multi_tu.exe

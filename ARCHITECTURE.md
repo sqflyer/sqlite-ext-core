@@ -11,22 +11,24 @@ This library is architected to compile cleanly with complete elimination of C++ 
 - **MSVC (`cl.exe`)**: `/GR- /EHs-c- /link /NODEFAULTLIB:msvcprt.lib /NODEFAULTLIB:libcpmt.lib`
 
 Core Guarantees:
-- **No standard library containers**: We do not use `std::string`, `std::vector`, or `std::unique_ptr`. 
-- **Zero dynamic allocations**: The core wrappers NEVER call `new` or `delete`. 
+- **No standard library containers or headers**: We do not use `std::string`, `std::vector`, `std::unique_ptr`, `<utility>`, or `<new>`.
+- **Zero-Dependency Move Semantics & Forwarding**: Provides `sqlite_move` (and `sqlite_move_ptr`) and `sqlite_forward` in `sqlite3_allocator.hpp` to enable `std::move` and `std::forward` capabilities without `<utility>`.
+- **Zero dynamic allocations**: The core wrappers NEVER call standard `new` or `delete`, routing any needed allocations through `sqlite3_malloc` via `sqlite_new` and `sqlite_construct_at`.
 - **Header-only**: All classes and methods are marked `inline`, allowing the compiler's `-O2` optimization pass to completely erase the abstraction layers. A C++ `SqliteStatement` compiles down to the exact same machine-code assembly as manually calling `sqlite3_step()` on a raw `sqlite3_stmt*`.
 
 ## 2. The `Owned` vs `View` Pattern
 
-Because we cannot rely on `std::string_view` or `std::unique_ptr` in a `-nostdlib++` environment, we reinvented a zero-cost ownership model applied uniformly across the entire library (Values, Strings, and Databases).
+Because we cannot rely on `std::string_view` or `std::unique_ptr` in a `-nostdlib++` environment, we reinvented a zero-cost ownership model applied uniformly across the entire library (Values, Strings, Buffers, and Databases).
 
-- **`View` Classes**: (e.g., `SqliteValueView`, `SqliteDatabaseView`)
-  - Hold a raw pointer. 
+- **`View` Classes**: (e.g., `SqliteValueView`, `SqliteDatabaseView`, `SqliteStringView`, `SqliteBlobView`)
+  - Hold a raw pointer.
   - Never allocate memory, and never free it.
   - Used when SQLite hands you data (e.g., in a UDF callback) and you just want C++ convenience methods.
 
-- **`Owned` Classes**: (e.g., `SqliteValueOwned`, `SqliteDatabaseOwned`)
+- **`Owned` Classes**: (e.g., `SqliteValueOwned`, `SqliteDatabaseOwned`, `SqliteStringOwned`, `SqliteBlobOwned`)
   - Inherit publicly from their respective `View` base class.
   - Their constructors take ownership or copy data (e.g., `sqlite3_open_v2` or `sqlite3_value_dup`).
+  - Move constructors and move assignment operators cleanly transfer ownership via `sqlite_move(other)`.
   - Their destructors safely clean up the resource (e.g., `sqlite3_close_v2` or `sqlite3_value_free`).
   - By inheriting from `View`, they support **object slicing**. You can pass an `Owned` object by value into any function expecting a `View`, which compiles down to a raw 8-byte pointer copy with zero overhead!
 

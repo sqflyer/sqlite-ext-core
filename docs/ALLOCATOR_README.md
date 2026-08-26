@@ -10,10 +10,12 @@ When building C++ SQLite extensions with strict compiler flags like `-nostdlib++
 
 ## Features
 
-- **Standard Library Independence**: 100% free of `<new>`, `<utility>`, and `libstdc++`.
+- **Standard Library Independence**: 100% free of `<new>`, `<utility>`, `<type_traits>`, and `libstdc++`.
 - **Memory Profiler Integration**: Routes all allocations through `sqlite3_malloc` and `sqlite3_free`, ensuring your C++ objects respect SQLite's memory hard limits and profilers.
-- **In-place Construction**: Provides `sqlite_construct_at` for safe placement-new C++ object initialization.
-- **Perfect Forwarding**: Includes `sqlite_forward` and `sqlite_move_ptr` to mimic `std::forward` and `std::move`.
+- **In-place Construction**: Provides `sqlite_construct_at` for safe placement-new C++ object initialization without `<new>`.
+- **Zero-Dependency Move Semantics**: Includes `sqlite_move` and `sqlite_move_ptr` to completely replace `std::move`.
+- **Perfect Forwarding**: Includes `sqlite_forward` to mimic `std::forward`.
+- **SIMD Fast Memory Copy**: Provides `SQLITE_FAST_MEMCPY` optimized across GCC/Clang built-ins and MSVC intrinsics.
 - **Smart Pointer Ready**: Acts as the foundational memory layer for `SqliteSharedPtr` and `SqliteUniquePtr`.
 
 ## Usage
@@ -64,8 +66,8 @@ sqlite_construct_at(&w->obj, 10, "test");
 
 ### 5. Move Semantics
 
-Use `sqlite_move_ptr` in place of `std::move` to transfer ownership without copying.
+Use `sqlite_move` (or `sqlite_move_ptr`) in place of `std::move` to transfer ownership without copying.
 
 ```cpp
-MyClass new_obj = sqlite_move_ptr(old_obj);
+MyClass new_obj = sqlite_move(old_obj);
 ```

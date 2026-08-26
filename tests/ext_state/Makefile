@@ -6,15 +6,32 @@ CPP_EXT_DIR := $(ROOT_DIR)/cpp_extension
 GO_LOADER_DIR := $(ROOT_DIR)/go_loader
 BIN_DIR := $(ROOT_DIR)/bin
 
-# OS-specific extension suffix
-ifeq ($(OS),Windows_NT)
-    EXT_SUFFIX := .dll
+# OS Detection
+UNAME_S ?= $(shell uname -s 2>/dev/null || echo Windows)
+
+# Compiler & Sanitizer Selection:
+# - Linux: Uses GCC with AddressSanitizer & LeakSanitizer (-fsanitize=address,leak)
+# - macOS (Darwin) & Windows (MSYS2): Uses Clang with AddressSanitizer (-fsanitize=address)
+ifeq ($(UNAME_S),Linux)
+    CXX := g++
+    CC := gcc
+    SAN_FLAGS := -fsanitize=address,leak
+    EXT_SUFFIX := .so
 else
-    UNAME_S := $(shell uname -s)
+    # macOS (Darwin) & Windows (MSYS2 / MinGW / CYGWIN)
+    ifneq ($(wildcard /clang64/bin),)
+        export PATH := /clang64/bin:$(PATH)
+        CXX := /clang64/bin/clang++
+        CC := /clang64/bin/clang
+    else
+        CXX := clang++
+        CC := clang
+    endif
+    SAN_FLAGS := -fsanitize=address
     ifeq ($(UNAME_S),Darwin)
         EXT_SUFFIX := .dylib
     else
-        EXT_SUFFIX := .so
+        EXT_SUFFIX := .dll
     endif
 endif
 
@@ -42,12 +59,12 @@ build-go-integration:
 build-c: build-go-integration
 	@mkdir -p $(BIN_DIR)/c_ext
 	@echo "Building C extension..."
-	gcc -shared -fPIC -O2 $(C_EXT_DIR)/myext.c -o $(C_EXT_PATH)
+	$(CC) -shared -fPIC -O2 $(C_EXT_DIR)/myext.c -o $(C_EXT_PATH)
 
 build-cpp: build-go-integration
 	@mkdir -p $(BIN_DIR)/cpp_ext
 	@echo "Building C++ extension..."
-	g++ -shared -fPIC -O2 -fno-exceptions -fno-rtti -nostdlib++ $(CPP_EXT_DIR)/myext.cpp -o $(CPP_EXT_PATH)
+	$(CXX) -shared -fPIC -O2 -fno-exceptions -fno-rtti $(CPP_EXT_DIR)/myext.cpp -o $(CPP_EXT_PATH)
 
 leak-check: build-c
 	@echo "Building C leak check program..."

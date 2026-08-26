@@ -15,6 +15,7 @@ if "%TARGET%"=="" set TARGET=test
 
 if "%TARGET%"=="clean" goto clean
 if "%TARGET%"=="test" goto test
+if "%TARGET%"=="test-asan" ( call :test_asan & goto end )
 if "%TARGET%"=="test-time" ( call :test_time & goto end )
 if "%TARGET%"=="test-oom" ( call :test_oom & goto end )
 if "%TARGET%"=="test-multi-tu" ( call :test_multi_tu & goto end )
@@ -83,6 +84,22 @@ if %ERRORLEVEL% neq 0 exit /b %ERRORLEVEL%
 echo.
 echo All MSVC tests passed successfully!
 goto end
+
+:test_asan
+echo [Running MSVC AddressSanitizer (ASan)]
+where cl >nul 2>nul
+if %ERRORLEVEL% neq 0 if exist "C:\Program Files\Microsoft Visual Studio\2022\Community\VC\Auxiliary\Build\vcvarsall.bat" call "C:\Program Files\Microsoft Visual Studio\2022\Community\VC\Auxiliary\Build\vcvarsall.bat" x64 >nul
+if not defined SQLITE_INC if exist "%~dp0deps\sqlite3\include\sqlite3.h" set "SQLITE_INC=%~dp0deps\sqlite3\include"
+if not defined SQLITE_LIB if exist "%~dp0deps\sqlite3\lib\sqlite3.lib" set "SQLITE_LIB=%~dp0deps\sqlite3\lib\sqlite3.lib"
+if not defined SQLITE_LIB set SQLITE_LIB=sqlite3.lib
+if exist "%~dp0deps\sqlite3\lib" set "PATH=%~dp0deps\sqlite3\lib;%PATH%"
+if not exist tests\oom_safety\bin mkdir tests\oom_safety\bin
+if exist "%~dp0deps\sqlite3\lib\*.dll" copy "%~dp0deps\sqlite3\lib\*.dll" tests\oom_safety\bin\ >nul
+cl /nologo /O2 /Zi /fsanitize=address /MD /I"include" /I"%SQLITE_INC%" /std:c++14 /Fe:tests\oom_safety\bin\test_msvc_asan.exe tests\oom_safety\test_oom.cpp "%SQLITE_LIB%"
+if %ERRORLEVEL% neq 0 exit /b %ERRORLEVEL%
+tests\oom_safety\bin\test_msvc_asan.exe
+if %ERRORLEVEL% neq 0 exit /b %ERRORLEVEL%
+goto :eof
 
 :test_time
 echo [Running test-time]

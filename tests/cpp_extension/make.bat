@@ -14,16 +14,16 @@ if exist "%~dp0..\..\deps\sqlite3\lib" set "PATH=%~dp0..\..\deps\sqlite3\lib;%PA
 if not exist bin mkdir bin
 if exist "%~dp0..\..\deps\sqlite3\lib\*.dll" copy "%~dp0..\..\deps\sqlite3\lib\*.dll" bin\ >nul
 
-cl /nologo /O2 /W4 /I"../../include" /I"%SQLITE_INC%" /std:c++14 /GR- /EHs-c- /LD /Fe:bin\libtest_ext_stateless.dll test_ext_stateless.cpp /link /NODEFAULTLIB:msvcprt.lib /NODEFAULTLIB:libcpmt.lib
+cl /nologo /O2 /W4 /Zi /fsanitize=address /MD /I"../../include" /I"%SQLITE_INC%" /std:c++14 /LD /Fe:bin\libtest_ext_stateless.dll test_ext_stateless.cpp
 if %ERRORLEVEL% neq 0 exit /b %ERRORLEVEL%
 
-cl /nologo /O2 /W4 /I"../../include" /I"%SQLITE_INC%" /std:c++14 /GR- /EHs-c- /LD /Fe:bin\libtest_ext_stateful.dll test_ext_stateful.cpp /link /NODEFAULTLIB:msvcprt.lib /NODEFAULTLIB:libcpmt.lib
+cl /nologo /O2 /W4 /Zi /fsanitize=address /MD /I"../../include" /I"%SQLITE_INC%" /std:c++14 /LD /Fe:bin\libtest_ext_stateful.dll test_ext_stateful.cpp
 if %ERRORLEVEL% neq 0 exit /b %ERRORLEVEL%
 
-cl /nologo /O2 /W4 /I"../../include" /I"%SQLITE_INC%" /std:c++14 /GR- /EHs-c- /LD /Fe:bin\libtest_ext_mixed.dll test_ext_mixed.cpp /link /NODEFAULTLIB:msvcprt.lib /NODEFAULTLIB:libcpmt.lib
+cl /nologo /O2 /W4 /Zi /fsanitize=address /MD /I"../../include" /I"%SQLITE_INC%" /std:c++14 /LD /Fe:bin\libtest_ext_mixed.dll test_ext_mixed.cpp
 if %ERRORLEVEL% neq 0 exit /b %ERRORLEVEL%
 
-cl /nologo /O2 /W4 /I"../../include" /I"%SQLITE_INC%" /std:c++14 /GR- /EHs-c- /Fe:bin\test_loader.exe test_loader.cpp "%SQLITE_LIB%" /link /NODEFAULTLIB:msvcprt.lib /NODEFAULTLIB:libcpmt.lib
+cl /nologo /O2 /W4 /Zi /fsanitize=address /MD /I"../../include" /I"%SQLITE_INC%" /std:c++14 /Fe:bin\test_loader.exe test_loader.cpp "%SQLITE_LIB%"
 if %ERRORLEVEL% neq 0 exit /b %ERRORLEVEL%
 
 bin\test_loader.exe bin\libtest_ext_stateless.dll bin\libtest_ext_stateful.dll bin\libtest_ext_mixed.dll

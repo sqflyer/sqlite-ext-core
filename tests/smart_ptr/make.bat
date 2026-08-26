@@ -24,7 +24,7 @@ goto end
 :test_c
 if not exist bin mkdir bin
 if exist "%~dp0..\..\deps\sqlite3\lib\*.dll" copy "%~dp0..\..\deps\sqlite3\lib\*.dll" bin\ >nul
-cl /nologo /O2 /W4 /I"../../include" /I"%SQLITE_INC%" /std:c11 /Fe:bin\test_smart_ptr_c.exe test_smart_ptr.c "%SQLITE_LIB%"
+cl /nologo /O2 /W4 /Zi /fsanitize=address /MD /I"../../include" /I"%SQLITE_INC%" /std:c11 /Fe:bin\test_smart_ptr_c.exe test_smart_ptr.c "%SQLITE_LIB%"
 if %ERRORLEVEL% neq 0 exit /b %ERRORLEVEL%
 bin\test_smart_ptr_c.exe
 if %ERRORLEVEL% neq 0 exit /b %ERRORLEVEL%
@@ -33,7 +33,7 @@ goto :eof
 :test_cpp
 if not exist bin mkdir bin
 if exist "%~dp0..\..\deps\sqlite3\lib\*.dll" copy "%~dp0..\..\deps\sqlite3\lib\*.dll" bin\ >nul
-cl /nologo /O2 /W4 /I"../../include" /I"%SQLITE_INC%" /std:c++14 /GR- /EHs-c- /Fe:bin\test_smart_ptr_cpp.exe test_smart_ptr.cpp "%SQLITE_LIB%" /link /NODEFAULTLIB:msvcprt.lib /NODEFAULTLIB:libcpmt.lib
+cl /nologo /O2 /W4 /Zi /fsanitize=address /MD /I"../../include" /I"%SQLITE_INC%" /std:c++14 /Fe:bin\test_smart_ptr_cpp.exe test_smart_ptr.cpp "%SQLITE_LIB%"
 if %ERRORLEVEL% neq 0 exit /b %ERRORLEVEL%
 bin\test_smart_ptr_cpp.exe
 if %ERRORLEVEL% neq 0 exit /b %ERRORLEVEL%

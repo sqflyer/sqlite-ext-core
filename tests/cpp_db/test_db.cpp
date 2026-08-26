@@ -1,8 +1,6 @@
 #define SQLITE_CORE
 #include <stdio.h>
 #include <assert.h>
-#include <utility> // for std::move
-#include <assert.h>
 #include "sqlite3_db.hpp"
 #include "sqlite3_transaction.hpp"
 
@@ -110,7 +108,7 @@ void test_database_moves() {
         db1.exec("CREATE TABLE move_table (val INT);");
         
         // 2. Move Constructor
-        SqliteDatabaseOwned db2(std::move(db1));
+        SqliteDatabaseOwned db2(sqlite_move(db1));
         assert(!db1); // db1 should be empty
         assert(db2);  // db2 should own the handle
         
@@ -118,7 +116,7 @@ void test_database_moves() {
         
         // 3. Move Assignment
         SqliteDatabaseOwned db3(":memory:"); 
-        db3 = std::move(db2);
+        db3 = sqlite_move(db2);
         
         assert(!db2); // db2 should be empty
         assert(db3);  // db3 should now own the disk database
@@ -152,17 +150,17 @@ void test_database_move_edge_cases() {
     
     // 1. Self-assignment (should be a no-op and not close the DB)
     SqliteDatabaseOwned& db_ref = db1;
-    db1 = std::move(db_ref);
+    db1 = sqlite_move(db_ref);
     assert(db1); // Should still be valid
     
     // 2. Moving from a null database
     // sqlite3_open_v2(nullptr) creates a temporary database, it does NOT return null.
     // To get a truly null handle, we must move out of it.
     SqliteDatabaseOwned temp(":memory:");
-    SqliteDatabaseOwned dummy(std::move(temp));
+    SqliteDatabaseOwned dummy(sqlite_move(temp));
     assert(!temp); // 'temp' is now explicitly null
     
-    db1 = std::move(temp);
+    db1 = sqlite_move(temp);
     assert(!db1); // db1 should now be null (its previous handle safely closed)
 }
 

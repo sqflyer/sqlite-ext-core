@@ -9,6 +9,8 @@ struct SharedState {
 };
 
 static void test_counter_func(sqlite3_context *ctx, int argc, sqlite3_value **argv) {
+    (void)argc;
+    (void)argv;
     SharedState *state = SqliteExtState<SharedState>::from_context(ctx);
     if (!state) return;
     
@@ -31,6 +33,8 @@ static void test_counter_func(sqlite3_context *ctx, int argc, sqlite3_value **ar
 }
 
 static void test_counter_from_db_func(sqlite3_context *ctx, int argc, sqlite3_value **argv) {
+    (void)argc;
+    (void)argv;
     sqlite3 *db = sqlite3_context_db_handle(ctx);
     SharedState *state = SqliteExtState<SharedState>::from_db(ctx, db);
     if (!state) return;
@@ -63,6 +67,7 @@ extern "C" __declspec(dllexport)
 extern "C"
 #endif
 int sqlite3_myext_init(sqlite3 *db, char **pzErrMsg, const sqlite3_api_routines *pApi) {
+    (void)pzErrMsg;
     SQLITE_EXTENSION_INIT2(pApi);
     if (!pApi) return 1;
 

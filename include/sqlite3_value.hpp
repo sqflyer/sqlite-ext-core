@@ -2,6 +2,7 @@
 #define SQLITE3_VALUE_HPP
 
 #include "sqlite3ext.h"
+#include "sqlite3_allocator.hpp"
 #include <stdarg.h>
 #include <string.h>
 

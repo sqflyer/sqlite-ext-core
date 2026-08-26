@@ -34,6 +34,8 @@ SQLITE_EXTENSION_STATE_DECLARE(SharedState)
 SQLITE_EXTENSION_STATE_DEFINE(SharedState)
 
 static void test_counter_func(sqlite3_context *ctx, int argc, sqlite3_value **argv) {
+    (void)argc;
+    (void)argv;
     SharedState *state = SharedState_from_context(ctx);
     if (!state) return;
     
@@ -49,6 +51,8 @@ static void test_counter_func(sqlite3_context *ctx, int argc, sqlite3_value **ar
 }
 
 static void test_counter_from_db_func(sqlite3_context *ctx, int argc, sqlite3_value **argv) {
+    (void)argc;
+    (void)argv;
     sqlite3 *db = sqlite3_context_db_handle(ctx);
     SharedState *state = SharedState_from_db(ctx, db);
     if (!state) return;
@@ -76,6 +80,7 @@ static void my_free_fn(SharedState* state) {
 __declspec(dllexport)
 #endif
 int sqlite3_myext_init(sqlite3 *db, char **pzErrMsg, const sqlite3_api_routines *pApi) {
+    (void)pzErrMsg;
     SQLITE_EXTENSION_INIT2(pApi);
     if (!pApi) return 1;
 

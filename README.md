@@ -7,13 +7,14 @@ This repository serves as the native C and C++ counterpart to the Rust `sqlite-e
 ## Currently Implemented
 
 ### 1. Zero-Dependency C++ Memory Allocator (`sqlite3_allocator.hpp`)
-A fully freestanding C++ allocator that brings `std::allocator` and `std::construct_at` semantics to SQLite extensions compiled with `-nostdlib++` and `-fno-exceptions`.
+A fully freestanding C++ allocator that brings `std::allocator`, `std::construct_at`, and `std::move` semantics to SQLite extensions compiled with `-nostdlib++` and `-fno-exceptions`.
 
 #### Key Features:
 - **Zero-Dependency Construction**: Leverages proprietary `operator new` tag trickery to safely invoke C++ constructors natively without the `<new>` header.
 - **SQLite Profiler Integration**: Provides `sqlite_new` and `sqlite_delete` to flawlessly route all C++ instantiations through `sqlite3_malloc` and `sqlite3_free`, keeping memory limits perfectly tracked by the core engine.
 - **Decoupled Array Architecture**: Explicitly separates raw memory allocation (`sqlite_new_array`) from construction (`sqlite_construct_at`) to completely eliminate the hidden length overhead of standard C++ `new[]`.
-- **Perfect Forwarding**: Implements `sqlite_move_ptr` and `sqlite_forward` to enable highly optimized, variadic constructor forwarding without `#include <utility>`.
+- **Zero-Dependency Move Semantics & Perfect Forwarding**: Implements `sqlite_move` (and `sqlite_move_ptr`) as a complete drop-in replacement for `std::move`, and `sqlite_forward` for variadic constructor forwarding without `#include <utility>`.
+- **Fast SIMD Memory Copy**: Provides `SQLITE_FAST_MEMCPY` optimized across GCC/Clang built-ins, MSVC intrinsics (`__movsb`), and standard memory models.
 - **Smart Pointer Ready**: Acts as the foundational memory and lifecycle layer for components like `SqliteSharedPtr` and `SqliteUniquePtr`.
 
 #### Documentation
@@ -270,13 +271,16 @@ Master umbrella headers providing full subsystem access:
 
 ## Building and Testing
 
-`sqlite-ext-core` features dual cross-platform build systems supporting both GCC/Clang (`Makefile`) and Microsoft Visual C++ (`make.bat`), with strict `-nostdlib++` verification enforced across all compilers.
+`sqlite-ext-core` features dual cross-platform build systems supporting both Clang / GCC (`Makefile`) and Microsoft Visual C++ (`make.bat`), with strict `-nostdlib++` verification enforced across all compilers.
 
-### 1. POSIX / MSYS2 / MinGW (`Makefile`)
-Uses `gcc` / `g++` or `clang` / `clang++` with `-nostdlib++ -fno-exceptions -fno-rtti`:
+> **Environment Setup Guide**: For full step-by-step installation instructions on Linux, macOS, Windows MSYS2 (CLANG64/ASan), and Visual Studio 2022 MSVC, see [`SETUP.md`](SETUP.md).
+
+### 1. POSIX / macOS / Windows MSYS2 (`Makefile`)
+Uses `clang` / `clang++` (or `gcc` on Linux) with `-nostdlib++ -fno-exceptions -fno-rtti -fsanitize=address`:
 
 ```bash
-# Run all subsystem integration tests
+# Clean and run all 19 subsystem integration tests
+make clean
 make test
 
 # Run individual subsystem test suites
@@ -306,9 +310,12 @@ make example-c    # Pure C extension demo
 ```
 
 ### 2. Native Windows MSVC (`make.bat`)
-Uses MSVC `cl.exe` with `/GR-` (no RTTI), `/EHs-c-` (no exceptions), and `/link /NODEFAULTLIB:msvcprt.lib /NODEFAULTLIB:libcpmt.lib` (strictly prohibiting any link against the MSVC C++ standard library):
+Uses MSVC `cl.exe` with Level 4 warnings (`/W4`), `/GR-` (no RTTI), `/EHs-c-` (no exceptions), and `/link /NODEFAULTLIB:msvcprt.lib /NODEFAULTLIB:libcpmt.lib` (strictly prohibiting any link against the MSVC C++ standard library):
 
 ```cmd
+:: Clean previous build artifacts
+make.bat clean
+
 :: Run all subsystem integration tests
 make.bat test
 
