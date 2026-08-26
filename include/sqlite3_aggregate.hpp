@@ -259,7 +259,7 @@ public:
      * @return SQLITE_OK on success, or an error code.
      */
     static int define(SqliteDatabaseView db, const char* name, int num_args = -1, bool deterministic = true) {
-        int flags = SQLITE_UTF8 | (deterministic ? SQLITE_DETERMINISTIC : 0);
+        int flags = SQLITE_UTF8 | SQLITE_SUBTYPE | (deterministic ? SQLITE_DETERMINISTIC : 0);
 
         return sqlite3_create_function_v2(
             db.get(),
@@ -289,7 +289,7 @@ public:
     template <typename State>
     static int define_with_state(SqliteDatabaseView db, const char* name, int num_args = -1, bool deterministic = false) {
         void* raw_state = SqliteExtState<State>::init(db.get());
-        int flags = SQLITE_UTF8 | (deterministic ? SQLITE_DETERMINISTIC : 0);
+        int flags = SQLITE_UTF8 | SQLITE_SUBTYPE | (deterministic ? SQLITE_DETERMINISTIC : 0);
 
         return sqlite3_create_function_v2(
             db.get(),

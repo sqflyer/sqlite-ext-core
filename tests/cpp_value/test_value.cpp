@@ -550,10 +550,361 @@ void test_as_text_and_as_blob(sqlite3* db) {
     assert(bv_owned_null.size() == 0);
     assert(bv_owned_null.data() == nullptr);
 
-    SqliteValueOwned moved_blob = static_cast<SqliteValueOwned&&>(owned_blob);
+    SqliteValueOwned moved_blob = sqlite_move(owned_blob);
     assert(moved_blob.as_blob() == bv1);
     assert(owned_blob.as_blob().data() == nullptr);
     assert(owned_blob.as_blob().size() == 0);
+
+    sqlite3_finalize(stmt);
+}
+
+void test_subtypes_and_affinities(sqlite3* db) {
+    // 1. Exact 16-byte size guarantee
+    static_assert(sizeof(SqliteValueOwned) == 16, "SqliteValueOwned must be exactly 16 bytes!");
+
+    // 2. Default NULL constructor
+    SqliteValueOwned val_null;
+    assert(val_null.type() == SQLITE_NULL);
+    assert(val_null.subtype() == SQLITE_SUBTYPE_NONE);
+    assert(val_null.affinity() == SQLITE_AFF_NONE);
+    assert(!val_null.is_json());
+    assert(!val_null.is_bool());
+
+    // 3. Integer with Subtype & Affinity
+    SqliteValueOwned val_int(42LL, SQLITE_SUBTYPE_NONE, SQLITE_AFF_INTEGER);
+    assert(val_int.type() == SQLITE_INTEGER);
+    assert(val_int.as_int64() == 42);
+    assert(val_int.affinity() == SQLITE_AFF_INTEGER);
+    assert(sqlite3IsNumericAffinity(val_int.affinity()));
+
+    // 4. Boolean factory constructor
+    SqliteValueOwned val_bool = SqliteValueOwned::from_bool(true);
+    assert(val_bool.type() == SQLITE_INTEGER);
+    assert(val_bool.as_int64() == 1);
+    assert(val_bool.subtype() == SQLITE_SUBTYPE_BOOL);
+    assert(val_bool.is_bool());
+    assert(!val_bool.is_json());
+
+    // 5. Datetime timestamp factory constructor
+    SqliteValueOwned val_time = SqliteValueOwned::from_datetime(1700000000000LL);
+    assert(val_time.type() == SQLITE_INTEGER);
+    assert(val_time.as_int64() == 1700000000000LL);
+    assert(val_time.subtype() == SQLITE_SUBTYPE_DATETIME);
+    assert(val_time.is_datetime());
+
+    // 6. Subtype setters & predicates
+    SqliteValueOwned val_sub(100LL);
+    assert(val_sub.subtype() == SQLITE_SUBTYPE_NONE);
+    val_sub.set_subtype(SQLITE_SUBTYPE_JSON);
+    assert(val_sub.is_json());
+    val_sub.set_subtype(SQLITE_SUBTYPE_DECIMAL);
+    assert(val_sub.is_decimal());
+    val_sub.set_subtype(SQLITE_SUBTYPE_UUID);
+    assert(val_sub.is_uuid());
+    val_sub.set_subtype(SQLITE_SUBTYPE_VECTOR);
+    assert(val_sub.is_vector());
+    val_sub.set_subtype(SQLITE_SUBTYPE_GEOMETRY);
+    assert(val_sub.is_geometry());
+    val_sub.set_subtype(SQLITE_SUBTYPE_COMPRESSED);
+    assert(val_sub.is_compressed());
+
+    // 7. Affinity setters
+    val_sub.set_affinity(SQLITE_AFF_REAL);
+    assert(val_sub.affinity() == SQLITE_AFF_REAL);
+    assert(sqlite3IsNumericAffinity(val_sub.affinity()));
+
+    // 8. Move semantics with subtype & affinity preservation
+    SqliteValueOwned moved_sub = sqlite_move(val_sub);
+    assert(moved_sub.is_compressed());
+    assert(moved_sub.affinity() == SQLITE_AFF_REAL);
+    assert(val_sub.subtype() == SQLITE_SUBTYPE_NONE);
+    assert(val_sub.type() == SQLITE_NULL);
+
+    // 9. SQL Subtype Execution & View reading
+    sqlite3_stmt* stmt;
+    assert(sqlite3_prepare_v2(db, "SELECT 999;", -1, &stmt, nullptr) == SQLITE_OK);
+    assert(sqlite3_step(stmt) == SQLITE_ROW);
+    sqlite3_value* row_val = sqlite3_column_value(stmt, 0);
+    SqliteValueView view_val(row_val);
+    assert(view_val.type() == SQLITE_INTEGER);
+    assert(view_val.affinity() == SQLITE_AFF_INTEGER);
+    assert(sqlite3IsNumericAffinity(view_val.affinity()));
+    assert(view_val.subtype() == SQLITE_SUBTYPE_NONE);
+    assert(!view_val.is_json());
+    assert(!view_val.is_bool());
+
+    SqliteValueOwned copied_from_view(row_val);
+    assert(copied_from_view.type() == SQLITE_INTEGER);
+    assert(copied_from_view.as_int64() == 999);
+    assert(copied_from_view.subtype() == SQLITE_SUBTYPE_NONE);
+    assert(copied_from_view.affinity() == SQLITE_AFF_INTEGER);
+
+    sqlite3_finalize(stmt);
+
+    // 10. Test SqliteBlobOwned::release() zero-copy
+    const char raw_bytes[] = {0x01, 0x02, 0x03, 0x04};
+    SqliteBlobOwned rel_blob(raw_bytes, 4);
+    assert(rel_blob.size() == 4);
+    assert(rel_blob.is_valid());
+    void* released_ptr = rel_blob.release();
+    assert(released_ptr != nullptr);
+    assert(rel_blob.data() == nullptr);
+    assert(rel_blob.size() == 0);
+    assert(rel_blob.is_valid());
+    sqlite3_free(released_ptr);
+
+    // 11. Dual Representation Struct assertions
+    static_assert(sizeof(SqliteOwnedValueTag) == 1, "SqliteOwnedValueTag must be exactly 1 byte!");
+    static_assert(sizeof(SqliteTypeRep) == 16, "SqliteTypeRep must be exactly 16 bytes!");
+    static_assert(sizeof(InlineBufferRep) == 16, "InlineBufferRep must be exactly 16 bytes!");
+
+    SqliteOwnedValueTag tag_test;
+    tag_test.set(SQLITE_TEXT, false, 5);
+    assert(tag_test.type() == SQLITE_TEXT);
+    assert(!tag_test.is_heap());
+    assert(tag_test.len() == 5);
+
+    // 12. Inline SBO Strings (<= 13 chars) and Blobs (<= 14 bytes)
+    SqliteValueOwned inline_str = SqliteValueOwned::from_text("hello world");
+    assert(inline_str.type() == SQLITE_TEXT);
+    assert(inline_str.tag().type() == SQLITE_TEXT);
+    assert(!inline_str.is_heap_allocated());
+    assert(!inline_str.tag().is_heap());
+    assert(inline_str.inline_length() == 11);
+    assert(inline_str.tag().len() == 11);
+    assert(inline_str.as_text() == "hello world");
+
+    SqliteValueOwned inline_blob = SqliteValueOwned::from_blob(raw_bytes, 4);
+    assert(inline_blob.type() == SQLITE_BLOB);
+    assert(!inline_blob.is_heap_allocated());
+    assert(inline_blob.inline_length() == 4);
+    assert(inline_blob.as_blob().size() == 4);
+
+    // 13. Subtype Extraction & Query via SQLite Engine
+    sqlite3_stmt* json_stmt;
+    assert(sqlite3_prepare_v2(db, "SELECT json('{\"a\":1}');", -1, &json_stmt, nullptr) == SQLITE_OK);
+    assert(sqlite3_step(json_stmt) == SQLITE_ROW);
+    SqliteValueView json_view(sqlite3_column_value(json_stmt, 0));
+    assert(json_view.type() == SQLITE_TEXT);
+    assert(json_view.is_json());
+    assert(json_view.subtype() == SQLITE_SUBTYPE_JSON);
+
+    SqliteValueOwned json_owned(sqlite3_column_value(json_stmt, 0));
+    assert(json_owned.type() == SQLITE_TEXT);
+    assert(json_owned.is_json());
+    assert(json_owned.subtype() == SQLITE_SUBTYPE_JSON);
+    assert(!json_owned.is_heap_allocated());
+    assert(json_owned.as_text() == "{\"a\":1}");
+    sqlite3_finalize(json_stmt);
+
+    // 14. Inline Subtypes (<= 13 chars / 14 bytes)
+    SqliteValueOwned inline_json = SqliteValueOwned::from_json("{\"a\":1}");
+    assert(inline_json.type() == SQLITE_TEXT);
+    assert(!inline_json.is_heap_allocated());
+    assert(inline_json.subtype() == SQLITE_SUBTYPE_JSON);
+    assert(inline_json.is_json());
+    assert(inline_json.as_text() == "{\"a\":1}");
+
+    SqliteValueOwned inline_dec = SqliteValueOwned::from_decimal("123.456");
+    assert(inline_dec.type() == SQLITE_TEXT);
+    assert(!inline_dec.is_heap_allocated());
+    assert(inline_dec.subtype() == SQLITE_SUBTYPE_DECIMAL);
+    assert(inline_dec.is_decimal());
+    assert(inline_dec.as_text() == "123.456");
+
+    SqliteValueOwned inline_comp = SqliteValueOwned::from_compressed(raw_bytes, 4);
+    assert(inline_comp.type() == SQLITE_BLOB);
+    assert(!inline_comp.is_heap_allocated());
+    assert(inline_comp.subtype() == SQLITE_SUBTYPE_COMPRESSED);
+    assert(inline_comp.is_compressed());
+}
+
+void test_value_view_ergonomics(sqlite3* db) {
+    sqlite3_stmt* stmt = nullptr;
+    assert(sqlite3_prepare_v2(db, "SELECT 42, 3.14, 'hello', X'DEADBEEF', NULL", -1, &stmt, nullptr) == SQLITE_OK);
+    assert(sqlite3_step(stmt) == SQLITE_ROW);
+
+    // from_column
+    SqliteValueView v_int = SqliteValueView::from_column(stmt, 0);
+    SqliteValueView v_float = SqliteValueView::from_column(stmt, 1);
+    SqliteValueView v_text = SqliteValueView::from_column(stmt, 2);
+    SqliteValueView v_blob = SqliteValueView::from_column(stmt, 3);
+    SqliteValueView v_null = SqliteValueView::from_column(stmt, 4);
+
+    // Type predicates
+    assert(v_int.is_integer());
+    assert(v_int.is_numeric());
+    assert(!v_int.is_null());
+    assert(v_int.as_bool());
+    assert(static_cast<bool>(v_int));
+
+    assert(v_float.is_float());
+    assert(v_float.is_numeric());
+    assert(!v_float.is_null());
+
+    assert(v_text.is_text());
+    assert(!v_text.is_numeric());
+    assert(!v_text.is_null());
+
+    assert(v_blob.is_blob());
+    assert(!v_blob.is_null());
+
+    assert(v_null.is_null());
+    assert(!v_null.is_integer());
+    assert(!static_cast<bool>(v_null));
+
+    // to_owned()
+    SqliteValueOwned owned_int = v_int.to_owned();
+    assert(owned_int.is_integer());
+    assert(owned_int.as_int64() == 42);
+
+    SqliteValueOwned owned_text = v_text.to_owned();
+    assert(owned_text.is_text());
+    assert(owned_text.as_text() == "hello");
+    assert(!owned_text.is_heap_allocated()); // SBO!
+
+    SqliteValueOwned owned_null = v_null.to_owned();
+    assert(owned_null.is_null());
+    assert(!static_cast<bool>(owned_null));
+
+    sqlite3_finalize(stmt);
+}
+
+void test_all_subtype_factories(sqlite3* db) {
+    // 1. from_bool
+    SqliteValueOwned b_true = SqliteValueOwned::from_bool(true);
+    assert(b_true.is_bool());
+    assert(b_true.as_bool());
+    assert(b_true.as_int64() == 1);
+    assert(b_true.subtype() == SQLITE_SUBTYPE_BOOL);
+
+    SqliteValueOwned b_false = SqliteValueOwned::from_bool(false);
+    assert(b_false.is_bool());
+    assert(!b_false.as_bool());
+    assert(b_false.as_int64() == 0);
+
+    // 2. from_datetime
+    sqlite3_int64 epoch = 1724700000000LL;
+    SqliteValueOwned dt = SqliteValueOwned::from_datetime(epoch);
+    assert(dt.is_datetime());
+    assert(dt.as_int64() == epoch);
+    assert(dt.subtype() == SQLITE_SUBTYPE_DATETIME);
+
+    // 3. from_json & from_jsonb
+    SqliteValueOwned j_txt = SqliteValueOwned::from_json("{\"status\":\"ok\"}");
+    assert(j_txt.is_json());
+    assert(j_txt.is_text());
+    assert(j_txt.subtype() == SQLITE_SUBTYPE_JSON);
+
+    const uint8_t jsonb_data[] = {0x01, 0x02, 0x03, 0x04};
+    SqliteValueOwned j_blob = SqliteValueOwned::from_jsonb(jsonb_data, 4);
+    assert(j_blob.is_json());
+    assert(j_blob.is_blob());
+    assert(j_blob.subtype() == SQLITE_SUBTYPE_JSON);
+
+    // 4. from_uuid
+    const uint8_t uuid_bytes[16] = {0x12, 0x34, 0x56, 0x78, 0x90, 0xab, 0xcd, 0xef, 0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77, 0x88};
+    SqliteValueOwned uuid_val = SqliteValueOwned::from_uuid(uuid_bytes);
+    assert(uuid_val.is_uuid());
+    assert(uuid_val.is_blob());
+    assert(uuid_val.subtype() == SQLITE_SUBTYPE_UUID);
+
+    // 5. from_vector
+    const float vec_data[3] = {1.0f, 2.0f, 3.0f};
+    SqliteValueOwned vec_val = SqliteValueOwned::from_vector(vec_data, sizeof(vec_data));
+    assert(vec_val.is_vector());
+    assert(vec_val.is_blob());
+    assert(vec_val.subtype() == SQLITE_SUBTYPE_VECTOR);
+
+    // 6. from_geometry
+    const uint8_t geo_data[8] = {1, 2, 3, 4, 5, 6, 7, 8};
+    SqliteValueOwned geo_val = SqliteValueOwned::from_geometry(geo_data, 8);
+    assert(geo_val.is_geometry());
+    assert(geo_val.subtype() == SQLITE_SUBTYPE_GEOMETRY);
+
+    // 7. from_decimal
+    SqliteValueOwned dec_val = SqliteValueOwned::from_decimal("999999999999999.99");
+    assert(dec_val.is_decimal());
+    assert(dec_val.is_text());
+    assert(dec_val.subtype() == SQLITE_SUBTYPE_DECIMAL);
+
+    // 8. Bind & Result roundtrip in SQLite
+    sqlite3_stmt* stmt = nullptr;
+    assert(sqlite3_prepare_v2(db, "SELECT ?1", -1, &stmt, nullptr) == SQLITE_OK);
+    b_true.bind(stmt, 1);
+    assert(sqlite3_step(stmt) == SQLITE_ROW);
+    SqliteValueView view(sqlite3_column_value(stmt, 0));
+    assert(view.as_int64() == 1);
+    assert(view.is_integer());
+    sqlite3_finalize(stmt);
+}
+
+void test_sbo_boundary_and_heap_transitions() {
+    // String SBO exact boundary (13 chars vs 14 chars)
+    const char* str13 = "1234567890123";
+    SqliteValueOwned s13 = SqliteValueOwned::from_text(str13);
+    assert(!s13.is_heap_allocated());
+    assert(s13.inline_length() == 13);
+    assert(s13.tag().len() == 13);
+    assert(!s13.tag().is_heap());
+    assert(s13.as_text() == str13);
+
+    const char* str14 = "12345678901234";
+    SqliteValueOwned s14 = SqliteValueOwned::from_text(str14);
+    assert(s14.is_heap_allocated());
+    assert(s14.tag().is_heap());
+
+    // Blob SBO exact boundary (14 bytes vs 15 bytes)
+    uint8_t blob14[14];
+    memset(blob14, 0xAA, 14);
+    SqliteValueOwned b14 = SqliteValueOwned::from_blob(blob14, 14);
+    assert(!b14.is_heap_allocated());
+    assert(b14.inline_length() == 14);
+    assert(b14.tag().len() == 14);
+    assert(!b14.tag().is_heap());
+    assert(b14.as_blob().size() == 14);
+
+    uint8_t blob15[15];
+    memset(blob15, 0xBB, 15);
+    SqliteValueOwned b15 = SqliteValueOwned::from_blob(blob15, 15);
+    assert(b15.is_heap_allocated());
+    assert(b15.tag().is_heap());
+
+    // Empty string (0 bytes)
+    SqliteValueOwned s0 = SqliteValueOwned::from_text("");
+    assert(!s0.is_heap_allocated());
+    assert(s0.inline_length() == 0);
+    assert(s0.as_text().length() == 0);
+    assert(s0.as_text() == "");
+}
+
+void test_owned_move_and_self_assign_safety(sqlite3* db) {
+    // 1. Move inline text
+    SqliteValueOwned inline_src = SqliteValueOwned::from_text("small text");
+    assert(inline_src.is_valid());
+    SqliteValueOwned inline_dst = sqlite_move(inline_src);
+    assert(inline_dst.as_text() == "small text");
+    assert(!inline_dst.is_heap_allocated());
+    assert(inline_src.is_null()); // moved-from reset to NULL
+
+    // 2. Move heap text from SQLite statement
+    sqlite3_stmt* stmt = nullptr;
+    assert(sqlite3_prepare_v2(db, "SELECT 'very long string that exceeds 14 bytes limit';", -1, &stmt, nullptr) == SQLITE_OK);
+    assert(sqlite3_step(stmt) == SQLITE_ROW);
+    SqliteValueOwned heap_src(sqlite3_column_value(stmt, 0));
+    assert(heap_src.is_heap_allocated());
+    assert(heap_src.is_valid());
+    
+    SqliteValueOwned heap_dst = sqlite_move(heap_src);
+    assert(heap_dst.is_heap_allocated());
+    assert(heap_dst.is_valid());
+    assert(heap_src.is_null()); // moved-from reset to NULL
+    assert(heap_dst.as_text() == "very long string that exceeds 14 bytes limit");
+
+    // 3. Self-move assignment
+    heap_dst = sqlite_move(heap_dst);
+    assert(heap_dst.is_valid());
+    assert(heap_dst.as_text() == "very long string that exceeds 14 bytes limit");
 
     sqlite3_finalize(stmt);
 }
@@ -617,6 +968,21 @@ int main() {
     
     printf("Testing as_text and as_blob on SqliteValueView & SqliteValueOwned...\n");
     test_as_text_and_as_blob(db);
+
+    printf("Testing Subtypes & Affinities (16-byte Layout)...\n");
+    test_subtypes_and_affinities(db);
+    
+    printf("Testing Value View Ergonomics (to_owned, predicates, from_column)...\n");
+    test_value_view_ergonomics(db);
+
+    printf("Testing All Subtype Factories & Roundtrips...\n");
+    test_all_subtype_factories(db);
+
+    printf("Testing SBO Boundary Exact Transitions (13 vs 14 chars, 14 vs 15 bytes)...\n");
+    test_sbo_boundary_and_heap_transitions();
+
+    printf("Testing Owned Move & Self-Assignment Lifetime Safety...\n");
+    test_owned_move_and_self_assign_safety(db);
     
     sqlite3_close(db);
     sqlite3_shutdown();

@@ -45,7 +45,7 @@ public:
      * @return SQLITE_OK on success, or an error code.
      */
     static int define(SqliteDatabaseView db, const char* name, int num_args, ScalarFuncRaw func, bool deterministic = true) {
-        int flags = SQLITE_UTF8 | (deterministic ? SQLITE_DETERMINISTIC : 0);
+        int flags = SQLITE_UTF8 | SQLITE_SUBTYPE | (deterministic ? SQLITE_DETERMINISTIC : 0);
         return sqlite3_create_function_v2(
             db.get(),
             name,
@@ -70,7 +70,7 @@ public:
      * @return SQLITE_OK on success, or an error code.
      */
     static int define(SqliteDatabaseView db, const char* name, int num_args, ScalarFuncContext func, bool deterministic = true) {
-        int flags = SQLITE_UTF8 | (deterministic ? SQLITE_DETERMINISTIC : 0);
+        int flags = SQLITE_UTF8 | SQLITE_SUBTYPE | (deterministic ? SQLITE_DETERMINISTIC : 0);
         return sqlite3_create_function_v2(
             db.get(),
             name,
@@ -95,7 +95,7 @@ public:
      * @return SQLITE_OK on success, or an error code.
      */
     static int define(SqliteDatabaseView db, const char* name, int num_args, ScalarFuncContextRef func, bool deterministic = true) {
-        int flags = SQLITE_UTF8 | (deterministic ? SQLITE_DETERMINISTIC : 0);
+        int flags = SQLITE_UTF8 | SQLITE_SUBTYPE | (deterministic ? SQLITE_DETERMINISTIC : 0);
         return sqlite3_create_function_v2(
             db.get(),
             name,
@@ -114,7 +114,7 @@ public:
      */
     template <void (*Func)(SqliteContext, SqliteUdfArgs)>
     static int define(SqliteDatabaseView db, const char* name, int num_args = -1, bool deterministic = true) {
-        int flags = SQLITE_UTF8 | (deterministic ? SQLITE_DETERMINISTIC : 0);
+        int flags = SQLITE_UTF8 | SQLITE_SUBTYPE | (deterministic ? SQLITE_DETERMINISTIC : 0);
         return sqlite3_create_function_v2(
             db.get(),
             name,
@@ -130,7 +130,7 @@ public:
 
     template <void (*Func)(SqliteContext&, SqliteUdfArgs)>
     static int define(SqliteDatabaseView db, const char* name, int num_args = -1, bool deterministic = true) {
-        int flags = SQLITE_UTF8 | (deterministic ? SQLITE_DETERMINISTIC : 0);
+        int flags = SQLITE_UTF8 | SQLITE_SUBTYPE | (deterministic ? SQLITE_DETERMINISTIC : 0);
         return sqlite3_create_function_v2(
             db.get(),
             name,
@@ -146,7 +146,7 @@ public:
 
     template <void (*Func)(sqlite3_context*, SqliteUdfArgs)>
     static int define(SqliteDatabaseView db, const char* name, int num_args = -1, bool deterministic = true) {
-        int flags = SQLITE_UTF8 | (deterministic ? SQLITE_DETERMINISTIC : 0);
+        int flags = SQLITE_UTF8 | SQLITE_SUBTYPE | (deterministic ? SQLITE_DETERMINISTIC : 0);
         return sqlite3_create_function_v2(
             db.get(),
             name,
@@ -179,7 +179,7 @@ public:
         bool deterministic = false
     ) {
         void* raw_state = SqliteExtState<State>::init(db.get());
-        int flags = SQLITE_UTF8 | (deterministic ? SQLITE_DETERMINISTIC : 0);
+        int flags = SQLITE_UTF8 | SQLITE_SUBTYPE | (deterministic ? SQLITE_DETERMINISTIC : 0);
         return sqlite3_create_function_v2(
             db.get(),
             name,
@@ -201,7 +201,7 @@ public:
         bool deterministic = false
     ) {
         void* raw_state = SqliteExtState<State>::init(db.get());
-        int flags = SQLITE_UTF8 | (deterministic ? SQLITE_DETERMINISTIC : 0);
+        int flags = SQLITE_UTF8 | SQLITE_SUBTYPE | (deterministic ? SQLITE_DETERMINISTIC : 0);
         return sqlite3_create_function_v2(
             db.get(),
             name,
@@ -223,7 +223,7 @@ public:
         bool deterministic = false
     ) {
         void* raw_state = SqliteExtState<State>::init(db.get());
-        int flags = SQLITE_UTF8 | (deterministic ? SQLITE_DETERMINISTIC : 0);
+        int flags = SQLITE_UTF8 | SQLITE_SUBTYPE | (deterministic ? SQLITE_DETERMINISTIC : 0);
         return sqlite3_create_function_v2(
             db.get(),
             name,
