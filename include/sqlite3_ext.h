@@ -9,6 +9,7 @@ extern "C" {
 
 // Core pure C subsystem headers
 #include "sqlite3_atomic.h"
+#include "sqlite3_time.h"
 #include "sqlite3_tiny_lock.h"
 #include "sqlite3_rw_lock.h"
 #include "sqlite3_mutex_lock.h"

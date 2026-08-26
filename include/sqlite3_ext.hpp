@@ -15,6 +15,7 @@
 #include "sqlite3_transaction.hpp"
 #include "sqlite3_buffer.hpp"
 #include "sqlite3_blob_stream.hpp"
+#include "sqlite3_time.hpp"
 
 /**
  * @brief Unified, zero-overhead entry point for registering all SQLite extension components:

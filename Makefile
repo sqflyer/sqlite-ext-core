@@ -1,6 +1,9 @@
-.PHONY: test test-ext-state test-cpp-value test-cpp-value-keys test-locks test-allocator test-smart-ptr test-cpp-udf test-cpp-aggregate test-cpp-statement test-cpp-tvf test-cpp-transaction test-cpp-db test-cpp-buffer test-blob-stream test-backup test-vtab test-cpp-extension example example-c leak-check-integration clean
+.PHONY: test test-ext-state test-cpp-value test-cpp-value-keys test-locks test-allocator test-smart-ptr test-cpp-udf test-cpp-aggregate test-cpp-statement test-cpp-tvf test-cpp-transaction test-cpp-db test-cpp-buffer test-blob-stream test-backup test-vtab test-cpp-extension test-time example example-c leak-check-integration clean
 
-test: test-ext-state test-cpp-value test-locks test-allocator test-smart-ptr test-cpp-udf test-cpp-aggregate test-cpp-statement test-cpp-tvf test-cpp-transaction test-cpp-db test-cpp-buffer test-blob-stream test-backup test-vtab test-cpp-extension
+test: test-ext-state test-cpp-value test-locks test-time test-allocator test-smart-ptr test-cpp-udf test-cpp-aggregate test-cpp-statement test-cpp-tvf test-cpp-transaction test-cpp-db test-cpp-buffer test-blob-stream test-backup test-vtab test-cpp-extension
+
+test-time:
+	$(MAKE) -C tests/time test
 
 test-ext-state:
 	$(MAKE) -C tests/ext_state test-c test-cpp
@@ -73,10 +76,10 @@ clean:
 	$(MAKE) -C tests/cpp_db clean
 	$(MAKE) -C tests/cpp_buffer clean
 	$(MAKE) -C tests/locks clean
+	$(MAKE) -C tests/time clean
 	$(MAKE) -C tests/allocator clean
 	$(MAKE) -C tests/smart_ptr clean
 	$(MAKE) -C tests/cpp_vtab clean
 	$(MAKE) -C tests/cpp_extension clean
 	$(MAKE) -C examples clean
 	$(MAKE) -C example-c clean
-

@@ -245,9 +245,22 @@ Zero-boilerplate entrypoint macros and dynamic symbol exports for creating nativ
 - [Extension README](docs/EXTENSION_README.md)
 - [Extension Architecture](docs/EXTENSION_ARCHITECTURE.md)
 
-### 17. Unified Umbrella Headers & Entry Points (`sqlite3_ext.h` / `sqlite3_ext.hpp`)
+### 17. Freestanding Time & Clock Subsystem (`sqlite3_time.h` / `sqlite3_time.hpp`)
+Zero-dependency, high-resolution monotonic clocks, wall-clock epoch timestamps, millisecond/microsecond sleep routines, and automatic system timezone offset detection for Pure C and C++11 (`-nostdlib++` compliant, no `<chrono>`).
+
+#### Key Features:
+- **Monotonic Precision**: High-resolution monotonic timers in nanoseconds, microseconds, and milliseconds via `QueryPerformanceCounter` on Windows and `clock_gettime(CLOCK_MONOTONIC)` on POSIX.
+- **Epoch Timestamps**: Direct wall-clock epoch timestamps in seconds and milliseconds.
+- **RAII Benchmarking**: `SqliteStopwatch` provides seamless query duration measurement and profiling.
+- **System Timezone Introspection**: Detects UTC offset in seconds with automatic Daylight Saving Time (DST) support.
+
+#### Documentation:
+- [Time & Clock README](docs/TIME_README.md)
+- [Time & Clock Architecture](docs/TIME_ARCHITECTURE.md)
+
+### 18. Unified Umbrella Headers & Entry Points (`sqlite3_ext.h` / `sqlite3_ext.hpp`)
 Master umbrella headers providing full subsystem access:
-- **Pure C (`sqlite3_ext.h`)**: Unifies `sqlite3_atomic.h`, `sqlite3_tiny_lock.h`, `sqlite3_rw_lock.h`, `sqlite3_smart_ptr.h`, and `sqlite3_ext_state.h`.
+- **Pure C (`sqlite3_ext.h`)**: Unifies `sqlite3_atomic.h`, `sqlite3_time.h`, `sqlite3_tiny_lock.h`, `sqlite3_rw_lock.h`, `sqlite3_mutex_lock.h`, `sqlite3_smart_ptr.h`, and `sqlite3_ext_state.h`.
 - **C++ (`sqlite3_ext.hpp`)**: Master umbrella header and unified registration facade (`SqliteExt`) providing symmetrical registration across all extension subsystems:
   - **Scalar UDFs**: `SqliteExt::define_scalar`, `SqliteExt::define_scalar_with_state`
   - **Aggregates**: `SqliteExt::define_aggregate`, `SqliteExt::define_aggregate_with_state`
