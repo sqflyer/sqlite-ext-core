@@ -130,6 +130,15 @@ public:
      * 
      * @return true if prepared and valid, false otherwise.
      */
+    inline bool is_valid() const noexcept {
+        return m_stmt != nullptr;
+    }
+
+    /**
+     * @brief Checks if the statement holds a valid non-null handle.
+     * 
+     * @return true if prepared and valid, false otherwise.
+     */
     inline explicit operator bool() const noexcept {
         return m_stmt != nullptr;
     }

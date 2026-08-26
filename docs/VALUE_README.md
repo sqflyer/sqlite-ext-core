@@ -150,7 +150,25 @@ blob.bind(stmt, 1); // Binds as SQLITE_TRANSIENT
 
 ---
 
-## 7. Deep-Dive Architecture Documentation
+## 7. OOM Safety & Validity Checking (`-fno-exceptions`)
+
+Because `sqlite-ext-core` is built with `-fno-exceptions`, memory allocation failures inside constructors (such as `sqlite3_value_dup` or `sqlite3_malloc`) result in a safe null state instead of throwing exceptions. All `Owned` classes provide `is_valid()` and `explicit operator bool()`:
+
+```cpp
+SqliteValueOwned val(raw_sqlite_val);
+if (!val.is_valid()) {
+    // Memory allocation failed (OOM condition)
+}
+
+SqliteStringOwned str(raw_db);
+if (str) {
+    // String builder is valid and ready
+}
+```
+
+---
+
+## 8. Deep-Dive Architecture Documentation
 
 For complete internal design details, memory layouts, and algorithmic mechanics:
 - **[`docs/VALUE_ARCHITECTURE.md`](VALUE_ARCHITECTURE.md)**: Deep dive into Small Buffer Optimization (SBO) 16-byte memory union layouts, `heap_value()` union safety, the zero-allocation view extraction pipeline, and the 144+ operator heterogeneous lookup engine.

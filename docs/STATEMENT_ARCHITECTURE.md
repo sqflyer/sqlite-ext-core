@@ -107,8 +107,10 @@ insert.execute(); // Performs step() + reset() atomically
 
 ---
 
-## Exception-Free Error Handling
+## Exception-Free Error Handling & Validity Semantics
 
 Because extensions must be buildable with `-fno-exceptions`, `SqliteStatement` avoids throwing C++ exceptions:
-- Lifecycle methods return raw SQLite error codes (`SQLITE_OK`, `SQLITE_ERROR`, `SQLITE_MISUSE`).
-- Unprepared instances safely return `SQLITE_MISUSE` on operations and return safe default representations (e.g. `nullptr`, `0`, `false`) on column queries.
+- **Error Codes**: Lifecycle methods return raw SQLite error codes (`SQLITE_OK`, `SQLITE_ERROR`, `SQLITE_MISUSE`).
+- **Null / Unprepared Safety**: Unprepared or default-constructed instances (`m_stmt == nullptr`) safely return `SQLITE_MISUSE` on `step()`, `reset()`, or `clear_bindings()`, and return safe default values (e.g. `nullptr`, `0`, empty views) on column extraction.
+- **Validity Checks**: Callers can verify statement validity using `is_valid()` or explicit boolean conversions (`if (stmt)`).
+- **Safe Double-Finalization**: `finalize()` is strictly idempotent; subsequent calls on a nullified handle return `SQLITE_OK` cleanly.

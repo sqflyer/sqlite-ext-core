@@ -97,3 +97,13 @@ The repository maintains strict parity across two native build pipelines:
 1. **Isolated C-Runtime Isolation**: Pre-compiled SQLite headers and import libraries are staged under `deps/sqlite3/` (tracked via Git LFS), avoiding any cross-pollution with MinGW CRT headers.
 2. **Link-Time Standard Library Prohibition**: Passing `/link /NODEFAULTLIB:msvcprt.lib /NODEFAULTLIB:libcpmt.lib` ensures the Microsoft Linker immediately rejects any code paths attempting to introduce standard C++ runtime symbols.
 3. **Deterministic DLL Discovery**: Windows `.bat` test scripts co-locate required SQLite runtime DLLs directly into local `bin/` execution folders to guarantee isolated, collision-free runtime execution across concurrent test runs.
+
+## 7. OOM Resilience & Multi-Translation-Unit (Multi-TU) Safety
+
+### Exception-Free OOM Hardening
+Because all code compiles with `-fno-exceptions` (`/EHs-c-`), allocation failures in constructors never throw `std::bad_alloc`. 
+- **Non-Throwing Valid States**: `SqliteValueOwned`, `SqliteStringOwned`, `SqliteBlobOwned`, `SqliteBuffer`, `SqliteString`, and `SqliteStatement` guarantee non-null / valid checking via `.is_valid()` and `explicit operator bool()`.
+- **Safe Degradation**: Operations on empty or unallocated objects return deterministic error codes (`SQLITE_NOMEM`, `SQLITE_MISUSE`) or safe default representations without dereferencing null pointers.
+
+### Multi-Translation-Unit & ODR Safety
+Large SQLite extensions often span multiple `.cpp` files. `sqlite3_ext_state.hpp` leverages C++11 template static member guarantees so that multiple translation units in the same extension shared library automatically link to a single unified state registry without duplicate symbol collisions or disjoint static instances.

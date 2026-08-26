@@ -16,6 +16,8 @@ if "%TARGET%"=="" set TARGET=test
 if "%TARGET%"=="clean" goto clean
 if "%TARGET%"=="test" goto test
 if "%TARGET%"=="test-time" ( call :test_time & goto end )
+if "%TARGET%"=="test-oom" ( call :test_oom & goto end )
+if "%TARGET%"=="test-multi-tu" ( call :test_multi_tu & goto end )
 if "%TARGET%"=="test-ext-state" ( call :test_ext_state & goto end )
 if "%TARGET%"=="test-cpp-value" ( call :test_cpp_value & goto end )
 if "%TARGET%"=="test-locks" ( call :test_locks & goto end )
@@ -47,6 +49,10 @@ if %ERRORLEVEL% neq 0 exit /b %ERRORLEVEL%
 call :test_locks
 if %ERRORLEVEL% neq 0 exit /b %ERRORLEVEL%
 call :test_time
+if %ERRORLEVEL% neq 0 exit /b %ERRORLEVEL%
+call :test_oom
+if %ERRORLEVEL% neq 0 exit /b %ERRORLEVEL%
+call :test_multi_tu
 if %ERRORLEVEL% neq 0 exit /b %ERRORLEVEL%
 call :test_cpp_allocator
 if %ERRORLEVEL% neq 0 exit /b %ERRORLEVEL%
@@ -81,6 +87,16 @@ goto end
 :test_time
 echo [Running test-time]
 cd tests\time && call make.bat && cd ..\..
+goto :eof
+
+:test_oom
+echo [Running test-oom]
+cd tests\oom_safety && call make.bat && cd ..\..
+goto :eof
+
+:test_multi_tu
+echo [Running test-multi-tu]
+cd tests\multi_tu && call make.bat && cd ..\..
 goto :eof
 
 :test_ext_state

@@ -135,9 +135,10 @@ public:
 | `SqliteStatement()` | Constructor | Constructs an empty, unprepared statement. |
 | `SqliteStatement(db, sql, len = -1)` | Constructor | Constructs and prepares the SQL statement. |
 | `prepare(db, sql, len = -1)` | `int` | Prepares a new SQL statement, finalizing any existing handle. |
-| `finalize()` | `int` | Explicitly finalizes the statement and clears the handle. |
+| `finalize()` | `int` | Explicitly finalizes the statement and sets handle to `nullptr`. |
 | `release()` | `sqlite3_stmt*` | Relinquishes ownership of the raw handle without finalizing. |
 | `get()` | `sqlite3_stmt*` | Returns the raw `sqlite3_stmt*` handle. |
+| `is_valid()` | `bool` | Returns `true` if the statement holds a non-null, prepared handle. |
 | `explicit operator bool()` | `bool` | Returns `true` if the internal statement handle is non-null. |
 
 ### Stepping & Control

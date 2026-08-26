@@ -71,3 +71,19 @@ assert(slice.bytes() == 5);
 assert(slice == "Hello"); // Natively compares against C-Strings!
 assert(slice < SqliteBufferSlice("World", 5));
 ```
+
+## 4. OOM Safety & Validity Checking (`-fno-exceptions`)
+
+Because `sqlite-ext-core` compiles with `-fno-exceptions`, memory allocation failures inside constructors or during dynamic resizing never throw. Both `SqliteBuffer` and `SqliteString` provide explicit validity checks:
+
+```cpp
+SqliteString str("Large text");
+if (!str.is_valid()) {
+    // Memory allocation failed (OOM condition)
+}
+
+// Explicit boolean operator conversion
+if (str) {
+    // String is valid and ready to use
+}
+```

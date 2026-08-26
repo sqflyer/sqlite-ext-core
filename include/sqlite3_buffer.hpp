@@ -157,6 +157,16 @@ public:
     /** @brief Returns the total allocated capacity of the buffer. */
     inline sqlite3_int64 capacity() const { return m_capacity; }
     
+    /** @brief Checks if the buffer holds a valid state (or is cleanly empty). */
+    inline bool is_valid() const {
+        return m_size == 0 || m_data != nullptr;
+    }
+
+    /** @brief Explicit boolean conversion checking validity. */
+    inline explicit operator bool() const {
+        return is_valid();
+    }
+
     /** @brief Resets the active size to 0 without freeing the allocated capacity. */
     inline void clear() { m_size = 0; }
     
@@ -324,6 +334,16 @@ public:
     /** @brief Returns the length of the string, excluding the null terminator. */
     inline sqlite3_int64 length() const { return m_size; }
     
+    /** @brief Checks if the string holds a valid state (or is cleanly empty). */
+    inline bool is_valid() const {
+        return m_size == 0 || m_data != nullptr;
+    }
+
+    /** @brief Explicit boolean conversion checking validity. */
+    inline explicit operator bool() const {
+        return is_valid();
+    }
+
     /** @brief Checks if the string is identical to the provided C-string. */
     inline bool operator==(const char* other) const {
         if (!other) return m_size == 0;

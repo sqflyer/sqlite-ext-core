@@ -281,6 +281,8 @@ make test
 
 # Run individual subsystem test suites
 make test-time
+make test-oom
+make test-multi-tu
 make test-locks
 make test-cpp-allocator
 make test-cpp-smart-ptr
@@ -312,6 +314,8 @@ make.bat test
 
 :: Run individual subsystem test suites
 make.bat test-time
+make.bat test-oom
+make.bat test-multi-tu
 make.bat test-locks
 make.bat test-cpp-allocator
 make.bat test-cpp-smart-ptr

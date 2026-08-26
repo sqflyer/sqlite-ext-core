@@ -115,3 +115,16 @@ All classes strictly adhere to `-nostdlib++` requirements:
 - Memory for `SqliteBlobOwned` is allocated via `sqlite3_malloc`.
 - Dynamic values in `SqliteValueOwned` are duplicated via `sqlite3_value_dup` and freed via `sqlite3_value_free`.
 - Zero standard library exceptions or RTTI dependencies are introduced.
+
+---
+
+## 6. OOM Hardening & Non-Throwing Validity Semantics
+
+Because the framework operates with exceptions disabled (`-fno-exceptions` / `/EHs-c-`), constructors cannot throw on allocation failure:
+
+1. **Deterministic Error States**:
+   - If `sqlite3_value_dup()` returns `nullptr` on memory exhaustion, `SqliteValueOwned` records `m_data.pValue = nullptr`.
+   - If `sqlite3_malloc()` fails for `SqliteBlobOwned`, `m_data` is set to `nullptr` and `m_size` to `0`.
+   - If `sqlite3_str_new()` fails or encounters an allocation fault, `errcode()` reflects `SQLITE_NOMEM`.
+2. **Safe Operation Degradation**: Calling `.result()` or `.bind()` on an invalid or OOM value safely returns `SQLITE_NOMEM` or emits an error context without dereferencing null pointers.
+3. **Explicit Inspection**: All owned wrappers provide `is_valid()` and `explicit operator bool()` for deterministic call-site error checking.

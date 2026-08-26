@@ -338,6 +338,16 @@ public:
         return m_str ? sqlite3_str_errcode(m_str) : SQLITE_NOMEM;
     }
     
+    /** @brief Checks if the string builder holds a valid allocation without error. */
+    bool is_valid() const {
+        return m_str != nullptr && sqlite3_str_errcode(m_str) == SQLITE_OK;
+    }
+
+    /** @brief Explicit boolean conversion checking validity. */
+    explicit operator bool() const {
+        return is_valid();
+    }
+
     /** @brief Returns the current length of the string in bytes. */
     int length() const {
         return m_str ? sqlite3_str_length(m_str) : 0;
@@ -611,6 +621,16 @@ public:
     /** @brief Returns the size of the owned binary payload in bytes. */
     int size() const {
         return m_size;
+    }
+
+    /** @brief Checks if the owned blob holds a valid allocation (or is cleanly empty). */
+    bool is_valid() const {
+        return m_size == 0 || m_data != nullptr;
+    }
+
+    /** @brief Explicit boolean conversion checking validity. */
+    explicit operator bool() const {
+        return is_valid();
     }
 
     /** @brief Computes the FNV-1a hash of the owned payload. */
@@ -1089,6 +1109,19 @@ public:
     /** @brief Returns the SQLite datatype (e.g. SQLITE_INTEGER). */
     int type() const {
         return m_type;
+    }
+
+    /** @brief Checks if the value holds a valid state (or SBO primitive/null). */
+    bool is_valid() const {
+        if (m_type == SQLITE_TEXT || m_type == SQLITE_BLOB) {
+            return m_data.pValue != nullptr;
+        }
+        return true;
+    }
+
+    /** @brief Explicit boolean conversion checking validity. */
+    explicit operator bool() const {
+        return is_valid();
     }
 
     /** @brief Internal helper to access heap-allocated sqlite3_value pointers for heterogeneous lookups. */

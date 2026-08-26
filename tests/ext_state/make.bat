@@ -1,11 +1,13 @@
 @echo off
 setlocal
 
+if exist "C:\msys64\mingw64\bin" set "PATH=C:\msys64\mingw64\bin;%PATH%"
+if exist "C:\msys64\ucrt64\bin" set "PATH=C:\msys64\ucrt64\bin;%PATH%"
+if exist "C:\msys64\usr\bin" set "PATH=C:\msys64\usr\bin;%PATH%"
+
 if "%1"=="clean" goto clean
 if "%1"=="test-c" goto test_c
 if "%1"=="test-cpp" goto test_cpp
-
-if exist "C:\msys64\mingw64\bin" set "PATH=C:\msys64\mingw64\bin;%PATH%"
 
 :all
 call :test_c
@@ -44,7 +46,9 @@ goto :eof
 
 :build_go
 if not exist bin mkdir bin
-if exist "C:\msys64\mingw64\bin" set "PATH=C:\msys64\mingw64\bin;%PATH%"
+if exist bin\concurrency_test.exe if exist bin\lazy_test.exe goto :eof
+if exist "C:\msys64\mingw64\bin" set "PATH=C:\msys64\mingw64\bin;C:\msys64\usr\bin;%PATH%"
+if exist "C:\msys64\mingw64\bin\gcc.exe" set "CC=C:\msys64\mingw64\bin\gcc.exe"
 echo Building Go integration tests...
 cd go_loader
 go build -tags sqlite_extension -o ..\bin\concurrency_test.exe concurrency.go

@@ -45,6 +45,17 @@ public:
     }
 
     /**
+     * @brief Initializes or retrieves a singleton shared state struct bound to the database connection.
+     * @tparam State The user-defined state struct type.
+     * @param db The SQLite database connection (SqliteDatabaseView, SqliteDatabaseOwned, or sqlite3*).
+     * @return Raw pointer to the shared State instance.
+     */
+    template <typename State>
+    static inline State* init_state(SqliteDatabaseView db) {
+        return SqliteExtState<State>::get_or_create(db, nullptr);
+    }
+
+    /**
      * @brief Retrieves the existing shared state struct bound to the database connection.
      * @tparam State The user-defined state struct type.
      * @param db The SQLite database connection.

@@ -1,6 +1,12 @@
-.PHONY: test test-ext-state test-cpp-value test-cpp-value-keys test-locks test-cpp-allocator test-cpp-smart-ptr test-cpp-udf test-cpp-aggregate test-cpp-statement test-cpp-tvf test-cpp-transaction test-cpp-db test-cpp-buffer test-cpp-blob-stream test-cpp-backup test-cpp-vtab test-cpp-extension test-time example example-c leak-check-integration clean
+.PHONY: test test-ext-state test-cpp-value test-cpp-value-keys test-locks test-cpp-allocator test-cpp-smart-ptr test-cpp-udf test-cpp-aggregate test-cpp-statement test-cpp-tvf test-cpp-transaction test-cpp-db test-cpp-buffer test-cpp-blob-stream test-cpp-backup test-cpp-vtab test-cpp-extension test-time test-oom test-multi-tu example example-c leak-check-integration clean
 
-test: test-ext-state test-cpp-value test-locks test-time test-cpp-allocator test-cpp-smart-ptr test-cpp-udf test-cpp-aggregate test-cpp-statement test-cpp-tvf test-cpp-transaction test-cpp-db test-cpp-buffer test-cpp-blob-stream test-cpp-backup test-cpp-vtab test-cpp-extension
+test: test-ext-state test-cpp-value test-locks test-time test-oom test-multi-tu test-cpp-allocator test-cpp-smart-ptr test-cpp-udf test-cpp-aggregate test-cpp-statement test-cpp-tvf test-cpp-transaction test-cpp-db test-cpp-buffer test-cpp-blob-stream test-cpp-backup test-cpp-vtab test-cpp-extension
+
+test-oom:
+	$(MAKE) -C tests/oom_safety test
+
+test-multi-tu:
+	$(MAKE) -C tests/multi_tu test
 
 test-time:
 	$(MAKE) -C tests/time test

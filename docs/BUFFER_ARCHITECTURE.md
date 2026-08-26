@@ -34,3 +34,11 @@ When passing a buffer into a SQLite function that expects a destructor callback 
 By explicitly delegating their `hash()` implementation to `SqliteHashUtil::hash()` and their equality checks to `SqliteMemoryUtil::memcmp_equal()`, they perfectly emulate the hashing algorithm of SQLite's `SQLITE_TEXT` and `SQLITE_BLOB` values. 
 
 This guarantees that a `SqliteString` will yield the *exact same hash* as a `sqlite3_value` containing identical text, allowing buffers to serve as high-performance, zero-allocation lookup keys into `std::unordered_map<SqliteValueOwned, T>`!
+
+## OOM Resilience & Null-State Safety (`-fno-exceptions`)
+
+In freestanding C++ without exceptions, runtime allocators (`sqlite3_realloc64`) can return `nullptr` under heavy memory pressure.
+
+1. **Non-Throwing Geometric Growth**: If `ensure_capacity()` fails during an append, the method cleanly returns `false` without corrupting existing buffered data.
+2. **Deterministic Null States**: Empty or unallocated buffers maintain `m_data == nullptr` and `m_size == 0`. Hashing an empty buffer safely hashes a null pointer (`SqliteHashUtil::hash(nullptr, 0)`), and comparisons against null or empty slices succeed deterministically.
+3. **Explicit Verification (`is_valid()`)**: Callers can verify allocation status via `is_valid()` or explicit boolean conversions (`if (buffer)` / `if (str)`).
