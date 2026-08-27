@@ -36,6 +36,7 @@ goto end
 
 :clean
 if exist bin rmdir /s /q bin
+del /f /q *.obj *.o *.pdb *.ilk *.exp *.lib 2>nul
 
 :end
 endlocal

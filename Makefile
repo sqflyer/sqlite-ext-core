@@ -137,3 +137,4 @@ clean:
 	$(MAKE) -C example-c clean
 	$(MAKE) -C example-coro-c clean
 	$(MAKE) -C example-coro-cpp clean
+	@find . -type f \( -name "*.obj" -o -name "*.o" -o -name "*.pdb" -o -name "*.ilk" -o -name "*.exp" \) -delete 2>/dev/null || true

@@ -80,6 +80,6 @@ test: all
 	./$(BIN_DIR)/test_coro_ext_pool
 
 clean:
-	rm -rf $(BIN_DIR)
+	rm -rf $(BIN_DIR) *.obj *.o *.pdb *.ilk *.exp
 
 .PHONY: all test clean

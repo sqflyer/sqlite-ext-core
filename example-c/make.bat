@@ -27,6 +27,7 @@ goto end
 
 :clean
 if exist build rmdir /s /q build
+del /f /q *.obj *.o *.pdb *.ilk *.exp *.lib 2>nul
 
 :end
 endlocal

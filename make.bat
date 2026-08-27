@@ -237,6 +237,7 @@ goto :eof
 echo [Cleaning build artifacts]
 cd tests\ext_state && call make.bat clean && cd ..\..
 cd tests\cpp_value && call make.bat clean && cd ..\..
+cd tests\cpp_row && call make.bat clean && cd ..\..
 cd tests\locks && call make.bat clean && cd ..\..
 cd tests\time && call make.bat clean && cd ..\..
 cd tests\allocator && call make.bat clean && cd ..\..
@@ -253,10 +254,13 @@ cd tests\cpp_backup && call make.bat clean && cd ..\..
 cd tests\cpp_vtab && call make.bat clean && cd ..\..
 cd tests\cpp_extension && call make.bat clean && cd ..\..
 cd tests\threads && call make.bat clean && cd ..\..
+cd tests\oom_safety && call make.bat clean && cd ..\..
+cd tests\multi_tu && call make.bat clean && cd ..\..
 cd example-cpp && call make.bat clean && cd ..
 cd example-c && call make.bat clean && cd ..
 cd example-coro-c && call make.bat clean && cd ..
 cd example-coro-cpp && call make.bat clean && cd ..
+del /f /q /s *.obj *.o *.pdb *.ilk *.exp 2>nul
 echo Clean completed.
 goto end
 
