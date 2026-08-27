@@ -92,6 +92,7 @@ For a deeper dive into the specific mechanics and C++ paradigms used in individu
 - [**Scalar UDFs**](docs/UDF_ARCHITECTURE.md): Compile-time C-callback generation for User-Defined Functions.
 - [**Aggregate UDFs**](docs/AGGREGATE_ARCHITECTURE.md): Deterministic memory layouts for `xStep` and `xFinal` aggregations.
 - [**Table-Valued Functions (TVF)**](docs/TVF_ARCHITECTURE.md): Statically generated `sqlite3_module` structs mapping to strictly-typed C++ classes.
+- [**Coroutine Table-Valued Functions (TVF)**](docs/TVF_CORO_ARCHITECTURE.md): Zero-boilerplate single generator functions using Stackful Fibers or Stackless C++20 `co_yield` with automatic column multiplexing.
 - [**Virtual Tables (VTAB)**](docs/VTAB_ARCHITECTURE.md): Polymorphic standard-layout routing, transactions, savepoints, and direct context state injection.
 - [**Unified Extensibility (`SqliteExt` / `sqlite3_ext.h`)**](include/sqlite3_ext.hpp): Symmetrical registration facade combining UDFs, Aggregates, TVFs, and Virtual Tables.
 - [**C++ Extension Tutorial**](examples/README.md): Turnkey C++ example showcasing compilation, testing, and multi-language loading.

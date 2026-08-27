@@ -9,6 +9,7 @@
 #include "sqlite3_udf.hpp"
 #include "sqlite3_aggregate.hpp"
 #include "sqlite3_tvf.hpp"
+#include "sqlite3_tvf_coro.hpp"
 #include "sqlite3_vtab.hpp"
 #include "sqlite3_ext_state.hpp"
 #include "sqlite3_statement.hpp"
@@ -178,6 +179,31 @@ public:
     template <typename State, typename TvfType>
     static inline int define_tvf_with_state(SqliteDatabaseView db, const char* name) {
         return SqliteTvf::define_with_state<State, TvfType>(db, name);
+    }
+
+    /**
+     * @brief Register a Coroutine-based Table-Valued Function (TVF) (Stateless).
+     * @tparam TvfType The struct defining `schema()` and `generate(SqliteUdfArgs)`.
+     * @param db The SQLite database connection.
+     * @param name The SQL TVF name.
+     * @return SQLITE_OK on success, or an SQLite error code.
+     */
+    template <typename TvfType>
+    static inline int define_tvf_coro(SqliteDatabaseView db, const char* name) {
+        return SqliteTvfCoro::define<TvfType>(db, name);
+    }
+
+    /**
+     * @brief Register a Coroutine-based Table-Valued Function (TVF) bound to shared connection state.
+     * @tparam State The user-defined state struct type.
+     * @tparam TvfType The struct defining `schema()` and `generate(SqliteUdfArgs)`.
+     * @param db The SQLite database connection.
+     * @param name The SQL TVF name.
+     * @return SQLITE_OK on success, or an SQLite error code.
+     */
+    template <typename State, typename TvfType>
+    static inline int define_tvf_coro_with_state(SqliteDatabaseView db, const char* name) {
+        return SqliteTvfCoro::define_with_state<State, TvfType>(db, name);
     }
 
     // ========================================================================

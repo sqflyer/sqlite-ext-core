@@ -20,10 +20,16 @@ if %ERRORLEVEL% neq 0 exit /b %ERRORLEVEL%
 cl /nologo /O2 /W4 /Zi /fsanitize=address /MD /I"../../include" /I"%SQLITE_INC%" /std:c++14 /Fe:bin\test_tvf_state.exe test_tvf_state.cpp "%SQLITE_LIB%"
 if %ERRORLEVEL% neq 0 exit /b %ERRORLEVEL%
 
+cl /nologo /O2 /W4 /Zi /fsanitize=address /MD /I"../../include" /I"%SQLITE_INC%" /std:c++14 /Fe:bin\test_tvf_coro.exe test_tvf_coro.cpp "%SQLITE_LIB%"
+if %ERRORLEVEL% neq 0 exit /b %ERRORLEVEL%
+
 bin\test_tvf.exe
 if %ERRORLEVEL% neq 0 exit /b %ERRORLEVEL%
 
 bin\test_tvf_state.exe
+if %ERRORLEVEL% neq 0 exit /b %ERRORLEVEL%
+
+bin\test_tvf_coro.exe
 if %ERRORLEVEL% neq 0 exit /b %ERRORLEVEL%
 
 goto end

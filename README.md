@@ -174,6 +174,20 @@ A zero-boilerplate, zero-dependency C++ framework for building Eponymous SQLite 
 - [TVF Framework README](docs/TVF_README.md)
 - [TVF Framework Architecture](docs/TVF_ARCHITECTURE.md)
 
+### 9.5. Coroutine Table-Valued Functions (`sqlite3_tvf_coro.hpp`)
+A declarative, zero-boilerplate C++ framework for building eponymous SQLite Table-Valued Functions using cooperative coroutines. Eliminates manual cursor state machines by allowing developers to author TVFs as a single generator function using either Stackful Fibers (`SqliteFiberGenerator<T>`) or Stackless C++20 Coroutines (`SqliteGenerator<T>`, `co_yield`).
+
+#### Key Features:
+- **Single Generator Function**: Replaces 5 iterator methods (`init`, `next`, `eof`, `column`, `rowid`) with a single natural `generate(args)` function.
+- **Polymorphic Column Multiplexing**: Automatically routes scalar values, `SqliteValueOwned`, `SqliteRowStatic<N>`, and `SqliteRowDynamic` to the SQLite output context.
+- **Recursive & Deep-Stack Yielding**: Stackful fibers permit calling `yield(val)` from inside deep recursive helper routines (e.g. JSON/tree traversals).
+- **Stackless C++20 Lowering**: In `-std=c++20` mode, returns `SqliteGenerator<T>` to compile down to a flat ~48-byte state machine with zero stack allocation.
+- **100% Freestanding**: Zero dependencies on standard library runtime headers (`-nostdlib++` compliant) with all memory routed through `sqlite3_malloc64`.
+
+#### Documentation
+- [Coroutine TVF README](docs/TVF_CORO_README.md)
+- [Coroutine TVF Architecture](docs/TVF_CORO_ARCHITECTURE.md)
+
 ### 10. Exception-Safe Transactions (`sqlite3_transaction.hpp`)
 A zero-dependency C++ RAII wrapper for SQLite Transactions and Savepoints that prevents database locking bugs by guaranteeing automatic rollbacks on scope exit.
 
@@ -310,7 +324,7 @@ Master umbrella headers providing full subsystem access:
 - **C++ (`sqlite3_ext.hpp`)**: Master umbrella header and unified registration facade (`SqliteExt`) providing symmetrical registration across all extension subsystems:
   - **Scalar UDFs**: `SqliteExt::define_scalar`, `SqliteExt::define_scalar_with_state`
   - **Aggregates**: `SqliteExt::define_aggregate`, `SqliteExt::define_aggregate_with_state`
-  - **Table-Valued Functions**: `SqliteExt::define_tvf`, `SqliteExt::define_tvf_with_state`
+  - **Table-Valued Functions**: `SqliteExt::define_tvf`, `SqliteExt::define_tvf_with_state`, `SqliteExt::define_tvf_coro`, `SqliteExt::define_tvf_coro_with_state`
   - **Virtual Tables**: `SqliteExt::define_vtab`, `SqliteExt::define_vtab_with_state`
   - **Shared State**: `SqliteExt::init_state`, `SqliteExt::get_state`
 

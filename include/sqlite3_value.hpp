@@ -2811,9 +2811,7 @@ public:
         }
 
         // Reallocate contiguous memory block (0-copy if expanded in place)
-        SqliteValueOwned* new_vals = static_cast<SqliteValueOwned*>(
-            sqlite3_realloc64(m_values, static_cast<sqlite3_uint64>(new_count) * sizeof(SqliteValueOwned))
-        );
+        SqliteValueOwned* new_vals = sqlite_reallocate_array(m_values, static_cast<size_t>(new_count));
         if (!new_vals) {
             return; // OOM safety: original buffer preserved
         }
