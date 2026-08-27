@@ -96,6 +96,18 @@ static void CALLBACK sqlite3_coro_win_trampoline(void* param) {
  * @param arg Arbitrary user argument passed to `fn`.
  * @return SQLITE_OK on success, SQLITE_NOMEM on allocation failure, or SQLITE_MISUSE on invalid arguments.
  */
+#if defined(_WIN32) || defined(_WIN64)
+static inline CRITICAL_SECTION* sqlite3_coro_win_fiber_lock(void) {
+    static CRITICAL_SECTION s_lock;
+    static int s_inited = 0;
+    if (!s_inited) {
+        InitializeCriticalSection(&s_lock);
+        s_inited = 1;
+    }
+    return &s_lock;
+}
+#endif
+
 static inline int sqlite3_coro_create(
     sqlite3_coro_t* coro,
     size_t stack_size,
@@ -115,7 +127,12 @@ static inline int sqlite3_coro_create(
     st->is_done = 0;
     st->is_running = 0;
 
+#if defined(_WIN32) || defined(_WIN64)
+    EnterCriticalSection(sqlite3_coro_win_fiber_lock());
     st->fiber_handle = CreateFiber(stack_size, sqlite3_coro_win_trampoline, st);
+    LeaveCriticalSection(sqlite3_coro_win_fiber_lock());
+#endif
+
     if (!st->fiber_handle) {
         sqlite3_free(st);
         return SQLITE_NOMEM;
@@ -211,10 +228,18 @@ static inline int sqlite3_coro_is_done(const sqlite3_coro_t* coro) {
 static inline void sqlite3_coro_destroy(sqlite3_coro_t* coro) {
     if (coro && coro->state) {
         sqlite3_coro_state_t* st = coro->state;
+#if defined(_WIN32) || defined(_WIN64)
         if (st->fiber_handle) {
+            void* cur_fiber = GetCurrentFiber();
+            if (!cur_fiber || cur_fiber == (void*)0x1e00) {
+                ConvertThreadToFiber(NULL);
+            }
+            EnterCriticalSection(sqlite3_coro_win_fiber_lock());
             DeleteFiber(st->fiber_handle);
+            LeaveCriticalSection(sqlite3_coro_win_fiber_lock());
             st->fiber_handle = NULL;
         }
+#endif
         sqlite3_free(st);
         coro->state = NULL;
     }

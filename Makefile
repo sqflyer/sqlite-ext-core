@@ -23,7 +23,7 @@ endif
 
 export PATH UNAME_S CXX CC SAN_FLAGS
 
-.PHONY: test test-asan test-ext-state test-cpp-value test-cpp-row test-locks test-cpp-allocator test-cpp-smart-ptr test-cpp-udf test-cpp-aggregate test-cpp-statement test-cpp-tvf test-cpp-transaction test-cpp-db test-cpp-buffer test-cpp-blob-stream test-cpp-backup test-cpp-vtab test-cpp-extension test-threads test-time test-oom test-multi-tu example example-c leak-check-integration clean
+.PHONY: test test-asan test-ext-state test-cpp-value test-cpp-row test-locks test-cpp-allocator test-cpp-smart-ptr test-cpp-udf test-cpp-aggregate test-cpp-statement test-cpp-tvf test-cpp-transaction test-cpp-db test-cpp-buffer test-cpp-blob-stream test-cpp-backup test-cpp-vtab test-cpp-extension test-threads test-time test-oom test-multi-tu example example-c example-coro-c example-coro-cpp leak-check-integration clean
 
 test: test-ext-state test-cpp-value test-cpp-row test-locks test-time test-oom test-multi-tu test-cpp-allocator test-cpp-smart-ptr test-cpp-udf test-cpp-aggregate test-cpp-statement test-cpp-tvf test-cpp-transaction test-cpp-db test-cpp-buffer test-cpp-blob-stream test-cpp-backup test-cpp-vtab test-cpp-extension test-threads
 
@@ -98,6 +98,12 @@ example:
 example-c:
 	@$(MAKE) -C example-c run
 
+example-coro-c:
+	@$(MAKE) -C example-coro-c run
+
+example-coro-cpp:
+	@$(MAKE) -C example-coro-cpp run
+
 test-locks:
 	$(MAKE) -C tests/locks test
 
@@ -129,3 +135,5 @@ clean:
 	$(MAKE) -C tests/cpp_extension clean
 	$(MAKE) -C examples clean
 	$(MAKE) -C example-c clean
+	$(MAKE) -C example-coro-c clean
+	$(MAKE) -C example-coro-cpp clean

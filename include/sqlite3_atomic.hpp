@@ -232,4 +232,116 @@ inline typename sqlite_enable_if<!sqlite_is_pointer<T>::value, T>::type sqlite_a
     return SqliteAtomicOps<sizeof(T)>::fetch_xor(ptr, val);
 }
 
+// ============================================================================
+// C++11 RAII ATOMIC OBJECT WRAPPER (Mimicking std::atomic<T>)
+// ============================================================================
+
+/**
+ * @class SqliteAtomic
+ * @brief Zero-dependency C++11 atomic object wrapper mimicking `std::atomic<T>`.
+ *
+ * Fully compliant with `-nostdlib++` and `-fno-exceptions`. Supports arithmetic,
+ * bitwise, exchange, and CAS operations with inline memory barriers.
+ *
+ * @tparam T Trivially copyable value or pointer type.
+ */
+template <typename T>
+class SqliteAtomic {
+private:
+    volatile T m_val;
+
+public:
+    /** @brief Default constructor (uninitialized or zero-initialized). */
+    inline SqliteAtomic() noexcept : m_val(T()) {}
+
+    /** @brief Value constructor. */
+    inline SqliteAtomic(T val) noexcept : m_val(val) {}
+
+    // Non-copyable
+    SqliteAtomic(const SqliteAtomic&) = delete;
+    SqliteAtomic& operator=(const SqliteAtomic&) = delete;
+
+    /** @brief Atomically loads the current value. */
+    inline T load() const noexcept {
+        return sqlite_atomic_load(&m_val);
+    }
+
+    /** @brief Implicit conversion operator for atomic load. */
+    inline operator T() const noexcept {
+        return load();
+    }
+
+    /** @brief Atomically stores a new value. */
+    inline void store(T val) noexcept {
+        sqlite_atomic_store(&m_val, val);
+    }
+
+    /** @brief Assignment operator for atomic store. */
+    inline T operator=(T val) noexcept {
+        store(val);
+        return val;
+    }
+
+    /** @brief Atomically exchanges the value and returns the old value. */
+    inline T exchange(T val) noexcept {
+        return sqlite_atomic_exchange(&m_val, val);
+    }
+
+    /** @brief Atomically performs a strong Compare-And-Swap. */
+    inline bool compare_exchange_strong(T& expected, T desired) noexcept {
+        return sqlite_atomic_cas_strong(&m_val, &expected, desired) != 0;
+    }
+
+    /** @brief Atomically performs a weak Compare-And-Swap. */
+    inline bool compare_exchange_weak(T& expected, T desired) noexcept {
+        return sqlite_atomic_cas_weak(&m_val, &expected, desired) != 0;
+    }
+
+    /** @brief Atomically adds `val` and returns the old value. */
+    inline T fetch_add(T val) noexcept {
+        return sqlite_atomic_fetch_add(&m_val, val);
+    }
+
+    /** @brief Atomically subtracts `val` and returns the old value. */
+    inline T fetch_sub(T val) noexcept {
+        return sqlite_atomic_fetch_sub(&m_val, val);
+    }
+
+    /** @brief Pre-increment (++obj). */
+    inline T operator++() noexcept {
+        return sqlite_atomic_increment(&m_val);
+    }
+
+    /** @brief Post-increment (obj++). */
+    inline T operator++(int) noexcept {
+        return fetch_add(1);
+    }
+
+    /** @brief Pre-decrement (--obj). */
+    inline T operator--() noexcept {
+        return sqlite_atomic_decrement(&m_val);
+    }
+
+    /** @brief Post-decrement (obj--). */
+    inline T operator--(int) noexcept {
+        return fetch_sub(1);
+    }
+
+    /** @brief Compound addition. */
+    inline T operator+=(T val) noexcept {
+        return fetch_add(val) + val;
+    }
+
+    /** @brief Compound subtraction. */
+    inline T operator-=(T val) noexcept {
+        return fetch_sub(val) - val;
+    }
+};
+
+/** @brief Type aliases for standard atomic types. */
+typedef SqliteAtomic<int>      SqliteAtomicInt;
+typedef SqliteAtomic<int64_t>  SqliteAtomicInt64;
+typedef SqliteAtomic<bool>     SqliteAtomicBool;
+typedef SqliteAtomic<size_t>   SqliteAtomicSize;
+
 #endif // SQLITE3_ATOMIC_HPP

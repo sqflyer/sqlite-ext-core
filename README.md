@@ -318,7 +318,23 @@ Zero-dependency, cross-platform C99 stackful fibers and C++11/C++20 generators f
 - [Coroutine & Generator README](docs/COROUTINE_README.md)
 - [Coroutine & Generator Architecture](docs/COROUTINE_ARCHITECTURE.md)
 
-### 20. Unified Umbrella Headers & Entry Points (`sqlite3_ext.h` / `sqlite3_ext.hpp`)
+### 20. Freestanding M:N Coroutine Scheduler & Worker Pool Subsystem (`include/async/sqlite3_coro_sched.h` / `sqlite3_coro_sched.hpp`)
+Zero-dependency, high-throughput M:N cooperative task scheduler and thread pool for multiplexing thousands of coroutines ($M$) across $N$ OS worker threads, or running in a single-threaded event loop ($N = 0$) for WebAssembly and Table-Valued Functions.
+
+#### Key Features:
+- **Dual Execution Engine**: Operates in single-threaded event loop mode (`num_workers = 0`, `poll_one`, `run_until_empty`) for WASM / TVFs, or multi-threaded worker pool mode (`num_workers > 0`) for CPU-bound parallel execution.
+- **AB-BA Deadlock Elimination**: Decouples heap memory allocation from queue synchronization locks, completely preventing lock inversion with SQLite's internal memory manager mutex (`Mutex_Mem`).
+- **Win32 Fiber Lifecycle Protection**: Synchronized critical section wrapper around `CreateFiber` and `DeleteFiber` eliminating OS fiber table contention and stack unwinding race conditions.
+- **Freestanding C++ Type Erasure**: `TaskClosure<F>` captures stateful lambdas and functors with zero virtual tables, zero RTTI overhead, zero exceptions, and 100% `sqlite3_malloc64` profiling.
+- **Process-Wide Global Singleton**: Reference-counted `SqliteCoroScheduler::acquire_global()` and `release_global()` for zero-overhead shared thread pools across multiple database connections.
+- **Standalone Template Helpers**: `sqlite_coro_spawn(pool, []() { ... })` and `sqlite_coro_spawn_stack<StackSize>(pool, ...)`.
+- **Zero-Overhead Alternative to Heavyweight Runtimes**: Outperforms `Boost.Fiber`, `folly::fibers`, and `Google Marl` in embedded SQLite environments by eliminating C++ standard library runtimes (`-nostdlib++` compliant) and routing 100% of allocations through `sqlite3_malloc64`.
+
+#### Documentation:
+- [Coroutine Scheduler README](docs/CORO_SCHED_README.md)
+- [Coroutine Scheduler Architecture](docs/CORO_SCHED_ARCHITECTURE.md)
+
+### 21. Unified Umbrella Headers & Entry Points (`sqlite3_ext.h` / `sqlite3_ext.hpp`)
 Master umbrella headers providing full subsystem access:
 - **Pure C (`sqlite3_ext.h`)**: Unifies `sqlite3_atomic.h`, `sqlite3_time.h`, `sqlite3_tiny_lock.h`, `sqlite3_rw_lock.h`, `sqlite3_mutex_lock.h`, `sqlite3_smart_ptr.h`, and `sqlite3_ext_state.h`.
 - **C++ (`sqlite3_ext.hpp`)**: Master umbrella header and unified registration facade (`SqliteExt`) providing symmetrical registration across all extension subsystems:

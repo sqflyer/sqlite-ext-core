@@ -249,7 +249,29 @@ Coroutines enable building high-density asynchronous cron engines where **$N$ wo
 
 ---
 
-## 8. Freestanding Memory Guarantees (`-nostdlib++`)
+## 8. Systems Comparison with Industry Coroutine Runtimes
+
+| Systems Metric | Boost.Context (`fcontext`) | Standard C++20 (`<coroutine>`) | Tencent `libco` | `sqlite-ext-core` Coroutine |
+| :--- | :--- | :--- | :--- | :--- |
+| **Context Engine** | Custom handwritten assembly | Compiler-lowered frame | Custom x86 assembly | **Win32 Fibers / POSIX `ucontext_t`** |
+| **Memory Accounting** | Untracked global malloc | Global operator new | Untracked glibc heap | **100% `sqlite3_malloc64`** |
+| **Windows Native Fibers** | No (Bypasses Win32 TEB) | N/A (Stackless frame) | No (Unsupported) | **Native `ConvertThreadToFiber` / `CreateFiber`** |
+| **POSIX Conformance** | Direct register jumps | Frame pointer allocation | Non-standard asm hacks | **Standard POSIX `ucontext_t`** |
+| **Stack-Switch Safety** | SEH / ASan stack breaks | Stackless (Frame only) | Breaks on non-x86 ABIs | **Win32 Fiber Lock & ASan safe** |
+| **Freestanding Support** | Requires Boost libraries | Requires `<coroutine>` CRT | Requires libc runtime | **100% `-nostdlib++` Safe** |
+
+### Deep Systems Rationale & Trade-off Analysis:
+
+1. **Why Win32 Fibers on Windows instead of handwritten assembly (`fcontext`)?**
+   - *Operating System TEB/SEH Integrity*: Windows Structured Exception Handling (SEH) and Thread Environment Block (TEB) records track active stack boundaries. Bypassing Windows fiber APIs with raw assembly jumps (like `fcontext`) can cause `ntdll!RtlVirtualUnwind2` crashes during stack unwinding. Native Win32 Fibers update the OS kernel's fiber control structures cleanly.
+2. **Why POSIX `ucontext_t` on Linux/macOS?**
+   - *ABI & Signal Safety*: `ucontext_t` cleanly preserves platform-specific signal masks, floating-point control words, and callee-saved register state according to the System V AMD64 and ARM64 ABIs without brittle inline assembly.
+3. **Why Custom C++20 Coroutine Traits without `<coroutine>`?**
+   - *Eliminating Standard Library Linkage*: Standard `<coroutine>` pulls in C++ runtime symbols (`__cxa_allocate_exception`, standard allocators). `sqlite-ext-core` defines custom freestanding `std::coroutine_handle` and `std::coroutine_traits` specializations that lower `co_yield` expressions directly onto `sqlite3_malloc64` frames.
+
+---
+
+## 9. Freestanding Memory Guarantees (`-nostdlib++`)
 
 - **Zero Standard Library Dependencies**: Fully independent of `libstdc++`, `libc++`, and MSVC CRT dynamic DLLs.
 - **Zero Memory Leaks**: Control blocks and stack buffers are freed deterministically upon coroutine destruction.

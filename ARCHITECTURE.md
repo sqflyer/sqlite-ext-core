@@ -72,6 +72,7 @@ For a deeper dive into the specific mechanics and C++ paradigms used in individu
 - [**Custom Allocators**](docs/ALLOCATOR_ARCHITECTURE.md): Hooking into SQLite's memory arena via `sqlite3_malloc64`
 
 ### Synchronization & Timing
+- [**M:N Coroutine Scheduler & Worker Pool (`SqliteCoroScheduler`)**](docs/CORO_SCHED_ARCHITECTURE.md): Freestanding M:N cooperative task scheduler multiplexing $M$ coroutine tasks across $N$ OS worker threads (or main-thread event loops for WASM/TVFs), complete with AB-BA deadlock elimination, synchronized Win32 fiber lifecycle mutex protection, and process-wide atomic reference-counted singleton management.
 - [**Coroutine, Generator & Fiber Subsystem (`SqliteCoroutine`)**](docs/COROUTINE_ARCHITECTURE.md): Freestanding stackful fibers, recursive deep-stack generators (`SqliteFiberGenerator<T>`), and freestanding C++20 `co_yield` lowering via native Win32 Fibers and POSIX `ucontext_t` without `<coroutine>`.
 - [**Threading & Async Subsystem (`SqliteThread`)**](docs/THREAD_ARCHITECTURE.md): Freestanding C99 and C++11 threading primitives, condition variables (`SqliteConditionVariable`), and non-virtual lambda closure trampolines mapping to native Win32/POSIX kernel APIs without `<thread>`.
 - [**Time & High-Resolution Clock (`SqliteClock`)**](docs/TIME_ARCHITECTURE.md): Monotonic timers, wall-clock epoch timestamps, and system timezone detection without `<chrono>`.

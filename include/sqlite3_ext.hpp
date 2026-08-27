@@ -236,6 +236,26 @@ public:
     static inline int define_vtab_with_state(SqliteDatabaseView db, const char* module_name) {
         return SqliteVTab::define_with_state<State, VTableType, Options>(db, module_name);
     }
+
+    // ========================================================================
+    // 6. M:N Coroutine Scheduler & Worker Pool
+    // ========================================================================
+
+    /**
+     * @brief Acquires the process-wide global coroutine scheduler with reference counting.
+     * @param num_workers Background worker thread count (default 4; 0 for main-thread only).
+     * @return Pointer to the shared global SqliteCoroScheduler.
+     */
+    static inline SqliteCoroScheduler* acquire_coro_scheduler(size_t num_workers = 4) {
+        return SqliteCoroScheduler::acquire_global(num_workers);
+    }
+
+    /**
+     * @brief Releases a reference to the process-wide global coroutine scheduler.
+     */
+    static inline void release_coro_scheduler() {
+        SqliteCoroScheduler::release_global();
+    }
 };
 
 #endif // SQLITE3_EXT_HPP

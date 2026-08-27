@@ -633,4 +633,6 @@ using SqliteGenerator = SqliteFiberGenerator<T>;
 
 #endif /* SQLITE_HAS_CPP20_COROUTINES */
 
+#include "sqlite3_coro_sched.hpp"
+
 #endif /* SQLITE3_CORO_HPP */

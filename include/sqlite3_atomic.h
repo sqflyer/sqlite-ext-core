@@ -1,6 +1,8 @@
 #ifndef SQLITE3_ATOMIC_H
 #define SQLITE3_ATOMIC_H
 
+#include <stdint.h>
+
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -231,6 +233,20 @@ extern "C" {
     #define sqlite_atomic_fetch_xor_64(ptr, val) __atomic_fetch_xor((ptr), (val), __ATOMIC_SEQ_CST)
 
 #endif
+
+// ============================================================================
+// CONVENIENCE TYPE ALIASES & GENERIC MACROS
+// ============================================================================
+
+typedef volatile int      sqlite3_atomic_int;
+typedef volatile int64_t  sqlite3_atomic_int64;
+
+#define sqlite3_atomic_load(ptr)             sqlite_atomic_load_32(ptr)
+#define sqlite3_atomic_store(ptr, val)       sqlite_atomic_store_32(ptr, val)
+#define sqlite3_atomic_fetch_add(ptr, val)   sqlite_atomic_fetch_add_32(ptr, val)
+#define sqlite3_atomic_fetch_sub(ptr, val)   sqlite_atomic_fetch_sub_32(ptr, val)
+#define sqlite3_atomic_increment(ptr)        sqlite_atomic_increment_32(ptr)
+#define sqlite3_atomic_decrement(ptr)        sqlite_atomic_decrement_32(ptr)
 
 #ifdef __cplusplus
 }

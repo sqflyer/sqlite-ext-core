@@ -60,7 +60,35 @@ In a strict **`-nostdlib++` / `-fno-exceptions` / `/NODEFAULTLIB`** environment,
 
 ---
 
-## 3. C++11 Quickstart (`sqlite3_thread.hpp`)
+## 3. In-Depth Comparison with Existing Threading Libraries
+
+| Architectural Metric | Standard `std::thread` | Raw POSIX `pthreads` | Raw Win32 `CreateThread` | `sqlite-ext-core` Thread |
+| :--- | :--- | :--- | :--- | :--- |
+| **Standard Library Dep** | Heavy (`<thread>`, CRT) | None (`libpthread`/`libc`) | None (`kernel32.dll`) | **0.0% (`-nostdlib++`)** |
+| **Memory Allocator** | Global `operator new` | Manual `void*` malloc | Manual `void*` malloc | **100% `sqlite3_malloc64`** |
+| **Closure / Lambda API** | `std::function` / invoke | None (`void*` casts only) | None (`void*` casts only) | **Type-Erased Static Trampoline** |
+| **Cross-Platform ABI** | Platform-divergent CRT | POSIX only (Linux/macOS) | Windows only | **Unified Win32 + POSIX** |
+| **Condition Variable** | `std::condition_variable` | `pthread_cond_t` (manual) | `CONDITION_VARIABLE` (raw) | **RAII + Predicate `wait()`** |
+| **RAII Move Semantics** | Move-only (`std::move`) | None (Integer ID copy) | None (`HANDLE` copy) | **`sqlite_move` (1-Cycle)** |
+| **Exceptions & RTTI** | `std::system_error` thrown | None (Integer error code) | SEH exceptions | **0% Exceptions / 0% RTTI** |
+
+### Detailed Ecosystem Breakdown:
+
+1. **vs. Standard C++ `<thread>` / `std::thread`**:
+   - *Limitations of `std::thread`*: Requires linking against standard library runtimes (`msvcprt.lib` / `libstdc++`), which are strictly prohibited in `-nostdlib++` SQLite extensions. Standard thread spawning throws `std::system_error` exceptions on failure and uses untracked global heap allocations.
+   - *`sqlite-ext-core` Advantage*: Pure freestanding C++11 wrapper providing identical `std::thread` ergonomics (capturing lambdas, move semantics, `.join()`, `.detach()`) with 100% memory tracking through `sqlite3_malloc64`.
+
+2. **vs. Raw POSIX `pthreads` & Win32 `CreateThread`**:
+   - *Limitations of Raw C APIs*: Forcing extension authors to write dual Win32/POSIX `#ifdef` blocks, manual `void*` pointer packing/unpacking, and explicit error handling everywhere.
+   - *`sqlite-ext-core` Advantage*: Unified Pure C99 interface (`sqlite3_thread_create`, `sqlite3_cond_wait`) and high-level C++11 RAII classes (`SqliteThread`, `SqliteConditionVariable`, `SqliteThreadMutex`) that compile identically across Windows, Linux, and macOS.
+
+3. **vs. Third-Party Wrappers (`tinycthread`, `pthreads-win32`)**:
+   - *Limitations of Third-Party Libraries*: Pull in separate compilation units, global state, and custom licenses, often bypassing SQLite's profilers.
+   - *`sqlite-ext-core` Advantage*: Header-only, single-license architecture with native OS handle translation and zero external dependencies.
+
+---
+
+## 4. C++11 Quickstart (`sqlite3_thread.hpp`)
 
 ### 1. Spawning Threads with Closures & Lambdas
 `SqliteThread` supports free function pointers, stateless lambdas, and capturing stateful closures without virtual table overhead:
@@ -112,7 +140,7 @@ assert(!background_logger.joinable());
 
 ---
 
-## 4. Condition Variables & Coordination (`SqliteConditionVariable`)
+## 5. Condition Variables & Coordination (`SqliteConditionVariable`)
 
 ### 1. Producer-Consumer Coordination with Predicates
 ```cpp
@@ -168,7 +196,7 @@ cond.notify_all();
 
 ---
 
-## 5. Pure C API Quickstart (`sqlite3_thread.h`)
+## 6. Pure C API Quickstart (`sqlite3_thread.h`)
 
 For pure C extensions (C99/C11):
 
@@ -221,7 +249,7 @@ sqlite3_thread_mutex_destroy(&mutex);
 
 ---
 
-## 6. Performance & Efficiency
+## 7. Performance & Efficiency
 
 | Metric | Measurement | System Characteristic |
 | :--- | :--- | :--- |
