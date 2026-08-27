@@ -69,8 +69,10 @@ For a deeper dive into the specific mechanics and C++ paradigms used in individu
 - [**Virtual Tables (`SqliteVTable`)**](docs/VTAB_ARCHITECTURE.md): An object-oriented routing framework that maps SQLite's raw C module function pointers to safe polymorphic C++ method invocations.
 - [**Extension State**](docs/EXT_STATE_ARCHITECTURE.md): Thread-safe management of global state across multiple SQLite connections.
 - [**Smart Pointers**](docs/SMART_PTR_ARCHITECTURE.md): Exception-safe `SqliteUniquePtr` and `SqliteSharedPtr` implementations without `<memory>`.
-- [**Custom Allocators**](docs/ALLOCATOR_ARCHITECTURE.md): Hooking into SQLite's memory arena via `sqlite3_malloc64` and `sqlite3_free`.
+- [**Custom Allocators**](docs/ALLOCATOR_ARCHITECTURE.md): Hooking into SQLite's memory arena via `sqlite3_malloc64`
 
+### Synchronization & Timing
+- [**Coroutine, Generator & Fiber Subsystem (`SqliteCoroutine`)**](docs/COROUTINE_ARCHITECTURE.md): Freestanding stackful fibers, recursive deep-stack generators (`SqliteFiberGenerator<T>`), and freestanding C++20 `co_yield` lowering via native Win32 Fibers and POSIX `ucontext_t` without `<coroutine>`.
 - [**Threading & Async Subsystem (`SqliteThread`)**](docs/THREAD_ARCHITECTURE.md): Freestanding C99 and C++11 threading primitives, condition variables (`SqliteConditionVariable`), and non-virtual lambda closure trampolines mapping to native Win32/POSIX kernel APIs without `<thread>`.
 - [**Time & High-Resolution Clock (`SqliteClock`)**](docs/TIME_ARCHITECTURE.md): Monotonic timers, wall-clock epoch timestamps, and system timezone detection without `<chrono>`.
 - [**Lock Base & RAII Hierarchy (`SqliteLockBase` / `SqliteGuardBase`)**](include/sqlite3_lock_base.hpp): Non-copyable, non-movable base classes providing zero-overhead, vtable-free interfaces for all locks and generic template guards (`SqliteLockGuard`, `SqliteBasicReadGuard`, `SqliteBasicWriteGuard`).

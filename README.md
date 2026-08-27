@@ -290,7 +290,21 @@ Zero-dependency, cross-platform C99 and C++11 threading primitives, condition va
 - [Threading & Async README](docs/THREAD_README.md)
 - [Threading & Async Architecture](docs/THREAD_ARCHITECTURE.md)
 
-### 19. Unified Umbrella Headers & Entry Points (`sqlite3_ext.h` / `sqlite3_ext.hpp`)
+### 19. Freestanding Coroutine, Generator & Fiber Subsystem (`include/async/sqlite3_coro.h` / `sqlite3_coro.hpp`)
+Zero-dependency, cross-platform C99 stackful fibers and C++11/C++20 generators for cooperative multitasking, stream generation, and recursive Table-Valued Functions (TVF) without `<coroutine>` or `<thread>`.
+
+#### Key Features:
+- **Stackful Fibers**: Pure C `sqlite3_coro_t` and C++11 `SqliteCoroutine` mapping to native Win32 Fibers (`CreateFiber` / `SwitchToFiber`) on Windows and POSIX `ucontext_t` on Linux/macOS.
+- **Deep Stack Yielding**: Ability to yield execution and transfer data pointers from deep inside recursive call stacks with 0 state-machine boilerplate.
+- **C++11 Range Generators**: `SqliteFiberGenerator<T>` enables writing generator pipelines consumed directly via standard C++11 range-based for loops (`for (T val : gen)`).
+- **Freestanding C++20 `co_yield`**: `SqliteGenerator<T>` lowers `co_yield` expressions into flat compiler state machines with 0 stack allocation and memory allocated via `sqlite3_malloc64`.
+- **100% SQLite Allocator Accounting**: Stack memory (POSIX) and closure frames are tracked through `sqlite3_malloc64` and `sqlite3_free`.
+
+#### Documentation:
+- [Coroutine & Generator README](docs/COROUTINE_README.md)
+- [Coroutine & Generator Architecture](docs/COROUTINE_ARCHITECTURE.md)
+
+### 20. Unified Umbrella Headers & Entry Points (`sqlite3_ext.h` / `sqlite3_ext.hpp`)
 Master umbrella headers providing full subsystem access:
 - **Pure C (`sqlite3_ext.h`)**: Unifies `sqlite3_atomic.h`, `sqlite3_time.h`, `sqlite3_tiny_lock.h`, `sqlite3_rw_lock.h`, `sqlite3_mutex_lock.h`, `sqlite3_smart_ptr.h`, and `sqlite3_ext_state.h`.
 - **C++ (`sqlite3_ext.hpp`)**: Master umbrella header and unified registration facade (`SqliteExt`) providing symmetrical registration across all extension subsystems:

@@ -20,10 +20,16 @@ if %ERRORLEVEL% neq 0 exit /b %ERRORLEVEL%
 cl /nologo /O2 /W4 /Zi /fsanitize=address /MD /I"../../include" /I"../../include/async" /I"%SQLITE_INC%" /std:c11 /Fe:bin\test_cond_c.exe test_cond_c.c "%SQLITE_LIB%"
 if %ERRORLEVEL% neq 0 exit /b %ERRORLEVEL%
 
+cl /nologo /O2 /W4 /Zi /fsanitize=address /MD /I"../../include" /I"../../include/async" /I"%SQLITE_INC%" /std:c11 /Fe:bin\test_coro_c.exe test_coro_c.c "%SQLITE_LIB%"
+if %ERRORLEVEL% neq 0 exit /b %ERRORLEVEL%
+
 cl /nologo /O2 /W4 /Zi /fsanitize=address /MD /I"../../include" /I"../../include/async" /I"%SQLITE_INC%" /std:c++14 /Fe:bin\test_thread.exe test_thread.cpp "%SQLITE_LIB%"
 if %ERRORLEVEL% neq 0 exit /b %ERRORLEVEL%
 
 cl /nologo /O2 /W4 /Zi /fsanitize=address /MD /I"../../include" /I"../../include/async" /I"%SQLITE_INC%" /std:c++14 /Fe:bin\test_cond.exe test_cond.cpp "%SQLITE_LIB%"
+if %ERRORLEVEL% neq 0 exit /b %ERRORLEVEL%
+
+cl /nologo /O2 /W4 /Zi /fsanitize=address /MD /I"../../include" /I"../../include/async" /I"%SQLITE_INC%" /std:c++14 /Fe:bin\test_coro.exe test_coro.cpp "%SQLITE_LIB%"
 if %ERRORLEVEL% neq 0 exit /b %ERRORLEVEL%
 
 bin\test_thread_c.exe
@@ -32,10 +38,16 @@ if %ERRORLEVEL% neq 0 exit /b %ERRORLEVEL%
 bin\test_cond_c.exe
 if %ERRORLEVEL% neq 0 exit /b %ERRORLEVEL%
 
+bin\test_coro_c.exe
+if %ERRORLEVEL% neq 0 exit /b %ERRORLEVEL%
+
 bin\test_thread.exe
 if %ERRORLEVEL% neq 0 exit /b %ERRORLEVEL%
 
 bin\test_cond.exe
+if %ERRORLEVEL% neq 0 exit /b %ERRORLEVEL%
+
+bin\test_coro.exe
 if %ERRORLEVEL% neq 0 exit /b %ERRORLEVEL%
 
 goto end

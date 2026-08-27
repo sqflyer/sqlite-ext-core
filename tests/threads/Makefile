@@ -1,3 +1,5 @@
+.PHONY: all test clean
+
 # OS Detection
 UNAME_S ?= $(shell uname -s 2>/dev/null || echo Windows)
 
@@ -27,7 +29,7 @@ CXXFLAGS := -std=c++11 -Wall -Wextra -O2 -I../../include -I../../include/async -
 
 BIN_DIR = bin
 
-TARGETS = $(BIN_DIR)/test_thread_c $(BIN_DIR)/test_cond_c $(BIN_DIR)/test_thread $(BIN_DIR)/test_cond
+TARGETS = $(BIN_DIR)/test_thread_c $(BIN_DIR)/test_cond_c $(BIN_DIR)/test_coro_c $(BIN_DIR)/test_thread $(BIN_DIR)/test_cond $(BIN_DIR)/test_coro
 
 all: $(TARGETS)
 
@@ -40,18 +42,26 @@ $(BIN_DIR)/test_thread_c: test_thread_c.c | $(BIN_DIR)
 $(BIN_DIR)/test_cond_c: test_cond_c.c | $(BIN_DIR)
 	$(CC) $(CFLAGS) -o $@ $< -lsqlite3 $(SAN_FLAGS)
 
+$(BIN_DIR)/test_coro_c: test_coro_c.c | $(BIN_DIR)
+	$(CC) $(CFLAGS) -o $@ $< -lsqlite3 $(SAN_FLAGS)
+
 $(BIN_DIR)/test_thread: test_thread.cpp | $(BIN_DIR)
 	$(CXX) $(CXXFLAGS) -o $@ $< -lsqlite3 $(SAN_FLAGS)
 
 $(BIN_DIR)/test_cond: test_cond.cpp | $(BIN_DIR)
 	$(CXX) $(CXXFLAGS) -o $@ $< -lsqlite3 $(SAN_FLAGS)
 
+$(BIN_DIR)/test_coro: test_coro.cpp | $(BIN_DIR)
+	$(CXX) $(CXXFLAGS) -o $@ $< -lsqlite3 $(SAN_FLAGS)
+
 test: all
-	@echo "Executing Thread & Condition Variable tests..."
-	@PATH="/clang64/bin:$$PATH" ./$(BIN_DIR)/test_thread_c
-	@PATH="/clang64/bin:$$PATH" ./$(BIN_DIR)/test_cond_c
-	@PATH="/clang64/bin:$$PATH" ./$(BIN_DIR)/test_thread
-	@PATH="/clang64/bin:$$PATH" ./$(BIN_DIR)/test_cond
+	@echo "Executing Thread, Condition Variable & Coroutine tests..."
+	./$(BIN_DIR)/test_thread_c
+	./$(BIN_DIR)/test_cond_c
+	./$(BIN_DIR)/test_coro_c
+	./$(BIN_DIR)/test_thread
+	./$(BIN_DIR)/test_cond
+	./$(BIN_DIR)/test_coro
 
 clean:
 	rm -rf $(BIN_DIR)
