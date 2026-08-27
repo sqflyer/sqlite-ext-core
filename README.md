@@ -334,7 +334,20 @@ Zero-dependency, high-throughput M:N cooperative task scheduler and thread pool 
 - [Coroutine Scheduler README](docs/CORO_SCHED_README.md)
 - [Coroutine Scheduler Architecture](docs/CORO_SCHED_ARCHITECTURE.md)
 
-### 21. Unified Umbrella Headers & Entry Points (`sqlite3_ext.h` / `sqlite3_ext.hpp`)
+### 21. Extension-Presence Coroutine Pool Subsystem (`include/async/sqlite3_coro_ext_pool.h` / `sqlite3_coro_ext_pool.hpp`)
+Zero-collision, reference-counted extension worker pool registry for process-wide shared execution across multiple SQLite database connections:
+
+#### Key Features:
+- **Zero-Collision Tagged Pointer Keying**: Extension pools are keyed by the static virtual memory address of a translation-unit tag (`SQLITE_EXT_TAG_DECLARE(Tag)` in C, `struct Tag {}` in C++), eliminating string collision hazards.
+- **Process-Wide Multi-DB Sharing**: When multiple database connections within a process load the same extension, they share a single dedicated worker pool rather than spawning redundant OS threads.
+- **Deterministic Teardown (`xDestroy`)**: Automatically decrements connection references on `sqlite3_close(db)`. When the final connection closes, worker threads cleanly drain, join, and free all heap memory.
+- **Zero Standard Library Dependencies**: 100% `-nostdlib++` safe, routing all allocations through `sqlite3_malloc64` and `sqlite3_free`.
+
+#### Documentation:
+- [Extension Coroutine Pool README](docs/CORO_EXT_POOL_README.md)
+- [Extension Coroutine Pool Architecture](docs/CORO_EXT_POOL_ARCHITECTURE.md)
+
+### 22. Unified Umbrella Headers & Entry Points (`sqlite3_ext.h` / `sqlite3_ext.hpp`)
 Master umbrella headers providing full subsystem access:
 - **Pure C (`sqlite3_ext.h`)**: Unifies `sqlite3_atomic.h`, `sqlite3_time.h`, `sqlite3_tiny_lock.h`, `sqlite3_rw_lock.h`, `sqlite3_mutex_lock.h`, `sqlite3_smart_ptr.h`, and `sqlite3_ext_state.h`.
 - **C++ (`sqlite3_ext.hpp`)**: Master umbrella header and unified registration facade (`SqliteExt`) providing symmetrical registration across all extension subsystems:
