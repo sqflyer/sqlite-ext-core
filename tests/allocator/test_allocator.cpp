@@ -166,6 +166,59 @@ void test_reallocate_array() {
     sqlite_delete_array(arr);
 }
 
+void test_sqlite_allocator() {
+    reset_counts();
+    sqlite3_initialize();
+
+    sqlite3_int64 mem_before = sqlite3_memory_used();
+
+    SqliteAllocator<MyStruct> alloc;
+    SqliteAllocator<int> int_alloc;
+    (void)int_alloc;
+
+    // Test equality comparisons
+    assert(alloc == alloc);
+    assert(!(alloc != alloc));
+
+    // Test rebind
+    SqliteAllocator<MyStruct>::rebind<double>::other dbl_alloc;
+    (void)dbl_alloc;
+
+    // Allocate 3 elements
+    MyStruct* buffer = alloc.allocate(3);
+    assert(buffer != nullptr);
+    assert(MyStruct::construct_count == 0); // Raw uninitialized allocation!
+
+    sqlite3_int64 mem_allocated = sqlite3_memory_used();
+    assert(mem_allocated > mem_before);
+
+    // In-place construction
+    alloc.construct(&buffer[0], 11);
+    alloc.construct(&buffer[1], 22);
+    alloc.construct(&buffer[2], 33);
+    assert(MyStruct::construct_count == 3);
+    assert(MyStruct::destruct_count == 0);
+    assert(buffer[0].data == 11);
+    assert(buffer[1].data == 22);
+    assert(buffer[2].data == 33);
+
+    // In-place destruction
+    alloc.destroy(&buffer[0]);
+    alloc.destroy(&buffer[1]);
+    alloc.destroy(&buffer[2]);
+    assert(MyStruct::destruct_count == 3);
+
+    // Deallocation
+    alloc.deallocate(buffer, 3);
+    sqlite3_int64 mem_after = sqlite3_memory_used();
+    assert(mem_after == mem_before); // Clean memory release
+
+    // Zero-count allocation safety
+    MyStruct* zero_ptr = alloc.allocate(0);
+    assert(zero_ptr == nullptr);
+    alloc.deallocate(nullptr, 0); // No-op safe
+}
+
 int main() {
     test_single_object();
     test_array_allocation();
@@ -173,6 +226,7 @@ int main() {
     test_move_forwarding();
     test_forwarding();
     test_destroy_at();
+    test_sqlite_allocator();
     
     printf("All allocator tests passed successfully!\n");
     return 0;

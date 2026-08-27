@@ -4,6 +4,8 @@
 #include <sqlite3.h>
 
 // Core subsystem headers
+#include "sqlite3_allocator.hpp"
+#include "sqlite3_smart_ptr.hpp"
 #include "sqlite3_db.hpp"
 #include "sqlite3_value.hpp"
 #include "sqlite3_udf.hpp"
@@ -28,6 +30,8 @@
  */
 class SqliteExt {
 public:
+    template <typename T>
+    using Allocator = SqliteAllocator<T>;
     // ========================================================================
     // 1. Shared State Management
     // ========================================================================

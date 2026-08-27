@@ -343,4 +343,74 @@ inline void sqlite_delete_array(T* arr) {
     }
 }
 
+// ============================================================================
+// STL-COMPLIANT STATELESS ALLOCATOR FOR CONTAINER INTEGRATION
+// ============================================================================
+
+/**
+ * @class SqliteAllocator
+ * @brief Standard STL-compliant stateless allocator that routes all memory requests
+ *        strictly to SQLite's native profiler (sqlite3_malloc64 / sqlite3_free).
+ *
+ * Conforms to standard C++ allocator requirements, enabling zero-overhead integration
+ * with standard and third-party containers (such as GTL flat_hash_map, btree_map, etc.)
+ * while maintaining 100% memory accounting in sqlite3_memory_used().
+ *
+ * @tparam T The element type to allocate.
+ */
+template <typename T>
+class SqliteAllocator {
+public:
+    using value_type      = T;
+    using pointer         = T*;
+    using const_pointer   = const T*;
+    using reference       = T&;
+    using const_reference = const T&;
+    using size_type       = size_t;
+    using difference_type = ptrdiff_t;
+
+    template <typename U>
+    struct rebind {
+        using other = SqliteAllocator<U>;
+    };
+
+    inline SqliteAllocator() noexcept = default;
+
+    template <typename U>
+    inline SqliteAllocator(const SqliteAllocator<U>&) noexcept {}
+
+    /**
+     * @brief Allocates raw memory for `n` elements of type `T` via sqlite3_malloc64.
+     */
+    inline T* allocate(size_t n) {
+        return sqlite_new_array<T>(n);
+    }
+
+    /**
+     * @brief Frees memory previously allocated with allocate() via sqlite3_free.
+     */
+    inline void deallocate(T* p, size_t) noexcept {
+        sqlite_delete_array(p);
+    }
+
+    /**
+     * @brief Constructs an element of type `U` in-place at address `p`.
+     */
+    template <typename U, typename... Args>
+    inline void construct(U* p, Args&&... args) {
+        sqlite_construct_at(p, sqlite_forward<Args>(args)...);
+    }
+
+    /**
+     * @brief Destroys an element of type `U` in-place at address `p`.
+     */
+    template <typename U>
+    inline void destroy(U* p) noexcept {
+        sqlite_destroy_at(p);
+    }
+
+    inline bool operator==(const SqliteAllocator&) const noexcept { return true; }
+    inline bool operator!=(const SqliteAllocator&) const noexcept { return false; }
+};
+
 #endif // SQLITE3_ALLOCATOR_HPP
