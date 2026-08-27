@@ -272,7 +272,7 @@ Zero-boilerplate entrypoint macros and dynamic symbol exports for creating nativ
 - **Dynamic Loader Helpers**: `SqliteDatabaseView::enable_load_extension()` and `SqliteDatabaseView::load_extension()` allow programmatic dynamic loading from host C++ applications.
 
 #### Documentation:
-- [C++ Extension Quickstart & Tutorial](examples/README.md)
+- [C++ Extension Quickstart & Tutorial](example-cpp/README.md)
 - [Pure C Extension Quickstart & Tutorial](example-c/README.md)
 - [Extension README](docs/EXTENSION_README.md)
 - [Extension Architecture](docs/EXTENSION_ARCHITECTURE.md)

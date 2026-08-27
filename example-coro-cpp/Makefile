@@ -20,7 +20,7 @@ else
     endif
 endif
 
-CXXFLAGS := -std=c++11 -Wall -Wextra -O2 -I../include $(SAN_FLAGS)
+CXXFLAGS := -std=c++11 -Wall -Wextra -O2 -I../include -fno-exceptions -fno-rtti $(SAN_FLAGS)
 
 BUILD_DIR = build
 TARGET = $(BUILD_DIR)/libcoro_cpp_example$(EXT_SUFFIX)

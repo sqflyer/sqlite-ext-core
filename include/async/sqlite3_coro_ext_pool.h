@@ -152,6 +152,33 @@ static inline sqlite3_coro_pool_t* sqlite3_coro_ext_pool_acquire(const void* tag
 }
 
 /**
+ * @brief Retrieves the active worker pool pointer for a tag without incrementing the ref count.
+ *
+ * @param tag Static memory address pointer.
+ * @return Pointer to `sqlite3_coro_pool_t`, or NULL if no active pool is registered for this tag.
+ */
+static inline sqlite3_coro_pool_t* sqlite3_coro_ext_pool_get(const void* tag) {
+    if (!tag) tag = SQLITE_EXT_DEFAULT_TAG;
+
+    sqlite3_coro_ext_registry_t* reg = sqlite3_coro_ext_get_registry();
+    if (!reg->initialized) return NULL;
+
+    sqlite3_thread_mutex_lock(&reg->lock);
+    sqlite3_coro_ext_node_t* curr = reg->head;
+    sqlite3_coro_pool_t* pool = NULL;
+
+    while (curr) {
+        if (curr->tag == tag) {
+            pool = &curr->pool;
+            break;
+        }
+        curr = curr->next;
+    }
+    sqlite3_thread_mutex_unlock(&reg->lock);
+    return pool;
+}
+
+/**
  * @brief Releases a reference from an active database connection using the tag pointer.
  *
  * When the reference count reaches 0, the pool is destroyed and freed.

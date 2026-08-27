@@ -41,7 +41,7 @@ Traditional C extensions require tedious, error-prone boilerplate:
 ## 2. Directory Structure
 
 ```
-examples/
+example-cpp/
 ├── build/                      <-- Created during build (contains libexample.dll / .so)
 ├── example.cpp                 <-- Complete C++ extension implementation
 ├── example.sql                 <-- SQL test script exercising all 4 subsystems
@@ -294,12 +294,12 @@ cl /LD /O2 /std:c++14 /GR- /EHsc- /W4 /I..\include example.cpp /link /OUT:build\
 The automated [`Makefile`](Makefile) compiles and runs the extension through SQLite CLI:
 
 ```bash
-cd examples
+cd example-cpp
 make run
 ```
 *Or from repository root:*
 ```bash
-make example
+make example-cpp
 ```
 
 ---

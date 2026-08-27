@@ -169,22 +169,26 @@ Host App                 DB Connection 1          DB Connection 2        Extensi
 ```c
 #include "async/sqlite3_coro_ext_pool.h"
 
-// Declare static token
+// Declare static token (guaranteed unique OS virtual address)
 SQLITE_EXT_TAG_DECLARE(VectorExtTag);
 ```
 
-#### 2. Acquiring and Dispatching
+#### 2. Connection Lifecycle & Non-Mutating Dispatch
 ```c
-// In extension initialization or UDF:
+// 1. Connection Initialization (Increments DB ref_count by 1):
 sqlite3_coro_pool_t* pool = sqlite3_coro_ext_pool_acquire(SQLITE_EXT_TAG(VectorExtTag), 4);
 
-// Spawn cooperative fiber
-sqlite3_coro_pool_spawn(pool, my_worker_fiber, payload, 0);
+// 2. Query Row Dispatch (Fast lookup WITHOUT inflating ref_count):
+sqlite3_coro_pool_t* active_pool = sqlite3_coro_ext_pool_get(SQLITE_EXT_TAG(VectorExtTag));
+if (!active_pool) {
+    active_pool = sqlite3_coro_ext_pool_acquire(SQLITE_EXT_TAG(VectorExtTag), 4);
+}
+sqlite3_coro_pool_spawn(active_pool, my_worker_fiber, payload, 0);
 
-// Synchronously wait for all fibers
+// 3. Synchronously wait for all fibers
 sqlite3_coro_ext_pool_wait(SQLITE_EXT_TAG(VectorExtTag));
 
-// Release database reference
+// 4. Connection Disconnect (Decrements ref_count; auto-frees pool when count hits 0):
 sqlite3_coro_ext_pool_release(SQLITE_EXT_TAG(VectorExtTag));
 ```
 
@@ -200,13 +204,13 @@ sqlite3_coro_ext_pool_release(SQLITE_EXT_TAG(VectorExtTag));
 struct VectorExtTag {};
 using VectorPool = SqliteExtCoroPool<VectorExtTag>;
 
-// Acquire 4-worker scheduler
+// Acquire 4-worker scheduler on DB connection initialization
 SqliteCoroScheduler* sched = VectorPool::acquire(4);
 ```
 
 #### 2. Direct Capturing Lambda Dispatch
 ```cpp
-// Auto-acquires pool and spawns stateful capturing lambda
+// Fast non-mutating spawn: retrieves existing pool via VectorPool::get()
 sqlite_coro_ext_spawn<VectorExtTag>([data, multiplier]() {
     int intermediate = data * multiplier;
     SqliteCoroScheduler::yield(); // Cooperative fiber yield
@@ -216,7 +220,7 @@ sqlite_coro_ext_spawn<VectorExtTag>([data, multiplier]() {
 // Synchronous drain
 VectorPool::wait_all();
 
-// Release database reference
+// Connection Disconnect
 VectorPool::release();
 ```
 
@@ -226,7 +230,25 @@ VectorPool::release();
 
 1. **First-Caller Sizing**:
    The first database connection to call `acquire(Tag, N)` defines the thread pool size ($N$ OS workers). Subsequent database connections connecting to the same tag increment the atomic reference counter and receive the existing pool handle.
-2. **Multi-Tag Isolation**:
+2. **Connection-Level vs Row-Level Lifecycle**:
+   - `acquire()` and `release()` are strictly connection-scoped (invoked once on `.load` / `sqlite3_extension_init` and once on `on_db_disconnect` / `xDestroy`).
+   - `get()` and `sqlite_coro_ext_spawn<Tag>()` are row-scoped (invoked during query execution), dispatching tasks without modifying connection reference counts.
+3. **Multi-Tag Isolation**:
    Distinct extensions (e.g. `VectorExtTag` vs. `CryptoExtTag`) instantiate **independent worker pools** with independent worker thread counts and lifecycles.
-3. **Transparent Re-Opening**:
+4. **Transparent Re-Opening**:
    If all database connections close (`ref_count = 0`), the pool is completely torn down. If a new connection opens later, `acquire()` automatically creates a fresh worker pool with zero memory leaks across infinite cycles.
+
+---
+
+## 8. Freestanding Compilation & Runtime Dynamic Linking Invariants
+
+### 8.1 Freestanding Zero-Dependency Binary Generation
+When building native loadable extension dynamic libraries (`.dll` on Windows, `.so` on Linux, `.dylib` on macOS):
+- **C++ Extensions must be compiled with `-fno-exceptions -fno-rtti`**:
+  Host SQLite processes (such as `sqlite3.exe` or third-party embedders) do not link against compiler-specific C++ runtime libraries. Without `-fno-exceptions -fno-rtti`, GCC and Clang insert dynamic relocations to C++ exception personality routines (`__gxx_personality_v0` / `_Unwind_Resume`). When `sqlite3.exe` calls `LoadLibrary()` on Windows, dynamic symbol resolution fails with `Error: The specified module could not be found.`
+- All core extension headers are strictly freestanding (`-nostdlib++` safe, 0% `<functional>` / `<vector>` bloat).
+
+### 8.2 AddressSanitizer & Userland Fiber Stack Swapping
+- On Windows x64, userland coroutine context switching (`SwitchToFiber()` in Win32 Fibers or `swapcontext()` on POSIX) swaps the CPU stack pointer register (`RSP`).
+- LLVM/Clang AddressSanitizer on Windows does not support userland stack switching out-of-the-box (known LLVM issue #189), causing false-positive `__asan_handle_no_return` warning halts during fiber swaps.
+- Standalone test suites and extension DLLs targeting Win32 fibers run without `-fsanitize=address` on Windows to guarantee clean, uncorrupted fiber execution while preserving memory safety through our internal tracking allocators.

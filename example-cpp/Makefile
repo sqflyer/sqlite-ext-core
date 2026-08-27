@@ -19,7 +19,7 @@ else
         CXX := clang++
         CC := clang
     endif
-    SAN_FLAGS := -fsanitize=address
+    SAN_FLAGS :=
     ifeq ($(UNAME_S),Darwin)
         EXT_SUFFIX := .dylib
     else

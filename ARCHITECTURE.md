@@ -97,7 +97,7 @@ For a deeper dive into the specific mechanics and C++ paradigms used in individu
 - [**Coroutine Table-Valued Functions (TVF)**](docs/TVF_CORO_ARCHITECTURE.md): Zero-boilerplate single generator functions using Stackful Fibers or Stackless C++20 `co_yield` with automatic column multiplexing.
 - [**Virtual Tables (VTAB)**](docs/VTAB_ARCHITECTURE.md): Polymorphic standard-layout routing, transactions, savepoints, and direct context state injection.
 - [**Unified Extensibility (`SqliteExt` / `sqlite3_ext.h`)**](include/sqlite3_ext.hpp): Symmetrical registration facade combining UDFs, Aggregates, TVFs, and Virtual Tables.
-- [**C++ Extension Tutorial**](examples/README.md): Turnkey C++ example showcasing compilation, testing, and multi-language loading.
+- [**C++ Extension Tutorial**](example-cpp/README.md): Turnkey C++ example showcasing compilation, testing, and multi-language loading.
 - [**Pure C Extension Tutorial**](example-c/README.md): Turnkey Pure C (C99/C11) example demonstrating state management and UDF registration.
 
 ## 6. Dual Build System & Compiler Parity

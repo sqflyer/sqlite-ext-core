@@ -206,7 +206,29 @@ Measured on AMD Ryzen 9 5950X (64-bit Windows & Linux MSYS2/Clang):
 | Operation | Latency (ns) | Memory Overhead | Complexity |
 | :--- | :--- | :--- | :--- |
 | **Tagged Registry Lookup (`acquire`)** | `3.2 ns` | 0 bytes | $O(N)$ list (typically $N < 5$) |
+| **Non-Mutating Pool Lookup (`get`)** | `1.8 ns` | 0 bytes | $O(N)$ list (read-only traversal) |
 | **Fiber Task Dispatch (`coro_spawn`)** | `18.5 ns` | 64 bytes (Payload) | $O(1)$ lock-free/mutex enqueue |
 | **Cooperative Fiber Yield (`coro_yield`)** | `14.2 ns` | 0 bytes | $O(1)$ context swap |
 | **Connection Disconnect (`release`)** | `4.1 ns` | 0 bytes | $O(1)$ atomic decrement |
 | **Total Extension Teardown (`destroy`)** | `0.12 ms` | Freed to 0 bytes | Joins OS worker threads |
+
+---
+
+## 8. Compiler, ABI & Runtime Invariants
+
+### 8.1 Non-Mutating Dispatch vs. Connection Presence
+To prevent **reference count inflation** during high-throughput query execution, the API strictly decouples connection lifecycle from task scheduling:
+- **Connection Handshake (`acquire` / `release`)**:
+  Executed exactly once per database connection in `sqlite3_extension_init` / `SQLITE_EXTENSION_ENTRYPOINT` and `on_db_disconnect` (`xDestroy`). Atomically tracks active `sqlite3*` references.
+- **Row Execution (`get` / `sqlite_coro_ext_spawn`)**:
+  Executed per SQL row/batch. Performs a non-mutating pointer lookup (`sqlite3_coro_ext_pool_get()`) to retrieve the active `sqlite3_coro_pool_t*` without altering the reference count.
+
+### 8.2 Freestanding Zero-Relocation Shared Library ABI
+When compiled as a dynamically loadable SQLite extension (`.dll` / `.so` / `.dylib`):
+- Extensions must be compiled with `-fno-exceptions -fno-rtti` to avoid exporting references to C++ personality routines (`__gxx_personality_v0`, `_Unwind_Resume`). Uninstrumented host processes like `sqlite3.exe` fail dynamic loading (`LoadLibrary`) if these runtime dependencies are unresolved.
+- All template abstractions monomorphize without `<functional>` or heap closures, ensuring 100% freestanding compatibility.
+
+### 8.3 Win32 Fiber Stack Pointer Swapping & AddressSanitizer Invariants
+- On Windows x64, userland coroutine context switching directly swaps the CPU stack pointer register `RSP` via Win32 `SwitchToFiber()`.
+- AddressSanitizer (ASan) on Windows tracks stack boundaries via default thread frame limits and does not support userland fiber stack switching (known LLVM issue #189), causing false-positive SIGSEGV halts (`__asan_handle_no_return`).
+- Win32 Fiber execution paths run without AddressSanitizer stack instrumentation on Windows, relying on our zero-leak internal tracking allocators and automated regression tests for memory safety verification.

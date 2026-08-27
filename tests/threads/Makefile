@@ -9,7 +9,7 @@ UNAME_S ?= $(shell uname -s 2>/dev/null || echo Windows)
 ifeq ($(UNAME_S),Linux)
     CXX := g++
     CC := gcc
-    SAN_FLAGS ?= -fsanitize=address,leak
+    SAN_FLAGS := -fsanitize=address,leak
 else
     ifneq ($(wildcard /clang64/bin),)
         export PATH := /clang64/bin:$(PATH)
@@ -19,7 +19,7 @@ else
         CXX := clang++
         CC := clang
     endif
-    SAN_FLAGS ?=
+    SAN_FLAGS := -fsanitize=address
 endif
 
 export PATH UNAME_S CXX CC SAN_FLAGS

@@ -37,8 +37,10 @@ if "%TARGET%"=="test-cpp-backup" ( call :test_cpp_backup & goto end )
 if "%TARGET%"=="test-cpp-vtab" ( call :test_cpp_vtab & goto end )
 if "%TARGET%"=="test-cpp-extension" ( call :test_cpp_extension & goto end )
 if "%TARGET%"=="test-threads" ( call :test_threads & goto end )
-if "%TARGET%"=="example" ( call :example & goto end )
+if "%TARGET%"=="example-cpp" ( call :example_cpp & goto end )
 if "%TARGET%"=="example-c" ( call :example_c & goto end )
+if "%TARGET%"=="example-coro-c" ( call :example_coro_c & goto end )
+if "%TARGET%"=="example-coro-cpp" ( call :example_coro_cpp & goto end )
 
 echo Unknown target: %TARGET%
 exit /b 1
@@ -211,14 +213,24 @@ echo [Running test-threads]
 cd tests\threads && call make.bat && cd ..\..
 goto :eof
 
-:example
+:example_cpp
 echo [Running C++ Example]
-cd examples && call make.bat && cd ..
+cd example-cpp && call make.bat && cd ..
 goto :eof
 
 :example_c
 echo [Running Pure C Example]
 cd example-c && call make.bat && cd ..
+goto :eof
+
+:example_coro_c
+echo [Running Pure C Coroutine Extension Example]
+cd example-coro-c && call make.bat && cd ..
+goto :eof
+
+:example_coro_cpp
+echo [Running C++ Coroutine Extension Example]
+cd example-coro-cpp && call make.bat && cd ..
 goto :eof
 
 :clean
@@ -241,8 +253,10 @@ cd tests\cpp_backup && call make.bat clean && cd ..\..
 cd tests\cpp_vtab && call make.bat clean && cd ..\..
 cd tests\cpp_extension && call make.bat clean && cd ..\..
 cd tests\threads && call make.bat clean && cd ..\..
-cd examples && call make.bat clean && cd ..
+cd example-cpp && call make.bat clean && cd ..
 cd example-c && call make.bat clean && cd ..
+cd example-coro-c && call make.bat clean && cd ..
+cd example-coro-cpp && call make.bat clean && cd ..
 echo Clean completed.
 goto end
 

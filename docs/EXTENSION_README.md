@@ -29,7 +29,9 @@ The extension framework solves all of these challenges seamlessly for both Pure 
 | **Database Parameter** | `SqliteDatabaseView` or `SqliteExtensionInitContext` | Raw `sqlite3*` handle |
 | **Symbol Visibility** | Automatic `dllexport` / `visibility("default")` | Automatic `dllexport` / `visibility("default")` |
 | **Ecosystem Support** | Scalar UDFs, Aggregates, TVFs, Virtual Tables | Scalar UDFs, Aggregates, Virtual Tables |
-| **Shared State** | `SqliteExtState<T>` (RAII guards) | `SQLITE_EXTENSION_STATE_DECLARE` / `DEFINE` |
+| **Shared State (Per-DB)** | `SqliteExtState<T>` (RAII guards) | `SQLITE_EXTENSION_STATE_DECLARE` / `DEFINE` |
+| **Async Coroutine Pool (Cross-DB)** | `SqliteExtCoroPool<Tag>` / `sqlite_coro_ext_spawn` | `sqlite3_coro_ext_pool_*` (`sqlite3_coro_ext_pool.h`) |
+| **Pool Tag Model** | Template Type Tag Monomorphization | Zero-collision Static Memory Pointer (`SQLITE_EXT_TAG`) |
 
 ---
 
@@ -77,7 +79,7 @@ SQLITE_EXTENSION_ENTRYPOINT(my_extension, db) {
 }
 ```
 
-*For complete turnkey examples, see [`examples/README.md`](../examples/README.md).*
+*For complete turnkey examples, see [`example-cpp/README.md`](../example-cpp/README.md).*
 
 ---
 
@@ -370,7 +372,132 @@ SQLITE_DEFAULT_EXTENSION_ENTRYPOINT(db) {
 
 ---
 
-## 8. Best Practices & Gotchas
+### 7.4 Pattern 4: Extension-Presence Shared Coroutine Worker Pool
+
+Unlike per-connection state which is destroyed when a database closes, extension-presence pools maintain a shared background thread/fiber pool that lives across multiple active database connections within the host process:
+
+#### C++11 / C++20 Tagged Coroutine Pool
+```cpp
+#include "sqlite3_ext_creator.hpp"
+#include "async/sqlite3_coro_ext_pool.hpp"
+
+// Unique static type tag identifying this extension's worker pool
+struct MyVectorSearchTag {};
+using VectorSearchPool = SqliteExtCoroPool<MyVectorSearchTag>;
+
+static void sql_async_search(SqliteContext ctx, SqliteUdfArgs args) {
+    int query_id = args[0].as_int();
+
+    // Spawn non-blocking fiber on shared extension worker pool
+    sqlite_coro_ext_spawn<MyVectorSearchTag>([query_id]() {
+        // Heavy computation or index traversal
+        SqliteCoroScheduler::yield(); // Cooperatively yield CPU to other queries
+    });
+
+    ctx.result_text("ENQUEUED");
+}
+
+SQLITE_EXTENSION_ENTRYPOINT(vector_ext, db) {
+    // 1. Acquire reference to extension pool (spawns 4 background workers on first DB connection)
+    VectorSearchPool::acquire(4);
+
+    // 2. Register disconnect callback to decrement ref-count when DB closes
+    sqlite3_create_function_v2(
+        db.get(), "async_search", 1, SQLITE_UTF8, nullptr,
+        [](sqlite3_context* c, int argc, sqlite3_value** argv) {
+            SqliteContext ctx(c);
+            SqliteUdfArgs args(argv, argc);
+            sql_async_search(ctx, args);
+        },
+        nullptr, nullptr, [](void*) { VectorSearchPool::release(); }
+    );
+
+    return SQLITE_OK;
+}
+```
+
+#### Pure C Tagged Coroutine Pool
+```c
+#include "sqlite3_ext_creator.h"
+#include "async/sqlite3_coro_ext_pool.h"
+
+// Static tag address guaranteeing zero symbol collision across dynamic libraries
+static const int MyCExtTag = 0;
+
+static void on_db_disconnect(void* arg) {
+    (void)arg;
+    sqlite3_coro_ext_pool_release(SQLITE_EXT_TAG(MyCExtTag));
+}
+
+SQLITE_C_EXTENSION_ENTRYPOINT(my_coro_c_ext, db) {
+    // Acquire shared pool with 4 worker threads
+    sqlite3_coro_pool_t* pool = sqlite3_coro_ext_pool_acquire(SQLITE_EXT_TAG(MyCExtTag), 4);
+    if (!pool) return SQLITE_NOMEM;
+
+    sqlite3_create_function_v2(
+        db, "coro_spawn", 1, SQLITE_UTF8, NULL,
+        sql_coro_spawn_func, NULL, NULL, on_db_disconnect
+    );
+    return SQLITE_OK;
+}
+```
+
+---
+
+## 8. Extension-Presence Shared Coroutine Worker Pools
+
+For comprehensive architectural design, systems invariants, and microbenchmarks, see:
+- [`docs/CORO_EXT_POOL_README.md`](CORO_EXT_POOL_README.md) - User guide and use cases (vector search, crypto hashing, cloud sync TVF, chunked compression).
+- [`docs/CORO_EXT_POOL_ARCHITECTURE.md`](CORO_EXT_POOL_ARCHITECTURE.md) - Systems architecture, memory layout, and lock hierarchies.
+- [`example-coro-cpp/`](../example-coro-cpp) - Turnkey C++ tagged coroutine extension example.
+- [`example-coro-c/`](../example-coro-c) - Turnkey Pure C tagged coroutine extension example.
+
+### 8.1 Physical Architecture & Zero-Collision Address Tagging
+
+```
++-----------------------------------------------------------------------------------+
+|                           HOST OS PROCESS ADDRESS SPACE                           |
+|                                                                                   |
+|  +-----------------------------+         +-----------------------------+          |
+|  |   Database Connection #1    |         |   Database Connection #2    |          |
+|  |     (sqlite3* handle 1)     |         |     (sqlite3* handle 2)     |          |
+|  +--------------+--------------+         +--------------+--------------+          |
+|                 |                                       |                         |
+|                 | .load ./my_vector_ext.so              | .load ./my_vector_ext.so|
+|                 v                                       v                         |
+|  +-----------------------------------------------------------------------------+  |
+|  |                       EXTENSION PRESENCE WORKER POOL                        |  |
+|  |   Tag: &MyVectorSearchTag (Static Zero-Collision Virtual Memory Address)    |  |
+|  |   Atomic Reference Count: 2 (Auto-Freed when all DBs disconnect)            |  |
+|  +-----------------------------------------------------------------------------+  |
+|         |                     |                     |                     |       |
+|         v                     v                     v                     v       |
+|  +--------------+    +--------------+    +--------------+    +--------------+     |
+|  | Worker OS #1 |    | Worker OS #2 |    | Worker OS #3 |    | Worker OS #4 |     |
+|  | (Win Fiber/  |    | (Win Fiber/  |    | (Win Fiber/  |    | (Win Fiber/  |     |
+|  |  ucontext_t) |    |  ucontext_t) |    |  ucontext_t) |    |  ucontext_t) |     |
+|  +--------------+    +--------------+    +--------------+    +--------------+     |
++-----------------------------------------------------------------------------------+
+```
+
+### 8.2 API Overview
+
+| Function / Method | Purpose | Language |
+| :--- | :--- | :--- |
+| `sqlite3_coro_ext_pool_acquire(tag, workers)` | Acquires/creates a tagged worker pool; increments ref count. | C |
+| `sqlite3_coro_ext_pool_get(tag)` | Looks up active worker pool pointer without modifying ref count. | C |
+| `sqlite3_coro_ext_pool_release(tag)` | Decrements ref count; destroys and unlinks pool when count hits 0. | C |
+| `sqlite3_coro_ext_pool_wait(tag)` | Synchronously drains and waits for all active fibers in the tagged pool. | C |
+| `sqlite3_coro_ext_pool_ref_count(tag)` | Returns active database connection count. | C |
+| `sqlite3_coro_ext_pool_shutdown_all()` | Shuts down and frees all extension pools process-wide. | C |
+| `SqliteExtCoroPool<Tag>::acquire(workers)` | Type-safe C++ template acquisition. | C++11 |
+| `SqliteExtCoroPool<Tag>::get()` | Type-safe C++ template lookup. | C++11 |
+| `SqliteExtCoroPool<Tag>::release()` | Type-safe C++ template release. | C++11 |
+| `sqlite_coro_ext_spawn<Tag>(closure)` | Enqueues stateful capturing lambda into tagged extension pool. | C++11 |
+
+---
+
+## 9. Best Practices & Gotchas
 
 1. **Host Applications vs Extensions**:
    - Host applications linking directly against SQLite (`-lsqlite3`) must define `#define SQLITE_CORE` **before** including `sqlite3_db.hpp` or `sqlite3_statement.hpp`.
@@ -379,5 +506,7 @@ SQLITE_DEFAULT_EXTENSION_ENTRYPOINT(db) {
 2. **Always Use `SqliteContext` for Return Values**:
    - Prefer `ctx.result_int(...)`, `ctx.result_double(...)`, `ctx.result_text(...)`, and `str.result(ctx)` over raw C-APIs to guarantee exception safety and automated memory cleanup.
 
-3. **In-Memory Database Isolation**:
+3. **In-Memory Database Isolation vs Shared Presence**:
+   - Use `SqliteExtState<T>` when data must be strictly isolated to a single database connection.
+   - Use `SqliteExtCoroPool<Tag>` when worker threads and async task execution queues should be shared across connections to conserve CPU/memory resources.
    - Separate `:memory:` database connections are guaranteed perfect isolation by `SqliteExtState` via pointer-keyed virtual path namespaces.

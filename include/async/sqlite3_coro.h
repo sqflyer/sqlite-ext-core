@@ -15,6 +15,25 @@
 #include <stddef.h>
 #include <stdint.h>
 
+#if defined(__SANITIZE_ADDRESS__)
+    #define SQLITE3_CORO_ASAN 1
+#elif defined(__has_feature)
+    #if __has_feature(address_sanitizer)
+        #define SQLITE3_CORO_ASAN 1
+    #endif
+#endif
+
+#if defined(SQLITE3_CORO_ASAN)
+    #ifdef __cplusplus
+    extern "C" {
+    #endif
+        void __sanitizer_start_switch_fiber(void** fake_stack_save, const void* stack_bottom, size_t stack_size);
+        void __sanitizer_finish_switch_fiber(void* fake_stack_save, const void** old_stack_bottom, size_t* old_stack_size);
+    #ifdef __cplusplus
+    }
+    #endif
+#endif
+
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -41,13 +60,14 @@ typedef void (*sqlite3_coro_entry_t)(void* arg);
  * @brief Internal heap-allocated state holding fiber handles and execution flags.
  */
 typedef struct sqlite3_coro_state {
-    void*                fiber_handle;   /**< Win32 Fiber handle for this coroutine. */
-    void*                caller_fiber;   /**< Caller's Win32 Fiber handle for returning on yield. */
-    sqlite3_coro_entry_t entry_fn;       /**< User entry point function. */
-    void*                arg;            /**< User argument pointer passed to entry_fn. */
-    void*                yield_value;    /**< Data pointer passed across yield/resume boundaries. */
-    int                  is_done;        /**< 1 if coroutine entry function returned, 0 otherwise. */
-    int                  is_running;     /**< 1 if coroutine is currently active/resumed, 0 otherwise. */
+    void*                fiber_handle;      /**< Win32 Fiber handle for this coroutine. */
+    void*                caller_fiber;      /**< Caller's Win32 Fiber handle for returning on yield. */
+    size_t               stack_size;        /**< Requested stack size in bytes. */
+    sqlite3_coro_entry_t entry_fn;          /**< User entry point function. */
+    void*                arg;               /**< User argument pointer passed to entry_fn. */
+    void*                yield_value;       /**< Data pointer passed across yield/resume boundaries. */
+    int                  is_done;           /**< 1 if coroutine entry function returned, 0 otherwise. */
+    int                  is_running;        /**< 1 if coroutine is currently active/resumed, 0 otherwise. */
 } sqlite3_coro_state_t;
 
 /**
@@ -73,6 +93,9 @@ static SQLITE_CORO_THREAD_LOCAL sqlite3_coro_state_t* g_active_coro_state = NULL
  */
 static void CALLBACK sqlite3_coro_win_trampoline(void* param) {
     sqlite3_coro_state_t* st = (sqlite3_coro_state_t*)param;
+#if defined(SQLITE3_CORO_ASAN)
+    __sanitizer_finish_switch_fiber(NULL, NULL, NULL);
+#endif
     if (st && st->entry_fn) {
         st->entry_fn(st->arg);
     }
@@ -81,22 +104,20 @@ static void CALLBACK sqlite3_coro_win_trampoline(void* param) {
         st->is_running = 0;
         g_active_coro_state = NULL;
         if (st->caller_fiber) {
+#if defined(SQLITE3_CORO_ASAN)
+            __sanitizer_start_switch_fiber(NULL, NULL, 0);
+#endif
             SwitchToFiber(st->caller_fiber);
         }
     }
 }
 /** @endcond */
 
-/**
- * @brief Initializes and creates a stackful coroutine (fiber).
- *
- * @param coro Pointer to uninitialized sqlite3_coro_t handle.
- * @param stack_size Requested stack size in bytes (pass 0 for default 64KB).
- * @param fn Entry point function to execute inside the coroutine.
- * @param arg Arbitrary user argument passed to `fn`.
- * @return SQLITE_OK on success, SQLITE_NOMEM on allocation failure, or SQLITE_MISUSE on invalid arguments.
- */
 #if defined(_WIN32) || defined(_WIN64)
+/**
+ * @brief Retrieves the process-wide critical section protecting Win32 fiber operations.
+ * @return Pointer to internal `CRITICAL_SECTION`.
+ */
 static inline CRITICAL_SECTION* sqlite3_coro_win_fiber_lock(void) {
     static CRITICAL_SECTION s_lock;
     static int s_inited = 0;
@@ -108,6 +129,18 @@ static inline CRITICAL_SECTION* sqlite3_coro_win_fiber_lock(void) {
 }
 #endif
 
+/**
+ * @brief Initializes and creates a stackful coroutine (fiber).
+ *
+ * Allocates an internal state structure and dedicated fiber context. On Windows,
+ * creates a Win32 Fiber via `CreateFiber`. Memory is allocated strictly via `sqlite3_malloc64`.
+ *
+ * @param coro Pointer to uninitialized `sqlite3_coro_t` handle.
+ * @param stack_size Requested fiber stack size in bytes (pass 0 for default 64KB).
+ * @param fn Entry point function to execute inside the coroutine.
+ * @param arg Arbitrary user argument passed to `fn`.
+ * @return `SQLITE_OK` on success, `SQLITE_NOMEM` on allocation failure, or `SQLITE_MISUSE` on invalid arguments.
+ */
 static inline int sqlite3_coro_create(
     sqlite3_coro_t* coro,
     size_t stack_size,
@@ -121,6 +154,7 @@ static inline int sqlite3_coro_create(
     if (!st) return SQLITE_NOMEM;
 
     st->caller_fiber = NULL;
+    st->stack_size = stack_size;
     st->entry_fn = fn;
     st->arg = arg;
     st->yield_value = NULL;
@@ -145,8 +179,11 @@ static inline int sqlite3_coro_create(
 /**
  * @brief Resumes execution of the coroutine from its last yield point.
  *
+ * Converts the calling OS thread to a fiber if necessary, saves the active caller
+ * context, and performs a stackful hardware context switch to the coroutine fiber.
+ *
  * @param coro Pointer to the coroutine to resume.
- * @return SQLITE_OK on success, or SQLITE_MISUSE if the coroutine is already finished or invalid.
+ * @return `SQLITE_OK` on success, or `SQLITE_MISUSE` if the coroutine is finished, running, or invalid.
  */
 static inline int sqlite3_coro_resume(sqlite3_coro_t* coro) {
     if (!coro || !coro->state || coro->state->is_done || !coro->state->fiber_handle) {
@@ -170,7 +207,15 @@ static inline int sqlite3_coro_resume(sqlite3_coro_t* coro) {
     sqlite3_coro_state_t* prev = g_active_coro_state;
     g_active_coro_state = st;
 
+#if defined(SQLITE3_CORO_ASAN)
+    __sanitizer_start_switch_fiber(NULL, NULL, 0);
+#endif
+
     SwitchToFiber(st->fiber_handle);
+
+#if defined(SQLITE3_CORO_ASAN)
+    __sanitizer_finish_switch_fiber(NULL, NULL, NULL);
+#endif
 
     g_active_coro_state = prev;
     return SQLITE_OK;
@@ -178,17 +223,32 @@ static inline int sqlite3_coro_resume(sqlite3_coro_t* coro) {
 
 /**
  * @brief Yields execution back to the caller from inside the active coroutine.
+ *
+ * Suspends the active coroutine's execution, preserves its entire call stack and CPU
+ * register state, and transfers control back to the thread or fiber that called `sqlite3_coro_resume`.
  */
 static inline void sqlite3_coro_yield(void) {
     sqlite3_coro_state_t* st = g_active_coro_state;
     if (!st || !st->caller_fiber) return;
 
     st->is_running = 0;
+
+#if defined(SQLITE3_CORO_ASAN)
+    __sanitizer_start_switch_fiber(NULL, NULL, 0);
+#endif
+
     SwitchToFiber(st->caller_fiber);
+
+#if defined(SQLITE3_CORO_ASAN)
+    __sanitizer_finish_switch_fiber(NULL, NULL, NULL);
+#endif
 }
 
 /**
  * @brief Yields execution and transmits a data pointer to the resuming caller.
+ *
+ * Sets the yielded value pointer in the coroutine state, then suspends execution.
+ * The caller can retrieve the value via `sqlite3_coro_get_value`.
  *
  * @param val Pointer to data to yield back to caller.
  */
@@ -204,7 +264,7 @@ static inline void sqlite3_coro_yield_value(void* val) {
  * @brief Retrieves the last value yielded by the coroutine.
  *
  * @param coro Pointer to the coroutine handle.
- * @return Pointer yielded via sqlite3_coro_yield_value, or NULL if none.
+ * @return Pointer yielded via `sqlite3_coro_yield_value`, or NULL if none.
  */
 static inline void* sqlite3_coro_get_value(const sqlite3_coro_t* coro) {
     return (coro && coro->state) ? coro->state->yield_value : NULL;
@@ -214,7 +274,7 @@ static inline void* sqlite3_coro_get_value(const sqlite3_coro_t* coro) {
  * @brief Checks whether the coroutine has completed execution.
  *
  * @param coro Pointer to the coroutine handle.
- * @return Non-zero (1) if finished or invalid, 0 if still active.
+ * @return Non-zero (1) if finished or invalid, 0 if still active and suspendable.
  */
 static inline int sqlite3_coro_is_done(const sqlite3_coro_t* coro) {
     return (!coro || !coro->state) ? 1 : coro->state->is_done;
@@ -222,6 +282,9 @@ static inline int sqlite3_coro_is_done(const sqlite3_coro_t* coro) {
 
 /**
  * @brief Destroys the coroutine and releases its fiber context and memory.
+ *
+ * Frees the underlying Win32 fiber handle and releases the heap state via `sqlite3_free`.
+ * Safe to call on suspended or already completed coroutines.
  *
  * @param coro Pointer to the coroutine handle to destroy.
  */
@@ -285,6 +348,9 @@ static SQLITE_CORO_THREAD_LOCAL sqlite3_coro_state_t* g_active_coro_state = NULL
 static void sqlite3_coro_posix_trampoline(uint32_t hi, uint32_t lo) {
     uintptr_t ptr = (((uintptr_t)hi) << 32) | (uintptr_t)lo;
     sqlite3_coro_state_t* st = (sqlite3_coro_state_t*)ptr;
+#if defined(SQLITE3_CORO_ASAN)
+    __sanitizer_finish_switch_fiber(NULL, NULL, NULL);
+#endif
     if (st && st->entry_fn) {
         st->entry_fn(st->arg);
     }
@@ -292,11 +358,26 @@ static void sqlite3_coro_posix_trampoline(uint32_t hi, uint32_t lo) {
         st->is_done = 1;
         st->is_running = 0;
         g_active_coro_state = NULL;
+#if defined(SQLITE3_CORO_ASAN)
+        __sanitizer_start_switch_fiber(NULL, NULL, 0);
+#endif
         setcontext(&st->caller_ctx);
     }
 }
 /** @endcond */
 
+/**
+ * @brief Initializes and creates a stackful POSIX coroutine (ucontext).
+ *
+ * Allocates stack memory via `sqlite3_malloc64` and configures the POSIX `ucontext_t`
+ * execution state via `makecontext`.
+ *
+ * @param coro Pointer to uninitialized `sqlite3_coro_t` handle.
+ * @param stack_size Requested stack size in bytes (pass 0 for default 64KB).
+ * @param fn Entry point function to execute inside the coroutine.
+ * @param arg Arbitrary user argument passed to `fn`.
+ * @return `SQLITE_OK` on success, `SQLITE_NOMEM` on allocation failure, or `SQLITE_MISUSE` on invalid arguments.
+ */
 static inline int sqlite3_coro_create(
     sqlite3_coro_t* coro,
     size_t stack_size,
@@ -342,6 +423,15 @@ static inline int sqlite3_coro_create(
     return SQLITE_OK;
 }
 
+/**
+ * @brief Resumes execution of the POSIX coroutine from its last yield point.
+ *
+ * Saves the caller's context into `caller_ctx` and performs a hardware context switch
+ * via `swapcontext`.
+ *
+ * @param coro Pointer to the coroutine to resume.
+ * @return `SQLITE_OK` on success, or `SQLITE_MISUSE` if the coroutine is finished, running, or invalid.
+ */
 static inline int sqlite3_coro_resume(sqlite3_coro_t* coro) {
     if (!coro || !coro->state || coro->state->is_done || !coro->state->stack_mem) {
         return SQLITE_MISUSE;
@@ -353,20 +443,47 @@ static inline int sqlite3_coro_resume(sqlite3_coro_t* coro) {
     sqlite3_coro_state_t* prev = g_active_coro_state;
     g_active_coro_state = st;
 
+#if defined(SQLITE3_CORO_ASAN)
+    __sanitizer_start_switch_fiber(NULL, st->stack_mem, st->stack_size);
+#endif
+
     swapcontext(&st->caller_ctx, &st->ctx);
+
+#if defined(SQLITE3_CORO_ASAN)
+    __sanitizer_finish_switch_fiber(NULL, NULL, NULL);
+#endif
 
     g_active_coro_state = prev;
     return SQLITE_OK;
 }
 
+/**
+ * @brief Yields execution back to the caller from inside the active POSIX coroutine.
+ *
+ * Saves the coroutine's context and swaps back to the caller context via `swapcontext`.
+ */
 static inline void sqlite3_coro_yield(void) {
     sqlite3_coro_state_t* st = g_active_coro_state;
     if (!st) return;
 
     st->is_running = 0;
+
+#if defined(SQLITE3_CORO_ASAN)
+    __sanitizer_start_switch_fiber(NULL, NULL, 0);
+#endif
+
     swapcontext(&st->ctx, &st->caller_ctx);
+
+#if defined(SQLITE3_CORO_ASAN)
+    __sanitizer_finish_switch_fiber(NULL, NULL, NULL);
+#endif
 }
 
+/**
+ * @brief Yields execution and transmits a data pointer to the resuming caller.
+ *
+ * @param val Pointer to data to yield back to caller.
+ */
 static inline void sqlite3_coro_yield_value(void* val) {
     sqlite3_coro_state_t* st = g_active_coro_state;
     if (st) {
@@ -375,14 +492,33 @@ static inline void sqlite3_coro_yield_value(void* val) {
     sqlite3_coro_yield();
 }
 
+/**
+ * @brief Retrieves the last value yielded by the POSIX coroutine.
+ *
+ * @param coro Pointer to the coroutine handle.
+ * @return Pointer yielded via `sqlite3_coro_yield_value`, or NULL if none.
+ */
 static inline void* sqlite3_coro_get_value(const sqlite3_coro_t* coro) {
     return (coro && coro->state) ? coro->state->yield_value : NULL;
 }
 
+/**
+ * @brief Checks whether the POSIX coroutine has completed execution.
+ *
+ * @param coro Pointer to the coroutine handle.
+ * @return Non-zero (1) if finished or invalid, 0 if still active and suspendable.
+ */
 static inline int sqlite3_coro_is_done(const sqlite3_coro_t* coro) {
     return (!coro || !coro->state) ? 1 : coro->state->is_done;
 }
 
+/**
+ * @brief Destroys the POSIX coroutine and frees its stack and heap memory.
+ *
+ * Releases the stack memory buffer and internal state via `sqlite3_free`.
+ *
+ * @param coro Pointer to the coroutine handle to destroy.
+ */
 static inline void sqlite3_coro_destroy(sqlite3_coro_t* coro) {
     if (coro && coro->state) {
         sqlite3_coro_state_t* st = coro->state;

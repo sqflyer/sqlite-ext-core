@@ -72,8 +72,11 @@ static void sql_coro_c_spawn(sqlite3_context* ctx, int argc, sqlite3_value** arg
     p->item_id = item_id;
     p->multiplier = multiplier;
 
-    // Acquire pointer to this extension's tagged pool (creates 4 workers on first call)
-    sqlite3_coro_pool_t* pool = sqlite3_coro_ext_pool_acquire(SQLITE_EXT_TAG(CoroCExtTag), 4);
+    // Retrieve pointer to this extension's tagged pool without incrementing ref count
+    sqlite3_coro_pool_t* pool = sqlite3_coro_ext_pool_get(SQLITE_EXT_TAG(CoroCExtTag));
+    if (!pool) {
+        pool = sqlite3_coro_ext_pool_acquire(SQLITE_EXT_TAG(CoroCExtTag), 4);
+    }
     if (!pool) {
         sqlite3_free(p);
         sqlite3_result_error_nomem(ctx);
