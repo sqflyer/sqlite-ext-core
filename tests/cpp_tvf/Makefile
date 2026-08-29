@@ -37,7 +37,7 @@ $(BIN_DIR)/test_tvf_state: test_tvf_state.cpp | $(BIN_DIR)
 	$(CXX) $(CXXFLAGS) -o $@ $< $(LDFLAGS)
 
 $(BIN_DIR)/test_tvf_coro: test_tvf_coro.cpp | $(BIN_DIR)
-	$(CXX) $(CXXFLAGS) -o $@ $< $(LDFLAGS)
+	$(CXX) -std=c++11 -Wall -Wextra -I../../include -fno-exceptions -fno-rtti -o $@ $< -lsqlite3
 
 test: all
 	./$(BIN_DIR)/test_tvf

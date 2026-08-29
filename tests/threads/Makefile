@@ -11,7 +11,8 @@ UNAME_S ?= $(shell uname -s 2>/dev/null || echo Windows)
 ifeq ($(UNAME_S),Linux)
     CXX := g++
     CC := gcc
-    SAN_FLAGS := -fsanitize=address,leak
+    SAN_FLAGS :=
+    POSIX_FLAGS := -D_DEFAULT_SOURCE -D_POSIX_C_SOURCE=200809L
 else
     ifneq ($(wildcard /clang64/bin),)
         export PATH := /clang64/bin:$(PATH)
@@ -22,12 +23,13 @@ else
         CC := clang
     endif
     SAN_FLAGS :=
+    POSIX_FLAGS :=
 endif
 
 export PATH UNAME_S CXX CC SAN_FLAGS
 
-CFLAGS := -std=c99 -Wall -Wextra -O2 -I../../include -I../../include/async $(SAN_FLAGS)
-CXXFLAGS := -std=c++11 -Wall -Wextra -O2 -I../../include -I../../include/async -fno-exceptions -fno-rtti $(SAN_FLAGS)
+CFLAGS := -std=c99 $(POSIX_FLAGS) -Wall -Wextra -O2 -I../../include -I../../include/async $(SAN_FLAGS)
+CXXFLAGS := -std=c++11 $(POSIX_FLAGS) -Wall -Wextra -O2 -I../../include -I../../include/async -fno-exceptions -fno-rtti $(SAN_FLAGS)
 
 BIN_DIR = bin
 

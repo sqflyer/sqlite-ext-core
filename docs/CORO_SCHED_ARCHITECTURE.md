@@ -364,6 +364,20 @@ The scheduler subsystem is backed by 100% test coverage across both Pure C (`sql
 | **12** | `test_cpp_validity_and_edge_cases` | API Introspection | `is_valid()`, `raw_pool()`, `worker_count()`, and moved-from handle safety. |
 | **13** | `test_cpp_outside_yield_safety` | Outside Yield Safety | `SqliteCoroScheduler::yield()` called outside fibers safely no-ops. |
 
+### Tagged Extension Pool Tests (`tests/threads/test_coro_ext_pool_c.c` & `test_coro_ext_pool.cpp`)
+| # | Test Suite | Target Feature | Invariant Verified |
+| :--- | :--- | :--- | :--- |
+| **1** | `test_tagged_ext_pool_lifecycle` | Pure C Tagged Lifecycle | Tagged extension pool creation, task dispatch, and ref-count teardown. |
+| **2** | `test_tagged_ext_pool_isolation` | Multi-Pool Isolation | Distinct tags produce isolated worker pools with separate locks and queues. |
+| **3** | `test_tagged_ext_pool_wait_barrier` | Synchronization Barrier | `sqlite3_coro_ext_pool_wait` drains all pending and yielded tasks cleanly. |
+| **4** | `test_tagged_ext_pool_shutdown_all` | Global Subsystem Shutdown | Process-wide shutdown destroying all active tagged pools in the registry. |
+| **5** | `test_tagged_ext_pool_null_safety` | Defensive Null Handling | Default fallback pool handles `NULL` tag parameters safely. |
+| **6** | `test_cpp_ext_coro_pool_basic` | C++ Tagged Template | `SqliteExtCoroPool<Tag>` template types map to unique address keys. |
+| **7** | `test_cpp_ext_coro_pool_spawn` | Automatic Acquisition | `sqlite_coro_ext_spawn<Tag>()` auto-initializes pool and runs closures. |
+| **8** | `test_cpp_ext_coro_pool_default_tag` | Default Template Alias | `SqliteExtensionCoroPool` default tag instantiation and execution. |
+| **9** | `test_cpp_ext_coro_pool_wrapper_methods` | Class Wrapper API | `SqliteTaggedCoroPool` wrapper methods, introspection, and barriers. |
+| **10** | `test_cpp_ext_coro_pool_shutdown` | Explicit Destruction | Forcible pool shutdown, inactive state checks, and resource cleanup. |
+
 ---
 
 ## 10. Deep Systems Comparison with Industry Asynchronous & Coroutine Frameworks

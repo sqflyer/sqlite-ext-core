@@ -35,6 +35,7 @@
 #include <sqlite3.h>
 #include <stddef.h>
 #include <stdint.h>
+#include <string.h>
 #include "sqlite3_coro.h"
 #include "sqlite3_thread.h"
 

@@ -118,6 +118,7 @@ clean:
 	$(MAKE) -C tests/ext_state clean
 	$(MAKE) -C tests/cpp_value clean
 	$(MAKE) -C tests/cpp_row clean
+	$(MAKE) -C tests/cpp_row_key clean
 	$(MAKE) -C tests/cpp_udf clean
 	$(MAKE) -C tests/cpp_aggregate clean
 	$(MAKE) -C tests/cpp_statement clean

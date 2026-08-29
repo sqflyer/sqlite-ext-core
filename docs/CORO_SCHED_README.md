@@ -510,7 +510,36 @@ bool sqlite_coro_spawn_stack(Sched&& sched, Callable&& callable);
 
 ---
 
-## 8. Thread Safety Rules & Concurrency Invariants
+## 8. Tagged Extension Coroutine Pools (`SqliteExtCoroPool<Tag>` / `sqlite3_coro_ext_pool.h`)
+
+For SQLite extensions that want a dedicated, isolated worker pool that automatically lives across multiple database connections and tears down cleanly when the extension unloads:
+
+### Key Capabilities:
+- **Zero-Collision Address Keying**: Pools are identified by compile-time type tags or static function pointers (whose virtual addresses are guaranteed unique by the OS linker).
+- **Auto-Acquisition via `sqlite_coro_ext_spawn`**: Automatically acquires the extension pool on first task dispatch.
+- **SQLite `xDestroy` Integration**: Registers an automatic teardown callback for SQLite module unload handlers.
+
+```cpp
+#include "sqlite3_coro_ext_pool.hpp"
+
+// Define a distinct extension presence tag struct
+struct MyVectorSearchExtTag {};
+
+void query_handler(sqlite3_context* ctx, int argc, sqlite3_value** argv) {
+    // Spawns task into isolated extension worker pool (auto-acquires 4 workers)
+    sqlite_coro_ext_spawn<MyVectorSearchExtTag>([]() {
+        // Perform background vector similarity computation
+        compute_heavy_embeddings();
+        
+        // Cooperatively yield back to worker pool
+        SqliteCoroScheduler::yield();
+    });
+}
+```
+
+---
+
+## 9. Thread Safety Rules & Concurrency Invariants
 
 When designing multi-threaded SQLite extensions with the Coroutine Scheduler, observe the following architectural rules:
 
@@ -525,14 +554,14 @@ When designing multi-threaded SQLite extensions with the Coroutine Scheduler, ob
 
 ---
 
-## 9. Performance & Verification Matrix
+## 10. Performance & Verification Matrix
 
 | Metric | Result | Description |
 | :--- | :--- | :--- |
 | **Context Switch Latency** | **~15–25 ns** | Microsecond user-space context switch without OS kernel traps |
 | **Worker Concurrency** | **1,000,000+ ops/sec** | High-concurrency task dispatch across 8 workers |
 | **Memory Footprint** | **~64 KB per active task** | Allocated strictly via `sqlite3_malloc64` with 0 CRT overhead |
-| **Test Verification** | **100% PASS** | 11 Pure C test suites & 13 C++ test suites on MSYS2 Clang and MSVC `cl.exe` |
+| **Test Verification** | **100% PASS** | 66/66 test cases verified across Linux WSL (GCC), MSYS2 Clang, and MSVC `cl.exe` |
 
 ### Detailed 100% Unit Test Breakdown
 
@@ -563,3 +592,15 @@ When designing multi-threaded SQLite extensions with the Coroutine Scheduler, ob
 11. `test_cpp_multi_phase_reuse`: 3-stage consecutive sequential pipeline execution on a shared worker pool.
 12. `test_cpp_validity_and_edge_cases`: API introspection (`is_valid()`, `raw_pool()`, `worker_count()`, `pending_tasks()`).
 13. `test_cpp_outside_yield_safety`: Safe no-op handling when `SqliteCoroScheduler::yield()` is called outside fibers.
+
+#### Tagged Extension Coroutine Pool Suites (`test_coro_ext_pool_c.c` & `test_coro_ext_pool.cpp` — 10/10 Tests PASS)
+1. `test_tagged_ext_pool_lifecycle`: Pure C tagged pool acquisition, task execution, and ref-count destruction.
+2. `test_tagged_ext_pool_isolation`: Multi-pool isolation with address-keyed registries and linked-list unlinking.
+3. `test_tagged_ext_pool_wait_barrier`: Worker pool synchronization barrier across 10 concurrently yielded tasks.
+4. `test_tagged_ext_pool_shutdown_all`: Global shutdown destroying all active extension pools cleanly.
+5. `test_tagged_ext_pool_null_safety`: NULL tag defensive fallbacks.
+6. `test_cpp_ext_coro_pool_basic`: C++ `SqliteExtCoroPool<Tag>` template isolation and reference-counting.
+7. `test_cpp_ext_coro_pool_spawn`: `sqlite_coro_ext_spawn<Tag>()` auto-acquisition and closure dispatch.
+8. `test_cpp_ext_coro_pool_default_tag`: Default `SqliteExtensionCoroPool` alias verification.
+9. `test_cpp_ext_coro_pool_wrapper_methods`: `SqliteTaggedCoroPool` wrapper and introspection.
+10. `test_cpp_ext_coro_pool_shutdown`: Explicit shutdown and inactive state edge cases.
