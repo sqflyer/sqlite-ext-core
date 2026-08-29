@@ -37,6 +37,7 @@ all: $(TARGETS)
 
 $(BIN_DIR):
 	mkdir -p $(BIN_DIR)
+	@if [ -d "/clang64/bin" ]; then cp -u /clang64/bin/libsqlite3-0.dll $(BIN_DIR)/ 2>/dev/null || true; cp -u /clang64/bin/libc++.dll $(BIN_DIR)/ 2>/dev/null || true; cp -u /clang64/bin/libunwind.dll $(BIN_DIR)/ 2>/dev/null || true; fi
 
 $(BIN_DIR)/test_thread_c: test_thread_c.c | $(BIN_DIR)
 	$(CC) $(CFLAGS) -o $@ $< -lsqlite3 $(SAN_FLAGS)

@@ -46,34 +46,34 @@ if %ERRORLEVEL% neq 0 exit /b %ERRORLEVEL%
 cl /nologo /O2 /W4 /Zi %SAN_FLAGS% /MD /I"../../include" /I"../../include/async" /I"%SQLITE_INC%" /std:c++14 /Fe:bin\test_coro_ext_pool.exe test_coro_ext_pool.cpp "%SQLITE_LIB%"
 if %ERRORLEVEL% neq 0 exit /b %ERRORLEVEL%
 
-bin\test_thread_c.exe
+call .\bin\test_thread_c.exe
 if %ERRORLEVEL% neq 0 exit /b %ERRORLEVEL%
 
-bin\test_cond_c.exe
+call .\bin\test_cond_c.exe
 if %ERRORLEVEL% neq 0 exit /b %ERRORLEVEL%
 
-bin\test_coro_c.exe
+call .\bin\test_coro_c.exe
 if %ERRORLEVEL% neq 0 exit /b %ERRORLEVEL%
 
-bin\test_coro_sched_c.exe
+call .\bin\test_coro_sched_c.exe
 if %ERRORLEVEL% neq 0 exit /b %ERRORLEVEL%
 
-bin\test_coro_ext_pool_c.exe
+call .\bin\test_coro_ext_pool_c.exe
 if %ERRORLEVEL% neq 0 exit /b %ERRORLEVEL%
 
-bin\test_thread.exe
+call .\bin\test_thread.exe
 if %ERRORLEVEL% neq 0 exit /b %ERRORLEVEL%
 
-bin\test_cond.exe
+call .\bin\test_cond.exe
 if %ERRORLEVEL% neq 0 exit /b %ERRORLEVEL%
 
-bin\test_coro.exe
+call .\bin\test_coro.exe
 if %ERRORLEVEL% neq 0 exit /b %ERRORLEVEL%
 
-bin\test_coro_sched.exe
+call .\bin\test_coro_sched.exe
 if %ERRORLEVEL% neq 0 exit /b %ERRORLEVEL%
 
-bin\test_coro_ext_pool.exe
+call .\bin\test_coro_ext_pool.exe
 if %ERRORLEVEL% neq 0 exit /b %ERRORLEVEL%
 
 goto end

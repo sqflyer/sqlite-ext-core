@@ -15,10 +15,23 @@
 #include <stddef.h>
 #include <stdint.h>
 
+/*
+ * AddressSanitizer (ASAN) Fiber Annotations:
+ * On POSIX (ucontext_t), custom user-allocated stacks require explicit ASAN fiber
+ * switch notifications (__sanitizer_start_switch_fiber / __sanitizer_finish_switch_fiber).
+ *
+ * On Windows (_WIN32 / _WIN64), Win32 Fibers (CreateFiber / SwitchToFiber) are native OS
+ * objects whose stack bounds and TEB (Thread Environment Block) registers are managed
+ * directly by the Windows NT kernel. The LLVM ASAN runtime on Windows does not support
+ * cross-thread fiber migrations (M:N scheduling where a fiber yields on Thread A and resumes
+ * on Thread B). Therefore, ASAN fiber hooks are strictly enabled for POSIX ucontext targets.
+ */
 #if defined(__SANITIZE_ADDRESS__)
-    #define SQLITE3_CORO_ASAN 1
+    #if !defined(_WIN32) && !defined(_WIN64)
+        #define SQLITE3_CORO_ASAN 1
+    #endif
 #elif defined(__has_feature)
-    #if __has_feature(address_sanitizer)
+    #if __has_feature(address_sanitizer) && !defined(_WIN32) && !defined(_WIN64)
         #define SQLITE3_CORO_ASAN 1
     #endif
 #endif
@@ -100,40 +113,31 @@ static void CALLBACK sqlite3_coro_win_trampoline(void* param) {
         st->entry_fn(st->arg);
     }
     if (st) {
+        void* caller = st->caller_fiber;
         st->is_done = 1;
         st->is_running = 0;
         g_active_coro_state = NULL;
-        if (st->caller_fiber) {
+        while (caller) {
 #if defined(SQLITE3_CORO_ASAN)
             __sanitizer_start_switch_fiber(NULL, NULL, 0);
 #endif
-            SwitchToFiber(st->caller_fiber);
+            SwitchToFiber(caller);
         }
     }
 }
 /** @endcond */
 
 #if defined(_WIN32) || defined(_WIN64)
-/**
- * @brief Retrieves the process-wide critical section protecting Win32 fiber operations.
- * @return Pointer to internal `CRITICAL_SECTION`.
- */
-static inline CRITICAL_SECTION* sqlite3_coro_win_fiber_lock(void) {
-    static CRITICAL_SECTION s_lock;
-    static int s_inited = 0;
-    if (!s_inited) {
-        InitializeCriticalSection(&s_lock);
-        s_inited = 1;
-    }
-    return &s_lock;
-}
+#ifndef FIBER_FLAG_FLOAT_SWITCH
+#define FIBER_FLAG_FLOAT_SWITCH 0x1
+#endif
 #endif
 
 /**
  * @brief Initializes and creates a stackful coroutine (fiber).
  *
  * Allocates an internal state structure and dedicated fiber context. On Windows,
- * creates a Win32 Fiber via `CreateFiber`. Memory is allocated strictly via `sqlite3_malloc64`.
+ * creates a Win32 Fiber via `CreateFiberEx`. Memory is allocated strictly via `sqlite3_malloc64`.
  *
  * @param coro Pointer to uninitialized `sqlite3_coro_t` handle.
  * @param stack_size Requested fiber stack size in bytes (pass 0 for default 64KB).
@@ -162,9 +166,10 @@ static inline int sqlite3_coro_create(
     st->is_running = 0;
 
 #if defined(_WIN32) || defined(_WIN64)
-    EnterCriticalSection(sqlite3_coro_win_fiber_lock());
-    st->fiber_handle = CreateFiber(stack_size, sqlite3_coro_win_trampoline, st);
-    LeaveCriticalSection(sqlite3_coro_win_fiber_lock());
+    st->fiber_handle = CreateFiberEx(stack_size, stack_size, FIBER_FLAG_FLOAT_SWITCH, sqlite3_coro_win_trampoline, st);
+    if (!st->fiber_handle) {
+        st->fiber_handle = CreateFiber(stack_size, sqlite3_coro_win_trampoline, st);
+    }
 #endif
 
     if (!st->fiber_handle) {
@@ -192,13 +197,18 @@ static inline int sqlite3_coro_resume(sqlite3_coro_t* coro) {
 
     sqlite3_coro_state_t* st = coro->state;
 
-    /* Ensure current thread is converted to a fiber so we can switch back */
+    /* Ensure current thread is converted to a fiber with SSE/Float preservation */
     void* cur_fiber = GetCurrentFiber();
-    if (!cur_fiber || cur_fiber == (void*)0x1e00 /* default invalid Win32 fiber */) {
-        cur_fiber = ConvertThreadToFiber(NULL);
+    if (!cur_fiber || (uintptr_t)cur_fiber < (uintptr_t)0x10000) {
+        cur_fiber = ConvertThreadToFiberEx(NULL, FIBER_FLAG_FLOAT_SWITCH);
         if (!cur_fiber) {
-            cur_fiber = GetCurrentFiber();
+            cur_fiber = ConvertThreadToFiber(NULL);
         }
+        cur_fiber = GetCurrentFiber();
+    }
+
+    if (!cur_fiber || (uintptr_t)cur_fiber < (uintptr_t)0x10000) {
+        return SQLITE_ERROR;
     }
 
     st->caller_fiber = cur_fiber;
@@ -222,13 +232,29 @@ static inline int sqlite3_coro_resume(sqlite3_coro_t* coro) {
 }
 
 /**
+ * @brief Retrieves the active coroutine state from the current fiber context.
+ *
+ * Uses native `GetFiberData()` on Windows to guarantee exact fiber state resolution
+ * even when fibers migrate across multiple OS worker threads.
+ */
+static inline sqlite3_coro_state_t* sqlite3_coro_active_state(void) {
+#if defined(_WIN32) || defined(_WIN64)
+    sqlite3_coro_state_t* st = (sqlite3_coro_state_t*)GetFiberData();
+    if (st && (uintptr_t)st >= (uintptr_t)0x10000) return st;
+    return g_active_coro_state;
+#else
+    return g_active_coro_state;
+#endif
+}
+
+/**
  * @brief Yields execution back to the caller from inside the active coroutine.
  *
  * Suspends the active coroutine's execution, preserves its entire call stack and CPU
  * register state, and transfers control back to the thread or fiber that called `sqlite3_coro_resume`.
  */
 static inline void sqlite3_coro_yield(void) {
-    sqlite3_coro_state_t* st = g_active_coro_state;
+    sqlite3_coro_state_t* st = sqlite3_coro_active_state();
     if (!st || !st->caller_fiber) return;
 
     st->is_running = 0;
@@ -253,7 +279,7 @@ static inline void sqlite3_coro_yield(void) {
  * @param val Pointer to data to yield back to caller.
  */
 static inline void sqlite3_coro_yield_value(void* val) {
-    sqlite3_coro_state_t* st = g_active_coro_state;
+    sqlite3_coro_state_t* st = sqlite3_coro_active_state();
     if (st) {
         st->yield_value = val;
     }
@@ -293,13 +319,7 @@ static inline void sqlite3_coro_destroy(sqlite3_coro_t* coro) {
         sqlite3_coro_state_t* st = coro->state;
 #if defined(_WIN32) || defined(_WIN64)
         if (st->fiber_handle) {
-            void* cur_fiber = GetCurrentFiber();
-            if (!cur_fiber || cur_fiber == (void*)0x1e00) {
-                ConvertThreadToFiber(NULL);
-            }
-            EnterCriticalSection(sqlite3_coro_win_fiber_lock());
             DeleteFiber(st->fiber_handle);
-            LeaveCriticalSection(sqlite3_coro_win_fiber_lock());
             st->fiber_handle = NULL;
         }
 #endif

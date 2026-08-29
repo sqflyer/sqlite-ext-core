@@ -118,9 +118,15 @@ static inline void* sqlite3_coro_pool_worker_loop(void* arg) {
     if (!pool) return NULL;
 
 #if defined(_WIN32) || defined(_WIN64)
+#ifndef FIBER_FLAG_FLOAT_SWITCH
+#define FIBER_FLAG_FLOAT_SWITCH 0x1
+#endif
     void* cur_fiber = GetCurrentFiber();
-    if (!cur_fiber || cur_fiber == (void*)0x1e00) {
-        ConvertThreadToFiber(NULL);
+    if (!cur_fiber || (uintptr_t)cur_fiber < (uintptr_t)0x10000) {
+        cur_fiber = ConvertThreadToFiberEx(NULL, FIBER_FLAG_FLOAT_SWITCH);
+        if (!cur_fiber) {
+            ConvertThreadToFiber(NULL);
+        }
     }
 #endif
 
@@ -132,8 +138,7 @@ static inline void* sqlite3_coro_pool_worker_loop(void* arg) {
             sqlite3_cond_wait(&pool->cond_work, &pool->lock);
         }
 
-        if (!pool->is_running) {
-            sqlite3_cond_broadcast(&pool->cond_work);
+        if (!pool->is_running && pool->queue_head == NULL) {
             sqlite3_thread_mutex_unlock(&pool->lock);
             break;
         }
@@ -200,10 +205,6 @@ static inline void* sqlite3_coro_pool_worker_loop(void* arg) {
             }
         }
     }
-
-#if defined(_WIN32) || defined(_WIN64)
-    ConvertFiberToThread();
-#endif
 
     return NULL;
 }
