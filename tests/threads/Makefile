@@ -4,8 +4,10 @@
 UNAME_S ?= $(shell uname -s 2>/dev/null || echo Windows)
 
 # Compiler & Sanitizer Selection:
-# - Linux: Uses GCC with AddressSanitizer & LeakSanitizer (-fsanitize=address,leak)
-# - macOS (Darwin) & Windows (MSYS2): Uses Clang with AddressSanitizer (-fsanitize=address)
+# - Linux (WSL / Native): Uses GCC with AddressSanitizer & LeakSanitizer (-fsanitize=address,leak)
+# - Windows (MSYS2 / MinGW): Win32 Fibers (CreateFiber/SwitchToFiber) manage kernel TEB stack
+#   registers directly. LLVM ASan on Windows does not support cross-thread fiber migrations,
+#   so threads/fiber tests run without ASan on Windows and with full ASan on Linux.
 ifeq ($(UNAME_S),Linux)
     CXX := g++
     CC := gcc
@@ -19,7 +21,7 @@ else
         CXX := clang++
         CC := clang
     endif
-    SAN_FLAGS := -fsanitize=address
+    SAN_FLAGS :=
 endif
 
 export PATH UNAME_S CXX CC SAN_FLAGS

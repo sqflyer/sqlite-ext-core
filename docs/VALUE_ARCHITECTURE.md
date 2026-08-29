@@ -185,9 +185,11 @@ struct SqliteOwnedValueTag {
     inline void set(uint8_t type, bool is_heap, uint8_t len = 0) noexcept {
         raw = static_cast<uint8_t>(((type & 0x07) << 5) | ((is_heap ? 1 : 0) << 4) | (len & 0x0F));
     }
-    inline int  type()    const noexcept { return static_cast<int>(raw >> 5); }
-    inline bool is_heap() const noexcept { return (raw & 0x10) != 0; }
-    inline uint8_t len()  const noexcept { return static_cast<uint8_t>(raw & 0x0F); }
+    inline int  type()        const noexcept { return static_cast<int>(raw >> 5); }
+    inline bool is_heap()     const noexcept { return (raw & 0x10) != 0; }
+    inline uint8_t len()      const noexcept { return static_cast<uint8_t>(raw & 0x0F); }
+    inline bool is_row_key()  const noexcept { return raw == 0; }
+    inline void set_as_row_key() noexcept    { raw = 0; }
 };
 ```
 
@@ -313,7 +315,12 @@ sqlite3_row.hpp (inherits, adds view()/column_count())  │    │
 - `column_count()` → `int` (alias for `size()`)
 - `operator SqliteRowView()` → implicit conversion
 
-No data members are added; the row classes have an identical memory footprint to their base array classes.
+### Macro Synthesized Array Accessors & Hashing (`SQLITE_DERIVE_ARRAY_ACCESSORS`, `SQLITE_DERIVE_ARRAY_HASH`)
+
+To prevent code bloat and maintain a unified API across all array and tabular types, the array classes utilize `SQLITE_DERIVE_ARRAY_ACCESSORS` and `SQLITE_DERIVE_ARRAY_HASH`:
+- **Direct Typed Extraction**: Provides inlined `as_int64(i = 0)`, `as_int(i = 0)`, `as_double(i = 0)`, `as_text(i = 0)`, `as_blob(i = 0)`, `as_bool(i = 0)`, `is_null(i = 0)`, `type(i = 0)`, and `subtype(i = 0)`.
+- **Unified MurmurHash2 Digest**: Generates inlined `hash()` computing multi-column composite MurmurHash2 digests combining each element sequentially.
+- **Shared Identically Across All 5 Containers**: `SqliteValueOwnedStaticArray<N>`, `SqliteValueOwnedDynamicArray`, `SqliteRowView`, `SqliteRowOwnedWrapper`, and `SqliteRowKeyOwned`.
 
 ---
 

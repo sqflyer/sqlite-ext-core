@@ -5,20 +5,169 @@
 #include "sqlite3_value.hpp"
 #include "sqlite3_allocator.hpp"
 
-// Forward declaration of SqliteStatement for tight integration
+// Forward declaration of classes for tight integration
 class SqliteStatement;
 class SqliteRowDynamic;
+class SqliteRowOwnedWrapper;
 
 // ============================================================================
 // Source Type Macros for SqliteRowView
 // ============================================================================
 #define SQLITE_ROW_SOURCE_STMT        0  /**< Backed by sqlite3_stmt* column values */
 #define SQLITE_ROW_SOURCE_ARGV        1  /**< Backed by sqlite3_value** (UDF args / vtab) */
-#define SQLITE_ROW_SOURCE_OWNED_ARRAY 2  /**< Backed by const SqliteValueOwned* array */
-#define SQLITE_ROW_SOURCE_VIEW_ARRAY  3  /**< Backed by const SqliteValueView* array */
-#define SQLITE_ROW_SOURCE_EMPTY       4  /**< Empty row view (0 columns) */
+#define SQLITE_ROW_SOURCE_VIEW_ARRAY  2  /**< Backed by const SqliteValueView* array */
+#define SQLITE_ROW_SOURCE_EMPTY       3  /**< Empty row view (0 columns) */
 
 typedef uint8_t SqliteRowSourceType;
+
+// ============================================================================
+// Macro Helpers for Complete Relational Operators
+// ============================================================================
+
+#ifndef SQLITE_DERIVE_RELATIONAL_OPS
+#define SQLITE_DERIVE_RELATIONAL_OPS(OtherType) \
+    inline bool operator!=(const OtherType& other) const noexcept { return !(*this == other); } \
+    inline bool operator<=(const OtherType& other) const noexcept { return !(other < *this); } \
+    inline bool operator>(const OtherType& other)  const noexcept { return other < *this; } \
+    inline bool operator>=(const OtherType& other) const noexcept { return !(*this < other); }
+#endif
+
+#ifndef SQLITE_DERIVE_CONTAINER_RELATIONAL_OPS
+#define SQLITE_DERIVE_CONTAINER_RELATIONAL_OPS(ContainerType) \
+    inline bool operator==(const ContainerType& other) const noexcept { \
+        if (this->size() != other.size()) return false; \
+        int sz = this->size(); \
+        for (int i = 0; i < sz; ++i) { \
+            if (!((*this)[i] == other[i])) return false; \
+        } \
+        return true; \
+    } \
+    inline bool operator!=(const ContainerType& other) const noexcept { return !(*this == other); } \
+    inline bool operator<(const ContainerType& other) const noexcept { \
+        int sz1 = this->size(); \
+        int sz2 = other.size(); \
+        int min_sz = sz1 < sz2 ? sz1 : sz2; \
+        for (int i = 0; i < min_sz; ++i) { \
+            if ((*this)[i] < other[i]) return true; \
+            if (other[i] < (*this)[i]) return false; \
+        } \
+        return sz1 < sz2; \
+    } \
+    inline bool operator>(const ContainerType& other) const noexcept { \
+        int sz1 = this->size(); \
+        int sz2 = other.size(); \
+        int min_sz = sz1 < sz2 ? sz1 : sz2; \
+        for (int i = 0; i < min_sz; ++i) { \
+            if (other[i] < (*this)[i]) return true; \
+            if ((*this)[i] < other[i]) return false; \
+        } \
+        return sz1 > sz2; \
+    } \
+    inline bool operator<=(const ContainerType& other) const noexcept { return !(*this > other); } \
+    inline bool operator>=(const ContainerType& other) const noexcept { return !(*this < other); }
+#endif
+
+#ifndef SQLITE_DERIVE_SCALAR_RELATIONAL_OPS
+#define SQLITE_DERIVE_SCALAR_RELATIONAL_OPS(ScalarType) \
+    inline bool operator==(const ScalarType& val) const noexcept { \
+        return (this->size() == 1) ? ((*this)[0] == val) : false; \
+    } \
+    inline bool operator!=(const ScalarType& val) const noexcept { return !(*this == val); } \
+    inline bool operator<(const ScalarType& val) const noexcept { \
+        int sz = this->size(); \
+        if (sz == 0) return true; \
+        if ((*this)[0] < val) return true; \
+        if (val < (*this)[0]) return false; \
+        return sz < 1; \
+    } \
+    inline bool operator>(const ScalarType& val) const noexcept { \
+        int sz = this->size(); \
+        if (sz == 0) return false; \
+        if (val < (*this)[0]) return true; \
+        if ((*this)[0] < val) return false; \
+        return sz > 1; \
+    } \
+    inline bool operator<=(const ScalarType& val) const noexcept { return !(*this > val); } \
+    inline bool operator>=(const ScalarType& val) const noexcept { return !(*this < val); }
+#endif
+
+/**
+ * @brief Macro helper synthesizing direct relational operators against raw C-strings (`const char*`).
+ * 
+ * Explicitly constructs a lightweight non-allocating `SqliteStringView(val)` to prevent compiler
+ * overload resolution ambiguity between `SqliteStringView` and `SqliteString` (from `sqlite3_buffer.hpp`).
+ */
+#ifndef SQLITE_DERIVE_CSTR_RELATIONAL_OPS
+#define SQLITE_DERIVE_CSTR_RELATIONAL_OPS \
+    inline bool operator==(const char* val) const noexcept { \
+        return (this->size() == 1) ? ((*this)[0] == SqliteStringView(val)) : false; \
+    } \
+    inline bool operator!=(const char* val) const noexcept { return !(*this == val); } \
+    inline bool operator<(const char* val) const noexcept { \
+        int sz = this->size(); \
+        if (sz == 0) return true; \
+        SqliteStringView sv(val); \
+        if ((*this)[0] < sv) return true; \
+        if (sv < (*this)[0]) return false; \
+        return sz < 1; \
+    } \
+    inline bool operator>(const char* val) const noexcept { \
+        int sz = this->size(); \
+        if (sz == 0) return false; \
+        SqliteStringView sv(val); \
+        if (sv < (*this)[0]) return true; \
+        if ((*this)[0] < sv) return false; \
+        return sz > 1; \
+    } \
+    inline bool operator<=(const char* val) const noexcept { return !(*this > val); } \
+    inline bool operator>=(const char* val) const noexcept { return !(*this < val); }
+#endif
+
+#ifndef SQLITE_DERIVE_ALL_SCALAR_RELATIONAL_OPS
+#define SQLITE_DERIVE_ALL_SCALAR_RELATIONAL_OPS \
+    SQLITE_DERIVE_SCALAR_RELATIONAL_OPS(SqliteValueOwned) \
+    SQLITE_DERIVE_SCALAR_RELATIONAL_OPS(SqliteValueView) \
+    SQLITE_DERIVE_SCALAR_RELATIONAL_OPS(SqliteStringView) \
+    SQLITE_DERIVE_SCALAR_RELATIONAL_OPS(SqliteStringOwned) \
+    SQLITE_DERIVE_SCALAR_RELATIONAL_OPS(SqliteBlobView) \
+    SQLITE_DERIVE_SCALAR_RELATIONAL_OPS(SqliteBlobOwned) \
+    SQLITE_DERIVE_SCALAR_RELATIONAL_OPS(sqlite3_int64) \
+    SQLITE_DERIVE_SCALAR_RELATIONAL_OPS(int) \
+    SQLITE_DERIVE_SCALAR_RELATIONAL_OPS(double) \
+    SQLITE_DERIVE_SCALAR_RELATIONAL_OPS(bool) \
+    SQLITE_DERIVE_CSTR_RELATIONAL_OPS
+#endif
+
+#ifndef SQLITE_DERIVE_REVERSE_RELATIONAL_OPS
+#define SQLITE_DERIVE_REVERSE_RELATIONAL_OPS(LhsType, RhsType) \
+    inline bool operator==(const LhsType& lhs, const RhsType& rhs) noexcept { return rhs == lhs; } \
+    inline bool operator!=(const LhsType& lhs, const RhsType& rhs) noexcept { return !(rhs == lhs); } \
+    inline bool operator<(const LhsType& lhs, const RhsType& rhs) noexcept  { return rhs > lhs; } \
+    inline bool operator<=(const LhsType& lhs, const RhsType& rhs) noexcept { return rhs >= lhs; } \
+    inline bool operator>(const LhsType& lhs, const RhsType& rhs) noexcept  { return rhs < lhs; } \
+    inline bool operator>=(const LhsType& lhs, const RhsType& rhs) noexcept { return rhs <= lhs; }
+#endif
+
+#ifndef SQLITE_DERIVE_ALL_REVERSE_RELATIONAL_OPS
+#define SQLITE_DERIVE_ALL_REVERSE_RELATIONAL_OPS(TargetClass) \
+    SQLITE_DERIVE_REVERSE_RELATIONAL_OPS(SqliteValueViewArray, TargetClass) \
+    SQLITE_DERIVE_REVERSE_RELATIONAL_OPS(SqliteValueOwned, TargetClass) \
+    SQLITE_DERIVE_REVERSE_RELATIONAL_OPS(SqliteValueView, TargetClass) \
+    SQLITE_DERIVE_REVERSE_RELATIONAL_OPS(SqliteStringView, TargetClass) \
+    SQLITE_DERIVE_REVERSE_RELATIONAL_OPS(SqliteStringOwned, TargetClass) \
+    SQLITE_DERIVE_REVERSE_RELATIONAL_OPS(SqliteBlobView, TargetClass) \
+    SQLITE_DERIVE_REVERSE_RELATIONAL_OPS(SqliteBlobOwned, TargetClass) \
+    SQLITE_DERIVE_REVERSE_RELATIONAL_OPS(sqlite3_int64, TargetClass) \
+    SQLITE_DERIVE_REVERSE_RELATIONAL_OPS(int, TargetClass) \
+    SQLITE_DERIVE_REVERSE_RELATIONAL_OPS(double, TargetClass) \
+    SQLITE_DERIVE_REVERSE_RELATIONAL_OPS(bool, TargetClass) \
+    inline bool operator==(const char* lhs, const TargetClass& rhs) noexcept { return rhs == lhs; } \
+    inline bool operator!=(const char* lhs, const TargetClass& rhs) noexcept { return rhs != lhs; } \
+    inline bool operator<(const char* lhs, const TargetClass& rhs) noexcept  { return rhs > lhs; } \
+    inline bool operator<=(const char* lhs, const TargetClass& rhs) noexcept { return rhs >= lhs; } \
+    inline bool operator>(const char* lhs, const TargetClass& rhs) noexcept  { return rhs < lhs; } \
+    inline bool operator>=(const char* lhs, const TargetClass& rhs) noexcept { return rhs <= lhs; }
+#endif
 
 // ============================================================================
 // 1. SqliteRowView: Universal Non-Owning Multi-Column Row View
@@ -31,7 +180,6 @@ typedef uint8_t SqliteRowSourceType;
  * tabular rows. It acts as a universal abstraction layer over:
  * - Active prepared statement rows (`sqlite3_stmt*` or `SqliteStatement&`)
  * - SQLite UDF / aggregate argument vectors (`SqliteUdfArgs` or `sqlite3_value**`)
- * - In-memory contiguous owned value arrays (`const SqliteValueOwned*` or `SqliteRowStatic<N>`)
  * - In-memory contiguous view arrays (`const SqliteValueView*`)
  * 
  * All column access operations (`operator[]`, `as_text()`, `as_int64()`, etc.) return
@@ -42,7 +190,6 @@ private:
     union {
         SqliteStatement*        m_stmt;
         SqliteValueViewArray    m_argv;
-        const SqliteValueOwned* m_owned_array;
         const SqliteValueView*  m_view_array;
     };
     int                         m_col_count;
@@ -88,15 +235,6 @@ public:
         : m_argv(args), m_col_count(args.size()), m_source(SQLITE_ROW_SOURCE_ARGV) {}
 
     /**
-     * @brief Constructs a row view wrapping a contiguous array of SqliteValueOwned.
-     * 
-     * @param array Pointer to the first SqliteValueOwned element.
-     * @param count Number of columns in the array.
-     */
-    inline SqliteRowView(const SqliteValueOwned* array, int count) noexcept
-        : m_owned_array(array), m_col_count(count >= 0 ? count : 0), m_source(SQLITE_ROW_SOURCE_OWNED_ARRAY) {}
-
-    /**
      * @brief Constructs a row view wrapping a contiguous array of SqliteValueView.
      * 
      * @param array Pointer to the first SqliteValueView element.
@@ -126,12 +264,15 @@ public:
      */
     inline bool empty() const noexcept { return m_col_count == 0; }
 
+    // =========================================================================
+    // Element Accessors & Class-Level Getter
+    // =========================================================================
+
     /**
      * @brief Safely accesses a column as a zero-allocation SqliteValueView.
      * 
      * If the column index is out of bounds (< 0 or >= size()), returns a SQLITE_NULL view
-     * to guarantee complete segfault immunity. Note: For viewing owned value arrays (source 2),
-     * prefer using direct typed accessors (as_text, as_int64, etc.) or .to_owned().
+     * to guarantee complete segfault immunity.
      * 
      * @param col 0-indexed column index.
      * @return Non-owning SqliteValueView for the column.
@@ -148,30 +289,13 @@ public:
         }
     }
 
-    /**
-     * @brief Bounds-safe column accessor identical to operator[].
-     * 
-     * @param col 0-indexed column index.
-     * @return Non-owning SqliteValueView for the column.
-     */
+    /** @brief Bounds-safe column accessor identical to operator[]. */
     inline SqliteValueView at(int col) const noexcept { return (*this)[col]; }
 
-    /**
-     * @brief Extracts a column value as a zero-allocation SqliteValueView.
-     * 
-     * Enables fluent typed extraction: row.get_column(0).as_double(), row.get_column(1).as_text(), etc.
-     * 
-     * @param col 0-indexed column index.
-     * @return Non-owning SqliteValueView for the column.
-     */
+    /** @brief Extracts a column value as a zero-allocation SqliteValueView. */
     inline SqliteValueView get_column(int col) const noexcept { return (*this)[col]; }
 
-    /**
-     * @brief Alias for get_column().
-     * 
-     * @param col 0-indexed column index.
-     * @return Non-owning SqliteValueView for the column.
-     */
+    /** @brief Alias for get_column(). */
     inline SqliteValueView column(int col) const noexcept { return (*this)[col]; }
 
     /**
@@ -203,102 +327,17 @@ public:
     }
 
     // =========================================================================
-    // Direct Typed Column Accessors
+    // Direct Typed Column Accessors & 64-Bit MurmurHash2 Calculation
     // =========================================================================
+    SQLITE_DERIVE_ARRAY_ACCESSORS
+    SQLITE_DERIVE_ARRAY_HASH
 
-    /**
-     * @brief Extracts column value as a 64-bit integer.
-     * 
-     * @param col 0-indexed column index.
-     * @return 64-bit integer value (or 0 if NULL / invalid).
-     */
-    inline sqlite3_int64 as_int64(int col) const noexcept {
-        if (col < 0 || col >= m_col_count) return 0;
-        if (m_source == SQLITE_ROW_SOURCE_OWNED_ARRAY) return m_owned_array[col].as_int64();
-        return get_column(col).as_int64();
-    }
-
-    /**
-     * @brief Extracts column value as a double-precision floating point number.
-     * 
-     * @param col 0-indexed column index.
-     * @return Double value (or 0.0 if NULL / invalid).
-     */
-    inline double as_double(int col) const noexcept {
-        if (col < 0 || col >= m_col_count) return 0.0;
-        if (m_source == SQLITE_ROW_SOURCE_OWNED_ARRAY) return m_owned_array[col].as_double();
-        return get_column(col).as_double();
-    }
-
-    /**
-     * @brief Extracts column value as a zero-allocation SqliteStringView.
-     * 
-     * @param col 0-indexed column index.
-     * @return String view pointing to the underlying SQLite memory buffer.
-     */
-    inline SqliteStringView as_text(int col) const noexcept {
-        if (col < 0 || col >= m_col_count) return SqliteStringView(nullptr, 0);
-        if (m_source == SQLITE_ROW_SOURCE_OWNED_ARRAY) return m_owned_array[col].as_text();
-        return get_column(col).as_text();
-    }
-
-    /**
-     * @brief Extracts column value as a zero-allocation SqliteBlobView.
-     * 
-     * @param col 0-indexed column index.
-     * @return Blob view pointing to the underlying SQLite binary memory buffer.
-     */
-    inline SqliteBlobView as_blob(int col) const noexcept {
-        if (col < 0 || col >= m_col_count) return SqliteBlobView(nullptr, 0);
-        if (m_source == SQLITE_ROW_SOURCE_OWNED_ARRAY) return m_owned_array[col].as_blob();
-        return get_column(col).as_blob();
-    }
-
-    /**
-     * @brief Evaluates column value as a boolean (non-zero integer is true).
-     * 
-     * @param col 0-indexed column index.
-     * @return True if non-zero, false otherwise.
-     */
-    inline bool as_bool(int col) const noexcept {
-        if (col < 0 || col >= m_col_count) return false;
-        if (m_source == SQLITE_ROW_SOURCE_OWNED_ARRAY) return m_owned_array[col].as_bool();
-        return get_column(col).as_bool();
-    }
-
-    /**
-     * @brief Checks if the specified column is SQLITE_NULL.
-     * 
-     * @param col 0-indexed column index.
-     * @return True if NULL or out of bounds, false otherwise.
-     */
-    inline bool is_null(int col) const noexcept {
-        return type(col) == SQLITE_NULL;
-    }
-
-    /**
-     * @brief Returns the SQLite fundamental datatype (SQLITE_INTEGER, SQLITE_FLOAT, SQLITE_TEXT, SQLITE_BLOB, SQLITE_NULL).
-     * 
-     * @param col 0-indexed column index.
-     * @return SQLite datatype constant.
-     */
-    inline int type(int col) const noexcept {
-        if (col < 0 || col >= m_col_count) return SQLITE_NULL;
-        if (m_source == SQLITE_ROW_SOURCE_OWNED_ARRAY) return m_owned_array[col].type();
-        return get_column(col).type();
-    }
-
-    /**
-     * @brief Returns the 8-bit SQLite subtype for the column (e.g. 'J' for JSON, 'V' for Vector).
-     * 
-     * @param col 0-indexed column index.
-     * @return 8-bit subtype value (0 if none).
-     */
-    inline uint8_t subtype(int col) const noexcept {
-        if (col < 0 || col >= m_col_count) return SQLITE_SUBTYPE_NONE;
-        if (m_source == SQLITE_ROW_SOURCE_OWNED_ARRAY) return m_owned_array[col].subtype();
-        return get_column(col).subtype();
-    }
+    // =========================================================================
+    // Full Relational Operators (==, !=, <, <=, >, >=)
+    // =========================================================================
+    SQLITE_DERIVE_CONTAINER_RELATIONAL_OPS(SqliteRowView)
+    SQLITE_DERIVE_CONTAINER_RELATIONAL_OPS(SqliteValueViewArray)
+    SQLITE_DERIVE_ALL_SCALAR_RELATIONAL_OPS
 
     /** @brief Returns internal source type (SQLITE_ROW_SOURCE_*). */
     inline SqliteRowSourceType source_type() const noexcept { return m_source; }
@@ -306,7 +345,6 @@ public:
     inline SqliteStatement* statement() const noexcept { return m_stmt; }
     inline sqlite3_value** raw_argv() const noexcept { return m_argv.argv(); }
     inline SqliteValueViewArray argv() const noexcept { return m_argv; }
-    inline const SqliteValueOwned* raw_owned_array() const noexcept { return m_owned_array; }
     inline const SqliteValueView* raw_view_array() const noexcept { return m_view_array; }
 
     /**
@@ -318,39 +356,12 @@ public:
      */
     inline SqliteRowDynamic to_owned() const;
 
-    // =========================================================================
     // Range-Based For Loop Iterator
-    // =========================================================================
-
-    /**
-     * @brief Forward iterator for traversing columns in a range-based for loop.
-     * 
-     * Example:
-     * @code
-     * for (SqliteValueView col : row) {
-     *     printf("Col type: %d\n", col.type());
-     * }
-     * @endcode
-     */
-    class Iterator {
-    private:
-        const SqliteRowView* m_row;
-        int                  m_idx;
-    public:
-        inline Iterator(const SqliteRowView* row, int idx) noexcept : m_row(row), m_idx(idx) {}
-        inline SqliteValueView operator*() const noexcept { return (*m_row)[m_idx]; }
-        inline Iterator& operator++() noexcept { ++m_idx; return *this; }
-        inline Iterator operator++(int) noexcept { Iterator tmp = *this; ++m_idx; return tmp; }
-        inline bool operator==(const Iterator& other) const noexcept { return m_idx == other.m_idx && m_row == other.m_row; }
-        inline bool operator!=(const Iterator& other) const noexcept { return !(*this == other); }
-    };
-
-    /** @brief Returns an iterator to the first column. */
-    inline Iterator begin() const noexcept { return Iterator(this, 0); }
-
-    /** @brief Returns an iterator to the end of the columns. */
-    inline Iterator end() const noexcept { return Iterator(this, m_col_count); }
+    SQLITE_DERIVE_ARRAY_ITERATOR(SqliteRowView, SqliteValueView)
 };
+
+// Symmetric reverse operators for SqliteRowView
+SQLITE_DERIVE_ALL_REVERSE_RELATIONAL_OPS(SqliteRowView)
 
 // ============================================================================
 // 1.5. SqliteRowUtil: Shared Row Construction Utilities
@@ -360,23 +371,13 @@ namespace SqliteRowUtil {
      * @brief Copies up to `count` columns from a SqliteRowView into a contiguous
      *        SqliteValueOwned destination buffer.
      * 
-     * Handles both owned-array sources (via clone()) and all other sources
-     * (statement columns, argv, view arrays) via SqliteValueView::to_owned().
-     * 
      * @param dest  Pointer to the destination SqliteValueOwned buffer.
      * @param view  The non-owning source row view.
      * @param count Number of elements to copy.
      */
     inline void copy_from_view(SqliteValueOwned* dest, const SqliteRowView& view, int count) noexcept {
-        if (view.source_type() == SQLITE_ROW_SOURCE_OWNED_ARRAY) {
-            const SqliteValueOwned* src = view.raw_owned_array();
-            for (int i = 0; i < count; ++i) {
-                dest[i] = src[i].clone();
-            }
-        } else {
-            for (int i = 0; i < count; ++i) {
-                dest[i] = view.get_column(i).to_owned();
-            }
+        for (int i = 0; i < count; ++i) {
+            dest[i] = view[i].to_owned();
         }
     }
 } // namespace SqliteRowUtil
@@ -416,6 +417,13 @@ public:
     }
 
     /**
+     * @brief Copies and materializes up to N columns from a row wrapper span.
+     * 
+     * @param view The SqliteRowOwnedWrapper to snapshot.
+     */
+    inline explicit SqliteRowStatic(const SqliteRowOwnedWrapper& view) noexcept;
+
+    /**
      * @brief Alias for size() returning the compile-time column count.
      * 
      * @return Integer column count.
@@ -423,18 +431,11 @@ public:
     inline int column_count() const noexcept { return static_cast<int>(N); }
 
     /**
-     * @brief Converts this stack row into a zero-allocation non-owning SqliteRowView.
+     * @brief Converts this stack row into a zero-allocation 16-byte SqliteRowOwnedWrapper span.
      * 
-     * @return SqliteRowView wrapping the stack array.
+     * @return SqliteRowOwnedWrapper span wrapping the stack array.
      */
-    inline SqliteRowView view() const noexcept {
-        return SqliteRowView(this->data(), static_cast<int>(N));
-    }
-
-    /** @brief Implicit conversion operator to SqliteRowView. */
-    inline operator SqliteRowView() const noexcept {
-        return view();
-    }
+    inline SqliteRowOwnedWrapper view() const noexcept;
 };
 
 // ============================================================================
@@ -476,22 +477,27 @@ public:
         }
     }
 
+    /**
+     * @brief Constructs and materializes a dynamic row snapshot from a row wrapper span.
+     * 
+     * @param view Non-owning row wrapper to copy.
+     */
+    inline SqliteRowDynamic(const SqliteRowOwnedWrapper& view);
+
     /** @brief Alias for size() returning the number of columns. */
     inline int column_count() const noexcept { return this->size(); }
 
     /**
-     * @brief Converts this heap row into a zero-allocation non-owning SqliteRowView.
+     * @brief Converts this heap row into a zero-allocation 16-byte SqliteRowOwnedWrapper span.
      * 
-     * @return SqliteRowView wrapping the heap array.
+     * @return SqliteRowOwnedWrapper span wrapping the heap array.
      */
-    inline SqliteRowView view() const noexcept {
-        return SqliteRowView(this->data(), this->size());
-    }
+    inline SqliteRowOwnedWrapper view() const noexcept;
 
-    /** @brief Implicit conversion operator to SqliteRowView. */
-    inline operator SqliteRowView() const noexcept {
-        return view();
-    }
+    // Relational Operators
+    inline bool operator==(const SqliteRowDynamic& other) const noexcept;
+    inline bool operator<(const SqliteRowDynamic& other) const noexcept;
+    SQLITE_DERIVE_RELATIONAL_OPS(SqliteRowDynamic)
 };
 
 // ============================================================================
@@ -525,5 +531,328 @@ public:
 inline SqliteRowDynamic SqliteRowView::to_owned() const {
     return SqliteRowDynamic(*this);
 }
+
+// ============================================================================
+// 6. SqliteRowOwnedWrapper: 16-Byte Span over Contiguous SqliteValueOwned
+// ============================================================================
+
+/**
+ * @class SqliteRowOwnedWrapper
+ * @brief Zero-allocation 16-byte span (const SqliteValueOwned* + int len) over contiguous owned value buffers.
+ * 
+ * Fits in 2 CPU registers (rax, rdx). Wraps and compares against:
+ * - Single scalar values (SqliteValueOwned, SqliteValueView)
+ * - Strings (SqliteStringView, SqliteStringOwned)
+ * - Blobs (SqliteBlobView, SqliteBlobOwned)
+ * - Transient argument vectors (SqliteValueViewArray / SqliteUdfArgs)
+ * - Static arrays (SqliteValueOwnedStaticArray<N>)
+ * - Dynamic rows (SqliteRowDynamic)
+ */
+class SqliteRowOwnedWrapper {
+private:
+    SqliteValueOwned* m_data;
+    int               m_len;
+
+    static inline SqliteValueOwned& mutable_fallback_null() noexcept {
+        static SqliteValueOwned null_val;
+        return null_val;
+    }
+
+    static inline const SqliteValueOwned& fallback_null() noexcept {
+        static const SqliteValueOwned null_val;
+        return null_val;
+    }
+
+public:
+    // =========================================================================
+    // Constructors (Zero Copies, Zero Dynamic Allocations)
+    // =========================================================================
+
+    /**
+     * @brief Constructs an empty row wrapper with zero columns.
+     */
+    inline SqliteRowOwnedWrapper() noexcept : m_data(nullptr), m_len(0) {}
+
+    /**
+     * @brief Constructs a row wrapper spanning a contiguous array of SqliteValueOwned.
+     * 
+     * @param data Pointer to the first SqliteValueOwned element.
+     * @param len  Number of columns in the array.
+     */
+    inline SqliteRowOwnedWrapper(const SqliteValueOwned* data, int len) noexcept
+        : m_data(const_cast<SqliteValueOwned*>(data)), m_len(data && len > 0 ? len : 0) {}
+
+    /**
+     * @brief Constructs a 1-column row wrapper spanning a single SqliteValueOwned.
+     * 
+     * @param val Reference to the single value.
+     */
+    inline explicit SqliteRowOwnedWrapper(const SqliteValueOwned& val) noexcept
+        : m_data(const_cast<SqliteValueOwned*>(&val)), m_len(1) {}
+
+    /**
+     * @brief Constructs a row wrapper spanning a compile-time static array.
+     * 
+     * @tparam N Number of columns in the static array.
+     * @param static_arr The static array instance to span.
+     */
+    template <size_t N>
+    inline SqliteRowOwnedWrapper(const SqliteValueOwnedStaticArray<N>& static_arr) noexcept
+        : m_data(const_cast<SqliteValueOwned*>(static_arr.data())), m_len(static_arr.size()) {}
+
+    /**
+     * @brief Constructs a row wrapper spanning a dynamic heap row.
+     * 
+     * @param dynamic_row The SqliteRowDynamic instance to span.
+     */
+    inline SqliteRowOwnedWrapper(const SqliteRowDynamic& dynamic_row) noexcept
+        : m_data(const_cast<SqliteValueOwned*>(dynamic_row.data())), m_len(dynamic_row.size()) {}
+
+    /**
+     * @brief Constructs a row wrapper spanning a static row.
+     * 
+     * @tparam N Number of columns in the static row.
+     * @param static_row The SqliteRowStatic<N> instance to span.
+     */
+    template <size_t N>
+    inline SqliteRowOwnedWrapper(const SqliteRowStatic<N>& static_row) noexcept
+        : m_data(const_cast<SqliteValueOwned*>(static_row.data())), m_len(static_row.column_count()) {}
+
+    // Default copy/move semantics (Trivial 16-byte register copy)
+    SqliteRowOwnedWrapper(const SqliteRowOwnedWrapper&) noexcept = default;
+    SqliteRowOwnedWrapper& operator=(const SqliteRowOwnedWrapper&) noexcept = default;
+    SqliteRowOwnedWrapper(SqliteRowOwnedWrapper&&) noexcept = default;
+    SqliteRowOwnedWrapper& operator=(SqliteRowOwnedWrapper&&) noexcept = default;
+
+    // =========================================================================
+    // Static Factory Methods
+    // =========================================================================
+
+    /** @brief Factory method creating a wrapper span from a raw pointer and size. */
+    static inline SqliteRowOwnedWrapper create(const SqliteValueOwned* data, int size) noexcept {
+        return SqliteRowOwnedWrapper(data, size);
+    }
+    /** @brief Factory method creating a 1-column wrapper span from a single value. */
+    static inline SqliteRowOwnedWrapper create(const SqliteValueOwned& val) noexcept {
+        return SqliteRowOwnedWrapper(&val, 1);
+    }
+    /** @brief Factory method creating a wrapper span from a static array. */
+    template <size_t N>
+    static inline SqliteRowOwnedWrapper create(const SqliteValueOwnedStaticArray<N>& arr) noexcept {
+        return SqliteRowOwnedWrapper(arr.data(), arr.size());
+    }
+    /** @brief Factory method creating a wrapper span from a dynamic row. */
+    static inline SqliteRowOwnedWrapper create(const SqliteRowDynamic& row) noexcept {
+        return SqliteRowOwnedWrapper(row.data(), row.size());
+    }
+
+    // =========================================================================
+    // Capacity & Element Accessors
+    // =========================================================================
+
+    /** @brief Returns the total number of columns spanned by this wrapper. */
+    inline int  size()  const noexcept { return m_len; }
+
+    /** @brief Alias for size() returning the total column count. */
+    inline int  count() const noexcept { return m_len; }
+
+    /** @brief Checks if the wrapper spans zero columns or has a null data pointer. */
+    inline bool empty() const noexcept { return m_len == 0 || m_data == nullptr; }
+
+    /** @brief Returns a mutable pointer to the underlying column array. */
+    inline SqliteValueOwned* data() noexcept { return m_data; }
+
+    /** @brief Returns a read-only pointer to the underlying column array. */
+    inline const SqliteValueOwned* data() const noexcept { return m_data; }
+
+    /**
+     * @brief Mutable subscript operator with out-of-bounds safety.
+     * 
+     * @param index 0-indexed column position.
+     * @return Mutable reference to the element (or fallback static null if invalid).
+     */
+    inline SqliteValueOwned& operator[](int index) noexcept {
+        return (m_data && index >= 0 && index < m_len) ? m_data[index] : mutable_fallback_null();
+    }
+
+    /**
+     * @brief Read-only subscript operator with out-of-bounds safety.
+     * 
+     * @param index 0-indexed column position.
+     * @return Const reference to the element (or fallback static null if invalid).
+     */
+    inline const SqliteValueOwned& operator[](int index) const noexcept {
+        return (m_data && index >= 0 && index < m_len) ? m_data[index] : fallback_null();
+    }
+
+    /** @brief Bounds-safe mutable element accessor identical to operator[]. */
+    inline SqliteValueOwned& at(int index) noexcept {
+        return (*this)[index];
+    }
+
+    /** @brief Bounds-safe read-only element accessor identical to operator[]. */
+    inline const SqliteValueOwned& at(int index) const noexcept {
+        return (*this)[index];
+    }
+
+    // Typed Column Extraction Accessors, Composite Hashing & Iterator
+    SQLITE_DERIVE_ARRAY_ACCESSORS
+    SQLITE_DERIVE_ARRAY_HASH
+    SQLITE_DERIVE_ARRAY_ITERATOR(SqliteRowOwnedWrapper, const SqliteValueOwned&)
+
+public:
+    // ========================================================================
+    // Full Relational Operators (==, !=, <, <=, >, >=)
+    // ========================================================================
+    SQLITE_DERIVE_CONTAINER_RELATIONAL_OPS(SqliteRowOwnedWrapper)
+    SQLITE_DERIVE_CONTAINER_RELATIONAL_OPS(SqliteValueViewArray)
+    SQLITE_DERIVE_CONTAINER_RELATIONAL_OPS(SqliteRowView)
+    SQLITE_DERIVE_ALL_SCALAR_RELATIONAL_OPS
+};
+
+static_assert(sizeof(SqliteRowOwnedWrapper) == 16, "SqliteRowOwnedWrapper must be exactly 16 bytes!");
+
+// Symmetric reverse operators
+SQLITE_DERIVE_REVERSE_RELATIONAL_OPS(SqliteRowView, SqliteRowOwnedWrapper)
+SQLITE_DERIVE_ALL_REVERSE_RELATIONAL_OPS(SqliteRowOwnedWrapper)
+
+namespace SqliteRowUtil {
+    inline void copy_from_wrapper(SqliteValueOwned* dest, const SqliteRowOwnedWrapper& view, int count) noexcept {
+        for (int i = 0; i < count; ++i) {
+            dest[i] = view[i].clone();
+        }
+    }
+}
+
+template <size_t N>
+inline SqliteRowStatic<N>::SqliteRowStatic(const SqliteRowOwnedWrapper& view) noexcept {
+    int limit = static_cast<int>(N);
+    if (view.size() < limit) limit = view.size();
+    SqliteRowUtil::copy_from_wrapper(this->m_values, view, limit);
+}
+
+template <size_t N>
+inline SqliteRowOwnedWrapper SqliteRowStatic<N>::view() const noexcept {
+    return SqliteRowOwnedWrapper(this->data(), static_cast<int>(N));
+}
+
+inline SqliteRowDynamic::SqliteRowDynamic(const SqliteRowOwnedWrapper& view) : SqliteValueOwnedDynamicArray() {
+    int sz = view.size();
+    if (sz > 0) {
+        this->resize(sz);
+        SqliteRowUtil::copy_from_wrapper(this->m_values, view, sz);
+    }
+}
+
+inline SqliteRowOwnedWrapper SqliteRowDynamic::view() const noexcept {
+    return SqliteRowOwnedWrapper(this->data(), this->size());
+}
+
+inline bool SqliteRowDynamic::operator==(const SqliteRowDynamic& other) const noexcept {
+    return view() == other.view();
+}
+
+inline bool SqliteRowDynamic::operator<(const SqliteRowDynamic& other) const noexcept {
+    return view() < other.view();
+}
+
+// ============================================================================
+// 7. withSqliteRowOwned: Stack-Allocated Row Scope Dispatcher (1..8 cols)
+// ============================================================================
+
+/**
+ * @brief Zero-heap stack allocation dispatcher for small dynamic row materialization.
+ * 
+ * Invokes a user lambda with a stack-allocated buffer for sizes 1..8 (0 heap allocations).
+ * Falls back to dynamic heap allocation for sizes > 8.
+ * 
+ * @tparam Callable Lambda/Functor signature: `auto(SqliteRowOwnedWrapper row_wrapper)`
+ * @param size Requested number of columns (1..8 for stack, >8 uses heap fallback).
+ * @param fn Visitor callback receiving the mutable wrapper span.
+ * @return Return value of the user callback function.
+ */
+template <typename Callable>
+inline auto withSqliteRowOwned(int size, Callable&& fn) -> decltype(fn(SqliteRowOwnedWrapper())) {
+    switch (size) {
+        case 1: {
+            SqliteValueOwnedStaticArray<1> arr;
+            return fn(SqliteRowOwnedWrapper(arr.data(), 1));
+        }
+        case 2: {
+            SqliteValueOwnedStaticArray<2> arr;
+            return fn(SqliteRowOwnedWrapper(arr.data(), 2));
+        }
+        case 3: {
+            SqliteValueOwnedStaticArray<3> arr;
+            return fn(SqliteRowOwnedWrapper(arr.data(), 3));
+        }
+        case 4: {
+            SqliteValueOwnedStaticArray<4> arr;
+            return fn(SqliteRowOwnedWrapper(arr.data(), 4));
+        }
+        case 5: {
+            SqliteValueOwnedStaticArray<5> arr;
+            return fn(SqliteRowOwnedWrapper(arr.data(), 5));
+        }
+        case 6: {
+            SqliteValueOwnedStaticArray<6> arr;
+            return fn(SqliteRowOwnedWrapper(arr.data(), 6));
+        }
+        case 7: {
+            SqliteValueOwnedStaticArray<7> arr;
+            return fn(SqliteRowOwnedWrapper(arr.data(), 7));
+        }
+        case 8: {
+            SqliteValueOwnedStaticArray<8> arr;
+            return fn(SqliteRowOwnedWrapper(arr.data(), 8));
+        }
+        default: {
+            if (size <= 0) {
+                return fn(SqliteRowOwnedWrapper(nullptr, 0));
+            }
+            SqliteRowDynamic arr(size);
+            return fn(SqliteRowOwnedWrapper(arr.data(), size));
+        }
+    }
+}
+
+// ============================================================================
+// 8. Transparent Functors for Swiss Tables & B-Trees (SqliteRow*)
+// ============================================================================
+
+#ifndef SQLITE_DERIVE_TRANSPARENT_ROW_HASH_OVERLOADS
+#define SQLITE_DERIVE_TRANSPARENT_ROW_HASH_OVERLOADS \
+    inline size_t operator()(const SqliteRowOwnedWrapper& k) const noexcept { return static_cast<size_t>(k.hash()); } \
+    inline size_t operator()(const SqliteRowView& r) const noexcept         { return static_cast<size_t>(r.hash()); } \
+    inline size_t operator()(const SqliteValueViewArray& v) const noexcept  { return static_cast<size_t>(v.hash()); } \
+    inline size_t operator()(const SqliteRowDynamic& r) const noexcept      { return static_cast<size_t>(SqliteRowOwnedWrapper(r).hash()); } \
+    template <size_t N> \
+    inline size_t operator()(const SqliteRowStatic<N>& r) const noexcept    { return static_cast<size_t>(SqliteRowOwnedWrapper(r).hash()); } \
+    SQLITE_DERIVE_TRANSPARENT_SCALAR_HASH_OVERLOADS
+#endif
+
+/**
+ * @struct SqliteRowHash
+ * @brief Transparent 64-bit MurmurHash2 functor for row spans, containers, and primitives.
+ * 
+ * Enables zero-allocation heterogeneous hashing across SqliteRowOwnedWrapper spans,
+ * SqliteRowDynamic, SqliteRowStatic<N>, SqliteValueViewArray, strings, blobs, and primitives.
+ */
+struct SqliteRowHash {
+    using is_transparent = void;
+    SQLITE_DERIVE_TRANSPARENT_ROW_HASH_OVERLOADS
+};
+
+/**
+ * @struct SqliteRowEqual
+ * @brief Transparent equality functor for Swiss tables and hash map containers.
+ */
+SQLITE_DERIVE_TRANSPARENT_EQUAL(SqliteRowEqual)
+
+/**
+ * @struct SqliteRowLess
+ * @brief Transparent less-than functor for B-Tree and ordered map containers.
+ */
+SQLITE_DERIVE_TRANSPARENT_LESS(SqliteRowLess)
 
 #endif // SQLITE3_ROW_HPP

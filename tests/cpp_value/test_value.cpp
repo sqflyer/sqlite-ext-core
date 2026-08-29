@@ -42,12 +42,13 @@ void test_blob_types() {
 }
 
 void test_value_types(sqlite3* db) {
-    sqlite3_stmt* stmt;
+    sqlite3_stmt* stmt_int = nullptr;
+    sqlite3_stmt* stmt_text = nullptr;
     
     // Test Integer Value
-    sqlite3_prepare_v2(db, "SELECT 42;", -1, &stmt, nullptr);
-    sqlite3_step(stmt);
-    sqlite3_value* int_val = sqlite3_column_value(stmt, 0);
+    sqlite3_prepare_v2(db, "SELECT 42;", -1, &stmt_int, nullptr);
+    sqlite3_step(stmt_int);
+    sqlite3_value* int_val = sqlite3_column_value(stmt_int, 0);
     
     SqliteValueView view_int(int_val);
     SqliteValueOwned owned_int(int_val);
@@ -59,12 +60,10 @@ void test_value_types(sqlite3* db) {
     assert(!(view_int != owned_int));
     assert(view_int.hash() == owned_int.hash());
     
-    sqlite3_finalize(stmt);
-    
     // Test Text Value
-    sqlite3_prepare_v2(db, "SELECT 'hello';", -1, &stmt, nullptr);
-    sqlite3_step(stmt);
-    sqlite3_value* text_val = sqlite3_column_value(stmt, 0);
+    sqlite3_prepare_v2(db, "SELECT 'hello';", -1, &stmt_text, nullptr);
+    sqlite3_step(stmt_text);
+    sqlite3_value* text_val = sqlite3_column_value(stmt_text, 0);
     
     SqliteValueView view_text(text_val);
     SqliteValueOwned owned_text(text_val);
@@ -79,7 +78,8 @@ void test_value_types(sqlite3* db) {
     assert(owned_int != owned_text);
     assert(view_int != owned_text);
     
-    sqlite3_finalize(stmt);
+    sqlite3_finalize(stmt_int);
+    sqlite3_finalize(stmt_text);
 }
 
 void test_collation(sqlite3* db) {
@@ -983,6 +983,100 @@ void test_owned_value_arrays() {
     assert(unified_dyn.size() == 2);
     assert(unified_dyn.as_int64(0) == 777);
     assert(unified_dyn.as_text(1) == "unified");
+
+    // 4. Test SQLITE_DERIVE_ARRAY_HASH across array containers
+    assert(static_arr.hash() != 0);
+    assert(dyn_copy.hash() != 0);
+    assert(unified_static.hash() != 0);
+    assert(unified_dyn.hash() != 0);
+}
+
+void test_value_array_iterators(sqlite3* db) {
+    // 1. SqliteValueOwnedStaticArray<3> Iterator
+    SqliteValueOwnedStaticArray<3> s_arr;
+    s_arr[0] = 10LL;
+    s_arr[1] = 20LL;
+    s_arr[2] = 30LL;
+
+    sqlite3_int64 s_sum = 0;
+    int s_count = 0;
+    for (const SqliteValueOwned& val : s_arr) {
+        s_sum += val.as_int64();
+        s_count++;
+    }
+    assert(s_count == 3);
+    assert(s_sum == 60);
+
+    // 2. SqliteValueOwnedDynamicArray Iterator
+    SqliteValueOwnedDynamicArray d_arr(3);
+    d_arr[0] = SqliteValueOwned::from_text("alpha");
+    d_arr[1] = SqliteValueOwned::from_text("beta");
+    d_arr[2] = SqliteValueOwned::from_text("gamma");
+
+    int d_count = 0;
+    for (const SqliteValueOwned& val : d_arr) {
+        assert(val.type() == SQLITE_TEXT);
+        d_count++;
+    }
+    assert(d_count == 3);
+
+    // 3. SqliteValueOwnedArray<N> Unified Alias Iterators
+    SqliteValueOwnedArray<2> u_static;
+    u_static[0] = 100LL;
+    u_static[1] = 200LL;
+    sqlite3_int64 u_sum = 0;
+    for (const SqliteValueOwned& val : u_static) {
+        u_sum += val.as_int64();
+    }
+    assert(u_sum == 300);
+
+    SqliteValueOwnedArray<0> u_dyn(2);
+    u_dyn[0] = 5.5;
+    u_dyn[1] = 4.5;
+    double d_sum = 0.0;
+    for (const SqliteValueOwned& val : u_dyn) {
+        d_sum += val.as_double();
+    }
+    assert(d_sum == 10.0);
+
+    // 4. SqliteValueViewArray Iterator (via UDF argument mock / statement)
+    sqlite3_stmt* stmt = nullptr;
+    assert(sqlite3_prepare_v2(db, "SELECT 111, 'text_val', 3.14;", -1, &stmt, nullptr) == SQLITE_OK);
+    assert(sqlite3_step(stmt) == SQLITE_ROW);
+
+    sqlite3_value* vals[3];
+    vals[0] = sqlite3_column_value(stmt, 0);
+    vals[1] = sqlite3_column_value(stmt, 1);
+    vals[2] = sqlite3_column_value(stmt, 2);
+
+    SqliteValueViewArray v_arr(3, vals);
+    assert(v_arr.size() == 3);
+    int v_count = 0;
+    for (SqliteValueView val : v_arr) {
+        assert(!val.is_null());
+        v_count++;
+    }
+    assert(v_count == 3);
+
+    // 5. Empty Array Iterator
+    SqliteValueOwnedDynamicArray empty_dyn(0);
+    int empty_count = 0;
+    for (const SqliteValueOwned& val : empty_dyn) {
+        (void)val;
+        empty_count++;
+    }
+    assert(empty_count == 0);
+    assert(empty_dyn.begin() == empty_dyn.end());
+
+    SqliteValueViewArray empty_v_arr(0, nullptr);
+    for (SqliteValueView val : empty_v_arr) {
+        (void)val;
+        empty_count++;
+    }
+    assert(empty_count == 0);
+    assert(empty_v_arr.begin() == empty_v_arr.end());
+
+    sqlite3_finalize(stmt);
 }
 
 int main() {
@@ -1062,6 +1156,9 @@ int main() {
 
     printf("Testing SqliteValueOwned Arrays (Static, Dynamic, Unified)...\n");
     test_owned_value_arrays();
+
+    printf("Testing SqliteValue Array Iterators (Range-Based Loops)...\n");
+    test_value_array_iterators(db);
     
     sqlite3_close(db);
     sqlite3_shutdown();

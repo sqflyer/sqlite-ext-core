@@ -100,6 +100,11 @@ For a deeper dive into the specific mechanics and C++ paradigms used in individu
 - [**C++ Extension Tutorial**](example-cpp/README.md): Turnkey C++ example showcasing compilation, testing, and multi-language loading.
 - [**Pure C Extension Tutorial**](example-c/README.md): Turnkey Pure C (C99/C11) example demonstrating state management and UDF registration.
 
+### Key Indexing, Macro Synthesis & Reference Matrix
+- [**Row Key & Hash Indexing (`SqliteRowKey`)**](docs/ROW_KEY_ARCHITECTURE.md): 16-byte Small Buffer Optimization (SBO), single-scalar vs composite key dispatching, 64-bit MurmurHash2 composite hashing, and zero-allocation transparent lookups for B-Trees and Swiss Tables.
+- [**Unified Macro Architecture (`docs/MACROS.md`)**](docs/MACROS.md): 4-tier macro synthesizer suite for zero-overhead array accessors, composite hashing, range-based iterators, scalar & container relational operators, and C++20 transparent functors.
+- [**C++ Type & Container Comparison Matrix (`docs/COMPARISON_MATRIX.md`)**](docs/COMPARISON_MATRIX.md): Comprehensive comparative reference across all value types, containers, row views, macros, and transparent STL functors.
+
 ## 6. Dual Build System & Compiler Parity
 
 The repository maintains strict parity across two native build pipelines:
@@ -120,3 +125,12 @@ Because all code compiles with `-fno-exceptions` (`/EHs-c-`), allocation failure
 
 ### Multi-Translation-Unit & ODR Safety
 Large SQLite extensions often span multiple `.cpp` files. `sqlite3_ext_state.hpp` leverages C++11 template static member guarantees so that multiple translation units in the same extension shared library automatically link to a single unified state registry without duplicate symbol collisions or disjoint static instances.
+
+## 8. Unified Macro Synthesizers & Transparent Functors
+
+To enforce complete standard library independence while providing modern C++ ergonomics, `sqlite-ext-core` employs a unified macro synthesizer architecture:
+- **Array Accessors & Hashing (`SQLITE_DERIVE_ARRAY_ACCESSORS`, `SQLITE_DERIVE_ARRAY_HASH`)**: Inlined typed extractions and 64-bit MurmurHash2 composite hashing with $O(1)$ scalar fast-paths and sequential mixer folding.
+- **Range-Based Iteration (`SQLITE_DERIVE_ARRAY_ITERATOR`)**: Standard C++11 forward `Iterator`, `begin()`, and `end()` for range-based for loops (`for (auto val : container)`) across all array, row, and key types.
+- **Relational Operators (`SQLITE_DERIVE_CONTAINER_RELATIONAL_OPS`, `SQLITE_DERIVE_ALL_SCALAR_RELATIONAL_OPS`)**: Full operator suites (`==`, `!=`, `<`, `<=`, `>`, `>=`) supporting multi-column lexicographical ordering and scalar comparisons honoring SQLite's type collation (`NULL < NUMERIC < TEXT < BLOB`).
+- **C++20 Transparent Functors (`SQLITE_DERIVE_TRANSPARENT_EQUAL`, `SQLITE_DERIVE_TRANSPARENT_LESS`)**: Synthesizes `using is_transparent = void;` functors enabling zero-allocation lookups in `std::unordered_map` (Swiss Tables) and `std::map` (B-Trees).
+

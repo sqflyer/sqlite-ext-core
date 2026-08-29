@@ -207,7 +207,7 @@ public:
         return SqliteBufferSlice(static_cast<const char*>(m_data) + offset, actual_length);
     }
     
-    /** @brief Computes a 64-bit FNV-1a hash of the buffer. */
+    /** @brief Computes a 64-bit MurmurHash2 of the buffer. */
     inline unsigned long long hash() const {
         return SqliteHashUtil::hash(m_data, static_cast<int>(m_size));
     }

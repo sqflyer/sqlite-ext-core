@@ -50,8 +50,8 @@ Conventional C++ database abstractions introduce severe performance penalties:
                           ▼                               ▼
 ┌───────────────────────────────────────────────────────────────────────────────────────┐
 │                OWNED ROW CLASSES (sqlite3_row.hpp)                                    │
-│   - Adds row-domain API: .view(), .column_count(), operator SqliteRowView()           │
-│   - Construction from SqliteRowView via SqliteRowUtil::copy_from_view                 │
+│   - Adds row-domain API: .view() -> SqliteRowOwnedWrapper, .column_count()            │
+│   - Construction from SqliteRowView / SqliteRowOwnedWrapper via SqliteRowUtil        │
 │                                                                                       │
 │   SqliteRowStatic<N>                           SqliteRowDynamic                       │
 │   - Compile-time N columns                     - Runtime dynamic column count         │
@@ -261,7 +261,72 @@ namespace SqliteRowUtil {
 
 ---
 
-## 8. Assembly-Level Execution Characteristics
+## 8. Zero-Allocation Row Span Architecture (`SqliteRowOwnedWrapper`)
+
+`SqliteRowOwnedWrapper` is a lightweight 16-byte span over contiguous `SqliteValueOwned` buffers:
+
+```cpp
+class SqliteRowOwnedWrapper {
+private:
+    SqliteValueOwned* m_data; // 8 Bytes (Offset 0..7)
+    int               m_len;  // 4 Bytes (Offset 8..11, 4B pad)
+
+    // Typed extraction accessors & hashing synthesized via:
+    SQLITE_DERIVE_ARRAY_ACCESSORS
+    SQLITE_DERIVE_ARRAY_HASH
+};
+```
+
+### Architectural Benefits
+1. **Pass-by-Value in Registers**: Sized at exactly 16 bytes, it fits entirely in two 64-bit general-purpose CPU registers (`rax`, `rdx`).
+2. **Unified Span Abstraction**: Enables writing algorithms that operate identically over static rows (`SqliteRowStatic<N>`), dynamic rows (`SqliteRowDynamic`), raw C-arrays, and single values without template bloat.
+3. **Macro-Synthesized Typed Extraction**: Incorporates `SQLITE_DERIVE_ARRAY_ACCESSORS` and `SQLITE_DERIVE_ARRAY_HASH` for zero-overhead inlined column reads and hashing.
+
+---
+
+## 9. Zero-Heap Stack Scope Dispatcher (`withSqliteRowOwned`)
+
+In many SQLite extension operations (such as virtual table filter transformations or dynamic row construction), the column count $N$ is only known at runtime but is typically small ($N \le 8$). 
+
+Calling `sqlite3_malloc64` for such transient rows creates unnecessary allocator lock contention. `withSqliteRowOwned` implements a switch-driven stack specialization engine:
+
+```
+Runtime Size Request:
+     ┌────────────────────────────────────────────────────────┐
+     │                      withSqliteRowOwned(size, fn)      │
+     └────────────────────────────────────────────────────────┘
+                                  │
+         ┌────────────────────────┴────────────────────────┐
+         ▼ (size in 1..8)                                  ▼ (size > 8)
+┌──────────────────────────────────────┐        ┌─────────────────────────────┐
+│  Stack-Allocated Fixed Array         │        │  Dynamic Heap Array         │
+│  SqliteValueOwnedStaticArray<N> arr  │        │  SqliteRowDynamic arr(size) │
+│  (0 mallocs, stack-resident)         │        │  (sqlite3_malloc64-managed) │
+└──────────────────────────────────────┘        └─────────────────────────────┘
+                  │                                            │
+                  └──────────────────────┬─────────────────────┘
+                                         ▼
+                         fn(SqliteRowOwnedWrapper(arr.data(), size))
+```
+
+### Compiler Optimization
+Because each branch instantiates an exact `SqliteValueOwnedStaticArray<N>`, the compiler allocates exact stack frames and vectorizes column initializations via SIMD registers.
+
+---
+
+## 10. Transparent Relational Operator Engine & STL Functors
+
+Both `SqliteRowView` and `SqliteRowOwnedWrapper` incorporate the transparent relational macro engine (`SQLITE_DERIVE_RELATIONAL_OPS`, `SQLITE_DERIVE_SCALAR_RELATIONAL_OPS`, `SQLITE_DERIVE_REVERSE_RELATIONAL_OPS`):
+- **Universal Cross-Type Comparisons**: Evaluates relational expressions between row views/wrappers and `SqliteValueOwned`, `SqliteValueView`, `SqliteStringView`, `SqliteBlobView`, `sqlite3_int64`, `int`, `double`, `bool`, and `const char*` with zero temporary copies.
+- **Symmetric Operators**: Reverse operators ensure expressions like `42LL == row` or `"hello" == row` are fully symmetric.
+- **Transparent STL & Swiss Table Functors** (`is_transparent = void`):
+  - **`SqliteRowHash`**: Computes composite 64-bit MurmurHash2 digests using `SqliteHashUtil::combine()`.
+  - **`SqliteRowEqual`**: Transparent relational equality across row spans, dynamic rows, static rows, and primitive views.
+  - **`SqliteRowLess`**: Strict lexicographical ordering preserving SQLite's native type collation hierarchy.
+
+---
+
+## 11. Assembly-Level Execution Characteristics
 
 Modern optimizing compilers (GCC, Clang, MSVC) compile row operations into minimal instruction sequences:
 
@@ -275,7 +340,7 @@ Modern optimizing compilers (GCC, Clang, MSVC) compile row operations into minim
 
 ---
 
-## 8. Freestanding Memory Guarantees (`-nostdlib++`)
+## 12. Freestanding Memory Guarantees (`-nostdlib++`)
 
 All classes in `sqlite3_row.hpp` adhere strictly to freestanding systems development standards:
 - **No Standard Library Allocators**: Dynamic memory is allocated strictly through `sqlite3_malloc64` and freed via `sqlite3_free`.

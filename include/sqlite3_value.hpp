@@ -88,27 +88,7 @@ namespace SqliteMemoryUtil {
     }
 }
 
-namespace SqliteHashUtil {
-    /**
-     * @brief Shared FNV-1a hash utility for fast, inline hashing.
-     */
-    static const unsigned long long FNV_OFFSET_BASIS = 0xcbf29ce484222325ULL;
-    static const unsigned long long FNV_PRIME = 0x100000001b3ULL;
-
-    inline unsigned long long mix(unsigned long long h, const void* ptr, int len) {
-        if (!ptr || len <= 0) return h;
-        const unsigned char* p = static_cast<const unsigned char*>(ptr);
-        for (int i = 0; i < len; ++i) {
-            h ^= p[i];
-            h *= FNV_PRIME;
-        }
-        return h;
-    }
-
-    inline unsigned long long hash(const void* ptr, int len) {
-        return mix(FNV_OFFSET_BASIS, ptr, len);
-    }
-}
+#include "sqlite3_hash.hpp"
 
 /**
  * @file sqlite3_value.hpp
@@ -131,7 +111,7 @@ namespace SqliteHashUtil {
  */
 namespace SqliteStringUtil {
     /**
-     * @brief Computes a 64-bit FNV-1a hash of a character array.
+     * @brief Computes a 64-bit MurmurHash2 of a character array.
      * @param val Pointer to the string data.
      * @param len Length of the string in bytes.
      * @return 64-bit hash value.
@@ -226,8 +206,18 @@ public:
     int length() const {
         return m_size;
     }
+
+    /** @brief STL-compatible size accessor. */
+    size_t size() const noexcept {
+        return static_cast<size_t>(m_size);
+    }
+
+    /** @brief STL-compatible empty check. */
+    bool empty() const noexcept {
+        return m_size == 0;
+    }
     
-    /** @brief Computes the FNV-1a hash of the string. */
+    /** @brief Computes the MurmurHash2 of the string. */
     unsigned long long hash() const {
         return SqliteStringUtil::hash(m_data, m_size);
     }
@@ -310,6 +300,16 @@ public:
             sqlite3_str_appendall(m_str, text);
         }
     }
+
+    /**
+     * @brief Creates a new string and copies len bytes of the provided text.
+     */
+    SqliteStringOwned(const char* text, int len) {
+        m_str = sqlite3_str_new(nullptr);
+        if (text && len > 0) {
+            sqlite3_str_append(m_str, text, len);
+        }
+    }
     
     /**
      * @brief Destructor. Automatically frees the memory if it was never finished.
@@ -320,9 +320,26 @@ public:
         }
     }
     
-    // Disallow copying to prevent double-free
-    SqliteStringOwned(const SqliteStringOwned&) = delete;
-    SqliteStringOwned& operator=(const SqliteStringOwned&) = delete;
+    // Copy constructor (safe duplicate of string builder)
+    SqliteStringOwned(const SqliteStringOwned& other) {
+        m_str = sqlite3_str_new(nullptr);
+        if (other.m_str) {
+            sqlite3_str_append(m_str, sqlite3_str_value(other.m_str), sqlite3_str_length(other.m_str));
+        }
+    }
+
+    SqliteStringOwned& operator=(const SqliteStringOwned& other) {
+        if (this != &other) {
+            if (m_str) {
+                sqlite3_free(sqlite3_str_finish(m_str));
+            }
+            m_str = sqlite3_str_new(nullptr);
+            if (other.m_str) {
+                sqlite3_str_append(m_str, sqlite3_str_value(other.m_str), sqlite3_str_length(other.m_str));
+            }
+        }
+        return *this;
+    }
     
     // Allow moving
     SqliteStringOwned(SqliteStringOwned&& other) noexcept : m_str(other.m_str) {
@@ -429,7 +446,7 @@ public:
         return result;
     }
 
-    /** @brief Computes the FNV-1a hash of the built string. */
+    /** @brief Computes the MurmurHash2 of the built string. */
     unsigned long long hash() const {
         return SqliteStringUtil::hash(value(), length());
     }
@@ -484,7 +501,7 @@ inline bool SqliteStringView::operator<(const SqliteStringOwned& other) const {
  */
 namespace SqliteBlobUtil {
     /**
-     * @brief Computes a 64-bit FNV-1a hash of a binary buffer.
+     * @brief Computes a 64-bit MurmurHash2 of a binary buffer.
      */
     inline unsigned long long hash(const void* val, int len) {
         return SqliteHashUtil::hash(val, len);
@@ -575,7 +592,7 @@ public:
         return m_size;
     }
 
-    /** @brief Computes the FNV-1a hash of the binary payload. */
+    /** @brief Computes the MurmurHash2 of the binary payload. */
     unsigned long long hash() const {
         return SqliteBlobUtil::hash(m_data, m_size);
     }
@@ -705,7 +722,7 @@ public:
         return is_valid();
     }
 
-    /** @brief Computes the FNV-1a hash of the owned payload. */
+    /** @brief Computes the MurmurHash2 of the owned payload. */
     unsigned long long hash() const {
         return SqliteBlobUtil::hash(m_data, m_size);
     }
@@ -772,13 +789,13 @@ namespace SqliteValueUtil {
      */
     inline unsigned long long hash(const sqlite3_value* val) {
         if (!val) {
-            return SqliteHashUtil::FNV_OFFSET_BASIS;
+            return SqliteHashUtil::DEFAULT_SEED;
         }
         
         sqlite3_value* mut_val = const_cast<sqlite3_value*>(val);
         int t = sqlite3_value_type(mut_val);
         
-        unsigned long long h = SqliteHashUtil::FNV_OFFSET_BASIS;
+        unsigned long long h = SqliteHashUtil::DEFAULT_SEED;
         
         switch (t) {
             case SQLITE_INTEGER: {
@@ -1052,6 +1069,9 @@ public:
     /** @brief Internal helper to access integer value for heterogeneous lookups. */
     sqlite3_int64 as_int64() const { return m_val ? sqlite3_value_int64(const_cast<sqlite3_value*>(m_val)) : 0; }
 
+    /** @brief Internal helper to access integer value as 32-bit signed int. */
+    inline int as_int() const noexcept { return static_cast<int>(as_int64()); }
+
     /** @brief Internal helper to access double value for heterogeneous lookups. */
     double as_double() const { return m_val ? sqlite3_value_double(const_cast<sqlite3_value*>(m_val)) : 0.0; }
 
@@ -1192,6 +1212,16 @@ struct SqliteOwnedValueTag {
     /** @brief Returns the byte length of inline text or blob payload (0..14). */
     inline uint8_t len() const noexcept {
         return static_cast<uint8_t>(raw & 0x0F);
+    }
+
+    /** @brief Checks if the tag indicates a multi-element row key container (raw == 0). */
+    inline bool is_row_key() const noexcept {
+        return raw == 0;
+    }
+
+    /** @brief Sets the tag to represent a multi-element row key container (raw = 0). */
+    inline void set_as_row_key() noexcept {
+        raw = 0;
     }
 };
 static_assert(sizeof(SqliteOwnedValueTag) == 1, "SqliteOwnedValueTag must be exactly 1 byte!");
@@ -1517,6 +1547,11 @@ public:
         init_integer(val ? 1LL : 0LL, subtype, aff);
     }
 
+    /** @brief Constructs an owned string value from a null-terminated C-string. */
+    explicit SqliteValueOwned(const char* text, uint8_t subtype = SQLITE_SUBTYPE_NONE) {
+        init_text(text, -1, subtype);
+    }
+
     // ========================================================================
     // STATIC FACTORY CONSTRUCTORS FOR SUBTYPES & INLINE PAYLOADS
     // ========================================================================
@@ -1594,9 +1629,46 @@ public:
         }
     }
 
-    // Disallow copying to prevent double-free
-    SqliteValueOwned(const SqliteValueOwned&) = delete;
-    SqliteValueOwned& operator=(const SqliteValueOwned&) = delete;
+    // Copy constructor (safe deep clone for heap values, 0-allocation memcpy for SBO)
+    SqliteValueOwned(const SqliteValueOwned& other) {
+        if (!other.is_heap_allocated()) {
+            memcpy(static_cast<void*>(this), &other, sizeof(SqliteValueOwned));
+        } else {
+            if (other.m_sqlite.payload.pValue) {
+                m_sqlite.payload.pValue = sqlite3_value_dup(other.m_sqlite.payload.pValue);
+            } else {
+                m_sqlite.payload.pValue = nullptr;
+            }
+            m_sqlite.heap_len = other.m_sqlite.heap_len;
+            m_sqlite.affinity = other.m_sqlite.affinity;
+            m_sqlite.reserved = other.m_sqlite.reserved;
+            m_sqlite.subtype = other.m_sqlite.subtype;
+            set_tag(static_cast<uint8_t>(other.type()), true, 0);
+        }
+    }
+
+    SqliteValueOwned& operator=(const SqliteValueOwned& other) {
+        if (this != &other) {
+            if (is_heap_allocated() && m_sqlite.payload.pValue) {
+                sqlite3_value_free(m_sqlite.payload.pValue);
+            }
+            if (!other.is_heap_allocated()) {
+                memcpy(static_cast<void*>(this), &other, sizeof(SqliteValueOwned));
+            } else {
+                if (other.m_sqlite.payload.pValue) {
+                    m_sqlite.payload.pValue = sqlite3_value_dup(other.m_sqlite.payload.pValue);
+                } else {
+                    m_sqlite.payload.pValue = nullptr;
+                }
+                m_sqlite.heap_len = other.m_sqlite.heap_len;
+                m_sqlite.affinity = other.m_sqlite.affinity;
+                m_sqlite.reserved = other.m_sqlite.reserved;
+                m_sqlite.subtype = other.m_sqlite.subtype;
+                set_tag(static_cast<uint8_t>(other.type()), true, 0);
+            }
+        }
+        return *this;
+    }
 
     // Allow moving
     SqliteValueOwned(SqliteValueOwned&& other) noexcept {
@@ -1755,6 +1827,9 @@ public:
     /** @brief Internal helper to access SBO integer for heterogeneous lookups. */
     sqlite3_int64 as_int64() const noexcept { return m_sqlite.payload.iValue; }
 
+    /** @brief Access SBO integer as 32-bit signed int. */
+    inline int as_int() const noexcept { return static_cast<int>(as_int64()); }
+
     /** @brief Internal helper to access SBO double for heterogeneous lookups. */
     double as_double() const noexcept { return m_sqlite.payload.dValue; }
     
@@ -1783,15 +1858,15 @@ public:
     }
 
     /** 
-     * @brief Computes a polymorphic FNV-1a hash of the value.
+     * @brief Computes a polymorphic 64-bit MurmurHash2 of the value.
      */
     unsigned long long hash() const {
         switch (type()) {
             case SQLITE_INTEGER:
-                return SqliteHashUtil::mix(SqliteHashUtil::FNV_OFFSET_BASIS, &m_sqlite.payload.iValue, sizeof(m_sqlite.payload.iValue));
+                return SqliteHashUtil::mix(SqliteHashUtil::DEFAULT_SEED, &m_sqlite.payload.iValue, sizeof(m_sqlite.payload.iValue));
             case SQLITE_FLOAT: {
                 double d = m_sqlite.payload.dValue == 0.0 ? 0.0 : m_sqlite.payload.dValue;
-                return SqliteHashUtil::mix(SqliteHashUtil::FNV_OFFSET_BASIS, &d, sizeof(d));
+                return SqliteHashUtil::mix(SqliteHashUtil::DEFAULT_SEED, &d, sizeof(d));
             }
             case SQLITE_TEXT:
             case SQLITE_BLOB:
@@ -1801,7 +1876,7 @@ public:
                 return SqliteValueUtil::hash(m_sqlite.payload.pValue);
             case SQLITE_NULL:
             default:
-                return SqliteHashUtil::FNV_OFFSET_BASIS;
+                return SqliteHashUtil::DEFAULT_SEED;
         }
     }
     
@@ -2215,45 +2290,147 @@ SQLITE_DEF_VAL_PRIM_OPS(SqliteValueView)
 // TRANSPARENT HASH MAP FUNCTORS (C++20 Heterogeneous Lookups)
 // ============================================================================
 
+#ifndef SQLITE_DERIVE_TRANSPARENT_EQUAL
+#define SQLITE_DERIVE_TRANSPARENT_EQUAL(FunctorName) \
+    struct FunctorName { \
+        using is_transparent = void; \
+        template <typename T, typename U> \
+        inline bool operator()(const T& a, const U& b) const noexcept { \
+            return a == b; \
+        } \
+    };
+#endif
+
+#ifndef SQLITE_DERIVE_TRANSPARENT_LESS
+#define SQLITE_DERIVE_TRANSPARENT_LESS(FunctorName) \
+    struct FunctorName { \
+        using is_transparent = void; \
+        template <typename T, typename U> \
+        inline bool operator()(const T& a, const U& b) const noexcept { \
+            return a < b; \
+        } \
+    };
+#endif
+
+#ifndef SQLITE_DERIVE_TRANSPARENT_SCALAR_HASH_OVERLOADS
+#define SQLITE_DERIVE_TRANSPARENT_SCALAR_HASH_OVERLOADS \
+    inline size_t operator()(const SqliteValueOwned& val) const noexcept  { return static_cast<size_t>(val.hash()); } \
+    inline size_t operator()(const SqliteValueView& val) const noexcept   { return static_cast<size_t>(val.hash()); } \
+    inline size_t operator()(const SqliteStringView& str) const noexcept  { return static_cast<size_t>(str.hash()); } \
+    inline size_t operator()(const SqliteStringOwned& str) const noexcept { return static_cast<size_t>(str.hash()); } \
+    inline size_t operator()(const SqliteBlobView& blob) const noexcept   { return static_cast<size_t>(blob.hash()); } \
+    inline size_t operator()(const SqliteBlobOwned& blob) const noexcept  { return static_cast<size_t>(blob.hash()); } \
+    inline size_t operator()(const char* str) const noexcept { \
+        return static_cast<size_t>(SqliteStringUtil::hash(str, SqliteStringUtil::sqlite_strlen(str))); \
+    } \
+    inline size_t operator()(sqlite3_int64 i) const noexcept { \
+        return static_cast<size_t>(SqliteHashUtil::hash(&i, sizeof(i))); \
+    } \
+    inline size_t operator()(int i) const noexcept { \
+        sqlite3_int64 val = i; \
+        return static_cast<size_t>(SqliteHashUtil::hash(&val, sizeof(val))); \
+    } \
+    inline size_t operator()(double d) const noexcept { \
+        return static_cast<size_t>(SqliteHashUtil::hash(&d, sizeof(d))); \
+    } \
+    inline size_t operator()(float f) const noexcept { \
+        double d = f; \
+        return static_cast<size_t>(SqliteHashUtil::hash(&d, sizeof(d))); \
+    } \
+    inline size_t operator()(bool b) const noexcept { \
+        sqlite3_int64 val = b ? 1 : 0; \
+        return static_cast<size_t>(SqliteHashUtil::hash(&val, sizeof(val))); \
+    } \
+    inline size_t operator()(uint32_t u) const noexcept { \
+        sqlite3_int64 val = u; \
+        return static_cast<size_t>(SqliteHashUtil::hash(&val, sizeof(val))); \
+    } \
+    inline size_t operator()(uint64_t u) const noexcept { \
+        return static_cast<size_t>(SqliteHashUtil::hash(&u, sizeof(u))); \
+    }
+#endif
+
 /**
  * @brief A transparent Hash functor for std::unordered_map.
  * Enables zero-allocation heterogeneous lookups across Strings, Blobs, and Primitives.
  */
 struct SqliteValueHash {
     using is_transparent = void;
-
-    // Polymorphic Values
-    inline size_t operator()(const SqliteValueOwned& val) const { return static_cast<size_t>(val.hash()); }
-    inline size_t operator()(const SqliteValueView& val) const { return static_cast<size_t>(val.hash()); }
-
-    // Strings
-    inline size_t operator()(const SqliteStringOwned& str) const { return static_cast<size_t>(str.hash()); }
-    inline size_t operator()(const SqliteStringView& str) const { return static_cast<size_t>(str.hash()); }
-    inline size_t operator()(const char* str) const { return static_cast<size_t>(SqliteStringUtil::hash(str, SqliteStringUtil::sqlite_strlen(str))); }
-
-    // Blobs
-    inline size_t operator()(const SqliteBlobOwned& blob) const { return static_cast<size_t>(blob.hash()); }
-    inline size_t operator()(const SqliteBlobView& blob) const { return static_cast<size_t>(blob.hash()); }
-
-    // Primitives
-    inline size_t operator()(sqlite3_int64 i) const { return static_cast<size_t>(SqliteHashUtil::hash(&i, sizeof(i))); }
-    inline size_t operator()(int i) const { sqlite3_int64 val = i; return static_cast<size_t>(SqliteHashUtil::hash(&val, sizeof(val))); }
-    inline size_t operator()(double d) const { return static_cast<size_t>(SqliteHashUtil::hash(&d, sizeof(d))); }
+    SQLITE_DERIVE_TRANSPARENT_SCALAR_HASH_OVERLOADS
 };
 
 /**
- * @brief A transparent Equality functor for std::unordered_map.
- * Enables zero-allocation heterogeneous lookups across Strings, Blobs, and Primitives.
+ * @brief Transparent Equality functor for std::unordered_map.
  */
-struct SqliteValueEqual {
-    using is_transparent = void;
+SQLITE_DERIVE_TRANSPARENT_EQUAL(SqliteValueEqual)
 
-    // The core polymorphic equality relies on the heavily overloaded operator== macros.
-    template <typename T, typename U>
-    inline bool operator()(const T& a, const U& b) const {
-        return a == b;
+/**
+ * @brief Transparent Less-Than functor for std::map / B-Trees.
+ */
+SQLITE_DERIVE_TRANSPARENT_LESS(SqliteValueLess)
+
+// ============================================================================
+// Array Macros (Accessors, Hashing, and Range-Based Iterators)
+// ============================================================================
+
+#ifndef SQLITE_DERIVE_ARRAY_HASH
+/**
+ * @brief Macro helper to synthesize uniform, zero-overhead MurmurHash2 composite hashing
+ *        across all array/tabular containers (SqliteValueViewArray, SqliteValueOwnedStaticArray,
+ *        SqliteValueOwnedDynamicArray, SqliteRowView, SqliteRowOwnedWrapper, SqliteRowKeyOwned).
+ */
+#define SQLITE_DERIVE_ARRAY_HASH \
+    inline unsigned long long hash() const noexcept { \
+        int sz = this->size(); \
+        if (sz == 0) return SqliteHashUtil::DEFAULT_SEED; \
+        if (sz == 1) return (*this)[0].hash(); \
+        unsigned long long h = SqliteHashUtil::DEFAULT_SEED; \
+        for (int i = 0; i < sz; ++i) { \
+            h = SqliteHashUtil::combine(h, (*this)[i].hash()); \
+        } \
+        return h; \
     }
-};
+#endif
+
+#ifndef SQLITE_DERIVE_ARRAY_ACCESSORS
+/**
+ * @brief Macro helper to synthesize uniform, zero-overhead indexed typed extraction accessors
+ *        (as_int64, as_int, as_double, as_text, as_blob, as_bool, is_null, type, subtype)
+ *        across all array/tabular containers.
+ */
+#define SQLITE_DERIVE_ARRAY_ACCESSORS \
+    inline sqlite3_int64    as_int64(int index = 0) const noexcept { return (*this)[index].as_int64(); } \
+    inline int              as_int(int index = 0)   const noexcept { return (*this)[index].as_int(); } \
+    inline double           as_double(int index = 0) const noexcept { return (*this)[index].as_double(); } \
+    inline SqliteStringView as_text(int index = 0)   const noexcept { return (*this)[index].as_text(); } \
+    inline SqliteBlobView   as_blob(int index = 0)   const noexcept { return (*this)[index].as_blob(); } \
+    inline bool             as_bool(int index = 0)   const noexcept { return (*this)[index].as_bool(); } \
+    inline bool             is_null(int index = 0)   const noexcept { return (*this)[index].is_null(); } \
+    inline int              type(int index = 0)      const noexcept { return (*this)[index].type(); } \
+    inline uint8_t          subtype(int index = 0)   const noexcept { return (*this)[index].subtype(); }
+#endif
+
+#ifndef SQLITE_DERIVE_ARRAY_ITERATOR
+/**
+ * @brief Macro helper to synthesize standard C++11 forward iterator and begin()/end()
+ *        enabling range-based for loops across all array/row types.
+ */
+#define SQLITE_DERIVE_ARRAY_ITERATOR(ContainerType, ElementType) \
+    class Iterator { \
+    private: \
+        const ContainerType* m_array; \
+        int                  m_idx; \
+    public: \
+        inline Iterator(const ContainerType* arr, int idx) noexcept : m_array(arr), m_idx(idx) {} \
+        inline ElementType operator*() const noexcept { return (*m_array)[m_idx]; } \
+        inline Iterator& operator++() noexcept { ++m_idx; return *this; } \
+        inline Iterator operator++(int) noexcept { Iterator tmp = *this; ++m_idx; return tmp; } \
+        inline bool operator==(const Iterator& o) const noexcept { return m_idx == o.m_idx && m_array == o.m_array; } \
+        inline bool operator!=(const Iterator& o) const noexcept { return !(*this == o); } \
+    }; \
+    inline Iterator begin() const noexcept { return Iterator(this, 0); } \
+    inline Iterator end() const noexcept { return Iterator(this, this->size()); }
+#endif
 
 #ifndef SQLITE3_VALUE_VIEW_ARRAY_DEFINED
 #define SQLITE3_VALUE_VIEW_ARRAY_DEFINED
@@ -2380,107 +2557,10 @@ public:
      */
     inline SqliteValueView at(int index) const noexcept { return (*this)[index]; }
 
-    // =========================================================================
-    // Direct Typed Value Extractions
-    // =========================================================================
-
-    /**
-     * @brief Extracts argument value as a 64-bit signed integer.
-     * 
-     * @param index 0-indexed argument position.
-     * @return 64-bit integer value (or 0 if NULL / invalid).
-     */
-    inline sqlite3_int64 as_int64(int index) const noexcept { return (*this)[index].as_int64(); }
-
-    /**
-     * @brief Extracts argument value as a double-precision floating point number.
-     * 
-     * @param index 0-indexed argument position.
-     * @return Double value (or 0.0 if NULL / invalid).
-     */
-    inline double as_double(int index) const noexcept { return (*this)[index].as_double(); }
-
-    /**
-     * @brief Extracts argument value as a zero-allocation `SqliteStringView`.
-     * 
-     * @param index 0-indexed argument position.
-     * @return String view pointing to SQLite's internal UTF-8 text buffer.
-     */
-    inline SqliteStringView as_text(int index) const noexcept { return (*this)[index].as_text(); }
-
-    /**
-     * @brief Extracts argument value as a zero-allocation `SqliteBlobView`.
-     * 
-     * @param index 0-indexed argument position.
-     * @return Binary view pointing to SQLite's internal BLOB buffer.
-     */
-    inline SqliteBlobView as_blob(int index) const noexcept { return (*this)[index].as_blob(); }
-
-    /**
-     * @brief Evaluates argument value as a boolean (non-zero integer evaluates to true).
-     * 
-     * @param index 0-indexed argument position.
-     * @return True if non-zero, false otherwise.
-     */
-    inline bool as_bool(int index) const noexcept { return (*this)[index].as_bool(); }
-
-    /**
-     * @brief Checks if the argument at the given index is SQLITE_NULL.
-     * 
-     * @param index 0-indexed argument position.
-     * @return True if NULL or out of bounds, false otherwise.
-     */
-    inline bool is_null(int index) const noexcept { return (*this)[index].is_null(); }
-
-    /**
-     * @brief Returns the SQLite fundamental datatype code for the argument.
-     * 
-     * @param index 0-indexed argument position.
-     * @return SQLITE_INTEGER, SQLITE_FLOAT, SQLITE_TEXT, SQLITE_BLOB, or SQLITE_NULL.
-     */
-    inline int type(int index) const noexcept { return (*this)[index].type(); }
-
-    /**
-     * @brief Returns the 8-bit SQLite subtype for the argument (e.g. JSON, UUID, Vector).
-     * 
-     * @param index 0-indexed argument position.
-     * @return 8-bit unsigned subtype code (0 if none / SQLITE_SUBTYPE_NONE).
-     */
-    inline uint8_t subtype(int index) const noexcept { return (*this)[index].subtype(); }
-
-    // =========================================================================
-    // Range-Based For Loop Iterator
-    // =========================================================================
-
-    /**
-     * @brief Forward iterator over arguments enabling range-based for loops.
-     * 
-     * Example:
-     * @code
-     * for (SqliteValueView arg : args) {
-     *     printf("Arg type: %d\n", arg.type());
-     * }
-     * @endcode
-     */
-    class Iterator {
-    private:
-        const SqliteValueViewArray* m_array;
-        int                         m_idx;
-
-    public:
-        inline Iterator(const SqliteValueViewArray* arr, int idx) noexcept : m_array(arr), m_idx(idx) {}
-        inline SqliteValueView operator*() const noexcept { return (*m_array)[m_idx]; }
-        inline Iterator& operator++() noexcept { ++m_idx; return *this; }
-        inline Iterator operator++(int) noexcept { Iterator tmp = *this; ++m_idx; return tmp; }
-        inline bool operator==(const Iterator& o) const noexcept { return m_idx == o.m_idx && m_array == o.m_array; }
-        inline bool operator!=(const Iterator& o) const noexcept { return !(*this == o); }
-    };
-
-    /** @brief Returns an iterator to the first argument. */
-    inline Iterator begin() const noexcept { return Iterator(this, 0); }
-
-    /** @brief Returns an iterator to the end of the argument array. */
-    inline Iterator end() const noexcept { return Iterator(this, len); }
+    // Typed Column Extraction Accessors, Composite Hashing & Iterator
+    SQLITE_DERIVE_ARRAY_ACCESSORS
+    SQLITE_DERIVE_ARRAY_HASH
+    SQLITE_DERIVE_ARRAY_ITERATOR(SqliteValueViewArray, SqliteValueView)
 };
 
 #ifndef SQLITE3_UDF_ARGS_DEFINED
@@ -2598,71 +2678,10 @@ public:
      * 
      * @return Mutable pointer to the first element.
      */
-    inline SqliteValueOwned* data() noexcept { return m_values; }
-
-    /**
-     * @brief Extracts element value as a 64-bit integer.
-     * 
-     * @param index 0-indexed element position.
-     * @return 64-bit integer value (or 0 if NULL / invalid).
-     */
-    inline sqlite3_int64 as_int64(int index) const noexcept { return (*this)[index].as_int64(); }
-
-    /**
-     * @brief Extracts element value as a double-precision float.
-     * 
-     * @param index 0-indexed element position.
-     * @return Double value (or 0.0 if NULL / invalid).
-     */
-    inline double as_double(int index) const noexcept { return (*this)[index].as_double(); }
-
-    /**
-     * @brief Extracts element value as a zero-allocation SqliteStringView.
-     * 
-     * @param index 0-indexed element position.
-     * @return String view pointing to the underlying text buffer.
-     */
-    inline SqliteStringView as_text(int index) const noexcept { return (*this)[index].as_text(); }
-
-    /**
-     * @brief Extracts element value as a zero-allocation SqliteBlobView.
-     * 
-     * @param index 0-indexed element position.
-     * @return Blob view pointing to the underlying binary buffer.
-     */
-    inline SqliteBlobView as_blob(int index) const noexcept { return (*this)[index].as_blob(); }
-
-    /**
-     * @brief Evaluates element value as a boolean (non-zero integer is true).
-     * 
-     * @param index 0-indexed element position.
-     * @return True if non-zero integer, false otherwise.
-     */
-    inline bool as_bool(int index) const noexcept { return (*this)[index].as_bool(); }
-
-    /**
-     * @brief Checks if the specified element is SQLITE_NULL.
-     * 
-     * @param index 0-indexed element position.
-     * @return True if NULL, false otherwise.
-     */
-    inline bool is_null(int index) const noexcept { return (*this)[index].is_null(); }
-
-    /**
-     * @brief Returns the SQLite fundamental datatype code for the element.
-     * 
-     * @param index 0-indexed element position.
-     * @return SQLITE_INTEGER, SQLITE_FLOAT, SQLITE_TEXT, SQLITE_BLOB, or SQLITE_NULL.
-     */
-    inline int type(int index) const noexcept { return (*this)[index].type(); }
-
-    /**
-     * @brief Returns the 8-bit SQLite subtype for the element (e.g. JSON, UUID, Vector).
-     * 
-     * @param index 0-indexed element position.
-     * @return 8-bit unsigned subtype code (0 if none).
-     */
-    inline uint8_t subtype(int index) const noexcept { return (*this)[index].subtype(); }
+    // Typed Column Extraction Accessors, Composite Hashing & Iterator
+    SQLITE_DERIVE_ARRAY_ACCESSORS
+    SQLITE_DERIVE_ARRAY_HASH
+    SQLITE_DERIVE_ARRAY_ITERATOR(SqliteValueOwnedStaticArray, const SqliteValueOwned&)
 };
 
 // ============================================================================
@@ -2898,69 +2917,10 @@ public:
      */
     inline SqliteValueOwned* data() noexcept { return m_values; }
 
-    /**
-     * @brief Extracts element value as a 64-bit integer.
-     * 
-     * @param index 0-indexed element position.
-     * @return 64-bit integer value (or 0 if NULL / invalid).
-     */
-    inline sqlite3_int64 as_int64(int index) const noexcept { return (*this)[index].as_int64(); }
-
-    /**
-     * @brief Extracts element value as a double-precision float.
-     * 
-     * @param index 0-indexed element position.
-     * @return Double value (or 0.0 if NULL / invalid).
-     */
-    inline double as_double(int index) const noexcept { return (*this)[index].as_double(); }
-
-    /**
-     * @brief Extracts element value as a zero-allocation SqliteStringView.
-     * 
-     * @param index 0-indexed element position.
-     * @return String view pointing to the underlying text buffer.
-     */
-    inline SqliteStringView as_text(int index) const noexcept { return (*this)[index].as_text(); }
-
-    /**
-     * @brief Extracts element value as a zero-allocation SqliteBlobView.
-     * 
-     * @param index 0-indexed element position.
-     * @return Blob view pointing to the underlying binary buffer.
-     */
-    inline SqliteBlobView as_blob(int index) const noexcept { return (*this)[index].as_blob(); }
-
-    /**
-     * @brief Evaluates element value as a boolean (non-zero integer is true).
-     * 
-     * @param index 0-indexed element position.
-     * @return True if non-zero integer, false otherwise.
-     */
-    inline bool as_bool(int index) const noexcept { return (*this)[index].as_bool(); }
-
-    /**
-     * @brief Checks if the specified element is SQLITE_NULL.
-     * 
-     * @param index 0-indexed element position.
-     * @return True if NULL, false otherwise.
-     */
-    inline bool is_null(int index) const noexcept { return (*this)[index].is_null(); }
-
-    /**
-     * @brief Returns the SQLite fundamental datatype code for the element.
-     * 
-     * @param index 0-indexed element position.
-     * @return SQLITE_INTEGER, SQLITE_FLOAT, SQLITE_TEXT, SQLITE_BLOB, or SQLITE_NULL.
-     */
-    inline int type(int index) const noexcept { return (*this)[index].type(); }
-
-    /**
-     * @brief Returns the 8-bit SQLite subtype for the element (e.g. JSON, UUID, Vector).
-     * 
-     * @param index 0-indexed element position.
-     * @return 8-bit unsigned subtype code (0 if none).
-     */
-    inline uint8_t subtype(int index) const noexcept { return (*this)[index].subtype(); }
+    // Typed Column Extraction Accessors, Composite Hashing & Iterator
+    SQLITE_DERIVE_ARRAY_ACCESSORS
+    SQLITE_DERIVE_ARRAY_HASH
+    SQLITE_DERIVE_ARRAY_ITERATOR(SqliteValueOwnedDynamicArray, const SqliteValueOwned&)
 };
 
 // ============================================================================

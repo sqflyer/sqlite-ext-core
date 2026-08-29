@@ -243,6 +243,23 @@ SqliteValueOwnedDynamicArray moved = sqlite_move(dyn_arr);
 assert(dyn_arr.empty()); // Source safely zeroed
 ```
 
+### Typed Extraction Accessors & Composite Hashing (`SQLITE_DERIVE_ARRAY_ACCESSORS`, `SQLITE_DERIVE_ARRAY_HASH`)
+
+Both `SqliteValueOwnedStaticArray<N>` and `SqliteValueOwnedDynamicArray` utilize unified macros to synthesize zero-overhead direct column extractors and 64-bit MurmurHash2 composite hashing:
+
+```cpp
+// Direct typed extraction without indexing into intermediate values
+sqlite3_int64 id   = dyn_arr.as_int64();   // Defaults to index 0 (64-bit integer)
+int           id32 = dyn_arr.as_int(0);     // 32-bit integer
+SqliteStringView s = dyn_arr.as_text(1);    // Non-owning string view
+double        val  = dyn_arr.as_double(2);  // Double float
+bool          nul  = dyn_arr.is_null(3);    // Null check
+uint8_t       sub  = dyn_arr.subtype(1);    // Subtype code
+
+// 64-bit MurmurHash2 composite digest across all elements
+unsigned long long digest = dyn_arr.hash();
+```
+
 ### `SqliteValueOwnedArray<N>` — Unified Template Alias
 
 ```cpp
@@ -326,14 +343,37 @@ poly_map.emplace(SqliteValueOwned(100), "integer record");
 poly_map.emplace(SqliteValueOwned(3.14), "float record");
 poly_map.emplace(SqliteValueOwned::from_text("hello"), "text record");
 
-// Lookup via primitives:
-auto it1 = poly_map.find(100);                  // Found!
-auto it2 = poly_map.find(SqliteStringView("hello", 5)); // Found!
+---
+
+## 9. Transparent Functors for Swiss Tables & STL Maps
+
+`sqlite3_value.hpp` provides transparent functors (`is_transparent = void`) enabling zero-allocation queries on both ordered (`std::map`, B-Trees) and unordered (`std::unordered_map`, Swiss Tables) containers:
+
+```cpp
+struct SqliteValueHash;  // 64-bit MurmurHash2 transparent hasher
+struct SqliteValueEqual; // Transparent equality (a == b)
+struct SqliteValueLess;  // Transparent SQLite collation less-than (a < b)
+```
+
+### Unordered Map / Swiss Table Example
+```cpp
+#include "sqlite3_value.hpp"
+#include <unordered_map>
+
+// Keyed by owned value, searchable by string views or integers with 0 heap allocations
+std::unordered_map<SqliteValueOwned, std::string, SqliteValueHash, SqliteValueEqual> user_index;
+
+user_index[SqliteValueOwned(101)] = "Alice";
+user_index[SqliteValueOwned::from_text("admin")] = "Administrator";
+
+// Zero-allocation lookups using native types:
+assert(user_index.find(101) != user_index.end());
+assert(user_index.find(SqliteStringView("admin", 5)) != user_index.end());
 ```
 
 ---
 
-## 9. Performance Benchmarks (Cycle-Accurate)
+## 10. Performance Benchmarks (Cycle-Accurate)
 
 | Operation | Standard C++ / SQLite Baseline | `sqlite3_value.hpp` | Improvement |
 | :--- | :--- | :--- | :--- |

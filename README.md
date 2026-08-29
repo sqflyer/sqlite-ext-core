@@ -100,6 +100,35 @@ Zero-dependency, `-nostdlib++` compliant wrappers for multi-column SQLite tabula
 - [Row Types README](docs/ROW_README.md)
 - [Row Types Architecture](docs/ROW_ARCHITECTURE.md)
 
+### 4.6. C++ Row Key & Hash Indexing (`sqlite3_row_key.hpp`)
+Zero-dependency, 16-byte Small Buffer Optimized (SBO) key container for primary and composite key indexing, Bloom filters, B-Trees, and Swiss Tables.
+
+#### Key Features:
+- **16-Byte Layout with Small Buffer Optimization (SBO)**: Single-column scalar keys live inline inside `m_single` (`SqliteValueOwned`, exactly 16 bytes) with **0 heap allocations**. Multi-column composite keys allocate a contiguous heap buffer via `sqlite3_malloc64`.
+- **Zero-Allocation Transparent Lookups**: `SqliteRowKeyHash`, `SqliteRowKeyEqual`, and `SqliteRowKeyLess` enable zero-allocation heterogeneous lookups in `std::unordered_map` (Swiss Tables) and `std::map` (B-Trees) across primitives, strings, blobs, row views, and owned wrappers.
+- **64-bit MurmurHash2 Composite Hashing**: Fast-path hashing with $O(1)$ single-column extraction and deterministic sequential folding via `SqliteHashUtil::combine()`.
+- **Standard Range-Based Iterators**: Fully synthesizes forward iterator and `begin()` / `end()` via `SQLITE_DERIVE_ARRAY_ITERATOR(SqliteRowKeyOwned, const SqliteValueOwned&)`.
+- **Comprehensive Cross-Container Relational Comparisons**: Transparently compares `SqliteRowKeyOwned` against `SqliteRowOwnedWrapper`, `SqliteRowView`, `SqliteValueViewArray`, and all 11 scalar & primitive types.
+
+#### Documentation:
+- [Row Key README](docs/ROW_KEY_README.md)
+- [Row Key Architecture](docs/ROW_KEY_ARCHITECTURE.md)
+- [Unified Macro Architecture](docs/MACROS.md)
+
+### 4.7. Unified C++ Macro Synthesizer Architecture (`docs/MACROS.md`)
+A 4-tier macro synthesizer framework that eliminates boilerplate while guaranteeing standard library independence (`-nostdlib++`), zero runtime overhead, and strict SQLite type-rank collation semantics across the entire codebase.
+
+#### Key Features:
+- **Array Extraction & Accessors**: `SQLITE_DERIVE_ARRAY_ACCESSORS` provides uniform, inlined `as_int64()`, `as_text()`, `as_blob()`, `type()`, and `subtype()` accessors with default `index = 0`.
+- **Composite MurmurHash2 Synthesis**: `SQLITE_DERIVE_ARRAY_HASH` synthesizes 64-bit composite hash computation with $O(1)$ scalar fast-paths and multi-column combiner loops.
+- **Range-Based Iteration Synthesis**: `SQLITE_DERIVE_ARRAY_ITERATOR(ContainerType, ElementType)` synthesizes C++11 forward iterators enabling native `for (auto val : container)` loops.
+- **Container & Scalar Relational Operators**: `SQLITE_DERIVE_CONTAINER_RELATIONAL_OPS`, `SQLITE_DERIVE_SCALAR_RELATIONAL_OPS`, and `SQLITE_DERIVE_ALL_REVERSE_RELATIONAL_OPS` generate complete sets of comparison operators (`==`, `!=`, `<`, `<=`, `>`, `>=`).
+- **C++20 Transparent Functors**: `SQLITE_DERIVE_TRANSPARENT_EQUAL` and `SQLITE_DERIVE_TRANSPARENT_LESS` synthesize `using is_transparent = void;` structs for zero-allocation STL / Swiss Table container queries.
+
+#### Documentation:
+- [Unified Macro Architecture](docs/MACROS.md)
+- [C++ Type Comparison Matrix](docs/COMPARISON_MATRIX.md)
+
 ### 5. Smart Pointers (`sqlite3_smart_ptr.h` / `.hpp`)
 Zero-dependency, thread-safe, reference-counted memory allocation that integrates directly into SQLite's memory manager (`sqlite3_malloc`). Allows safely sharing dynamic payloads across User-Defined Function (UDF) boundaries.
 

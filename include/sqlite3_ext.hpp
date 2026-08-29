@@ -5,9 +5,12 @@
 
 // Core subsystem headers
 #include "sqlite3_allocator.hpp"
+#include "sqlite3_hash.hpp"
 #include "sqlite3_smart_ptr.hpp"
 #include "sqlite3_db.hpp"
 #include "sqlite3_value.hpp"
+#include "sqlite3_row.hpp"
+#include "sqlite3_row_key.hpp"
 #include "sqlite3_udf.hpp"
 #include "sqlite3_aggregate.hpp"
 #include "sqlite3_tvf.hpp"
@@ -259,6 +262,62 @@ public:
      */
     static inline void release_coro_scheduler() {
         SqliteCoroScheduler::release_global();
+    }
+
+    // ========================================================================
+    // 7. Freestanding 64-Bit Hashing & Bloom Indexing Utilities
+    // ========================================================================
+
+    /**
+     * @brief 64-bit MurmurHash2 (MurmurHash64A) over arbitrary binary payloads.
+     * @param ptr Pointer to the data buffer (alignment-safe).
+     * @param len Number of bytes to hash.
+     * @param seed 64-bit initialization seed (defaults to DEFAULT_SEED).
+     * @return 64-bit unsigned hash digest.
+     */
+    static inline uint64_t hash(const void* ptr, int len, uint64_t seed = SqliteHashUtil::DEFAULT_SEED) noexcept {
+        return SqliteHashUtil::hash(ptr, len, seed);
+    }
+
+    /**
+     * @brief Hashes a 64-bit signed integer with MurmurHash2 avalanche mixing.
+     * @param val 64-bit integer value.
+     * @param seed 64-bit initialization seed.
+     * @return 64-bit unsigned hash digest.
+     */
+    static inline uint64_t hash_int64(int64_t val, uint64_t seed = SqliteHashUtil::DEFAULT_SEED) noexcept {
+        return SqliteHashUtil::hash_int64(val, seed);
+    }
+
+    /**
+     * @brief Hashes a double-precision float with normalized zero (+0.0 vs -0.0).
+     * @param val Double-precision floating point number.
+     * @param seed 64-bit initialization seed.
+     * @return 64-bit unsigned hash digest.
+     */
+    static inline uint64_t hash_double(double val, uint64_t seed = SqliteHashUtil::DEFAULT_SEED) noexcept {
+        return SqliteHashUtil::hash_double(val, seed);
+    }
+
+    /**
+     * @brief Combines two 64-bit hash values with high entropy dispersal.
+     * @param seed Primary accumulator seed.
+     * @param val Secondary hash value to combine.
+     * @return 64-bit combined hash digest.
+     */
+    static inline uint64_t combine_hash(uint64_t seed, uint64_t val) noexcept {
+        return SqliteHashUtil::combine(seed, val);
+    }
+
+    /**
+     * @brief Generates the i-th Bloom filter bit index using Kirsch-Mitzenmacher double hashing.
+     * @param hash64 The single precomputed 64-bit MurmurHash2.
+     * @param i The probe index (0 .. k-1).
+     * @param num_bits Total bit array capacity.
+     * @return Bit index in range [0, num_bits - 1] (returns 0 if num_bits == 0).
+     */
+    static inline size_t bloom_hash_index(uint64_t hash64, uint32_t i, size_t num_bits) noexcept {
+        return SqliteHashUtil::bloom_hash_index(hash64, i, num_bits);
     }
 };
 
