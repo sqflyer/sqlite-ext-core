@@ -3,12 +3,38 @@
 
 /**
  * @file sqlite3_coro.hpp
- * @brief Zero-dependency C++11/C++20 Coroutine, Generator & Fiber Subsystem.
+ * @brief Zero-dependency C++11/C++20 Coroutine, Generator & Fiber Subsystem for SQLite Extensions.
  *
- * Provides:
- * 1. Stackful Fibers (`SqliteCoroutine`, `SqliteFiberGenerator<T>`) for C++11 (-nostdlib++ compliant).
- * 2. C++20 Stackless Generators (`SqliteGenerator<T>`, `co_yield`) with freestanding compiler traits.
- * 3. Cooperative Task Scheduler (`SqliteFiberScheduler`).
+ * ## Architectural Overview
+ * Modern, high-performance C++ wrapper providing ergonomic coroutine and generator abstractions
+ * specifically engineered for SQLite table-valued functions (TVFs), stream processing, and background tasks:
+ *
+ * 1. **C++11 Stackful Coroutines (`SqliteCoroutine`)**:
+ *    - Move-only RAII wrappers around underlying native fibers (`sqlite3_coro.h`).
+ *    - Type-erased closure execution without virtual tables (`vtable`) or `<functional>` overhead.
+ *    - Capturing lambdas and move-only functors allocated strictly via `sqlite_new` and `sqlite_delete`.
+ *
+ * 2. **C++11 Range-Based Iterators & TVF Streaming (`SqliteFiberGenerator<T>`)**:
+ *    - Allows database extensions to yield rows/values cleanly across yields:
+ *      `for (const MyRow& row : gen) { ... }`
+ *    - Eliminates complex state-machine boilerplate in SQLite Virtual Table `xNext` implementations.
+ *
+ * 3. **Freestanding C++20 Stackless Coroutines (`SqliteGenerator<T>`, `co_yield`)**:
+ *    - Minimalist compiler coroutine traits defined without standard library headers (`<coroutine>`).
+ *    - Routes frame allocations directly through `sqlite3_malloc64` and `sqlite3_free`.
+ *    - 100% compliant with `-nostdlib`, `-nostdlib++`, `-fno-exceptions`, and `-fno-rtti`.
+ *
+ * @code
+ * // C++11 Stackful Generator Example:
+ * SqliteFiberGenerator<int> gen([](const SqliteFiberGenerator<int>::YieldHandle& yield) {
+ *     for (int i = 0; i < 5; ++i) {
+ *         yield(i * 10);
+ *     }
+ * });
+ * for (int val : gen) {
+ *     printf("Yielded: %d\n", val);
+ * }
+ * @endcode
  */
 
 #include "sqlite3_coro.h"
@@ -25,7 +51,20 @@
  *
  * Supports free functions, stateless lambdas, and capturing closures without
  * virtual tables (`vtable`) or standard library runtime dependencies. All dynamic
- * closure holders are managed strictly via sqlite_new and sqlite_delete (sqlite3_malloc/free).
+ * closure holders are managed strictly via `sqlite_new` and `sqlite_delete` (sqlite3_malloc/free).
+ *
+ * @code
+ * int counter = 0;
+ * SqliteCoroutine coro([&counter]() {
+ *     counter += 10;
+ *     SqliteCoroutine::yield();
+ *     counter += 20;
+ * });
+ * coro.resume();
+ * assert(counter == 10);
+ * coro.resume();
+ * assert(counter == 30);
+ * @endcode
  */
 class SqliteCoroutine {
 private:
@@ -44,6 +83,7 @@ private:
     /**
      * @struct CallableHolder
      * @brief Templated closure container storing capturing callable objects.
+     * @tparam F Type of the callable closure.
      */
     template <typename F>
     struct CallableHolder : public CallableHolderBase {
@@ -85,6 +125,10 @@ private:
         }
     }
 
+    /**
+     * @brief Static entry trampoline for parameterless function pointers.
+     * @param arg Raw function pointer cast to `void*`.
+     */
     static void fn_trampoline(void* arg) {
         typedef void (*RawFn)();
         RawFn fn = reinterpret_cast<RawFn>(arg);

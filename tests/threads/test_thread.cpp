@@ -1,13 +1,28 @@
+/**
+ * @file test_thread.cpp
+ * @brief C++11 SqliteThread Wrapper Test Suite (-nostdlib++ compliant).
+ *
+ * Verifies RAII thread management, parameterless function pointer dispatch, capturing lambda execution,
+ * move construction, move assignment, and detached thread behavior without standard library dependencies.
+ */
+
 #include <stdio.h>
 #include <assert.h>
 #include "sqlite3_thread.hpp"
 
 static int g_free_fn_val = 0;
+
+/**
+ * @brief Free function worker executed by SqliteThread.
+ */
 static void free_fn() {
     SqliteThread::sleep_for_ms(20);
     g_free_fn_val = 555;
 }
 
+/**
+ * @brief Test 1: Spawning a thread using a raw C++ function pointer.
+ */
 void test_thread_function_ptr() {
     printf("1. Testing SqliteThread with function pointer...\n");
     g_free_fn_val = 0;
@@ -21,6 +36,9 @@ void test_thread_function_ptr() {
     printf("   [PASS] Function pointer thread executed.\n");
 }
 
+/**
+ * @brief Test 2: Spawning a thread using a stateful capturing lambda closure.
+ */
 void test_thread_lambda_capture() {
     printf("2. Testing SqliteThread with capturing lambda...\n");
     int val = 0;
@@ -37,6 +55,9 @@ void test_thread_lambda_capture() {
     printf("   [PASS] Lambda thread executed and mutated captured variable.\n");
 }
 
+/**
+ * @brief Test 3: Verifying move constructor and move assignment semantics for SqliteThread.
+ */
 void test_thread_move_semantics() {
     printf("3. Testing SqliteThread move semantics...\n");
     int state = 0;
@@ -63,6 +84,9 @@ void test_thread_move_semantics() {
     printf("   [PASS] Thread moved cleanly across instances.\n");
 }
 
+/**
+ * @brief Test 4: Detaching a thread to run independently in the background.
+ */
 void test_thread_detach() {
     printf("4. Testing SqliteThread detach()...\n");
     int counter = 0;

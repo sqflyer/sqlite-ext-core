@@ -407,6 +407,10 @@ static inline DWORD WINAPI sqlite3_win32_thread_trampoline(LPVOID lpParam) {
 static inline int sqlite3_thread_create(sqlite3_thread_t* thread, sqlite3_thread_func_t func, void* arg) {
     if (!thread || !func) return -1;
 #if defined(_WIN32) || defined(_WIN64)
+    /*
+     * STEP 1: ALLOCATE WIN32 TRAMPOLINE CONTEXT
+     * Allocate a heap container to capture return values and track detachment state.
+     */
     sqlite3_win32_thctx_t* ctx = (sqlite3_win32_thctx_t*)malloc(sizeof(sqlite3_win32_thctx_t));
     if (!ctx) return -1;
     ctx->func = func;
@@ -415,6 +419,10 @@ static inline int sqlite3_thread_create(sqlite3_thread_t* thread, sqlite3_thread
     ctx->is_detached = 0;
     ctx->event = CreateEvent(NULL, TRUE, FALSE, NULL);
 
+    /*
+     * STEP 2: SPAWN WIN32 OS THREAD
+     * Launch thread targeting the internal trampoline function.
+     */
     HANDLE h = CreateThread(NULL, 0, sqlite3_win32_thread_trampoline, ctx, 0, NULL);
     if (!h) {
         if (ctx->event) CloseHandle(ctx->event);
@@ -449,7 +457,15 @@ static inline int sqlite3_thread_create(sqlite3_thread_t* thread, sqlite3_thread
 static inline int sqlite3_thread_join(sqlite3_thread_t* thread, void** retval) {
 #if defined(_WIN32) || defined(_WIN64)
     if (!thread || !thread->handle) return -1;
+
+    /*
+     * STEP 1: WAIT FOR THREAD TERMINATION
+     */
     WaitForSingleObject(thread->handle, INFINITE);
+
+    /*
+     * STEP 2: EXTRACT RETURN VALUE & FREE CONTEXT
+     */
     sqlite3_win32_thctx_t* ctx = (sqlite3_win32_thctx_t*)thread->arg;
     if (ctx) {
         if (retval) {
@@ -459,6 +475,10 @@ static inline int sqlite3_thread_join(sqlite3_thread_t* thread, void** retval) {
         free(ctx);
         thread->arg = NULL;
     }
+
+    /*
+     * STEP 3: CLOSE OS HANDLE
+     */
     CloseHandle(thread->handle);
     thread->handle = NULL;
     return 0;
@@ -481,6 +501,10 @@ static inline int sqlite3_thread_join(sqlite3_thread_t* thread, void** retval) {
 static inline int sqlite3_thread_detach(sqlite3_thread_t* thread) {
 #if defined(_WIN32) || defined(_WIN64)
     if (!thread || !thread->handle) return -1;
+
+    /*
+     * Mark context as detached so trampoline frees its own memory upon exit
+     */
     sqlite3_win32_thctx_t* ctx = (sqlite3_win32_thctx_t*)thread->arg;
     if (ctx) {
         ctx->is_detached = 1;

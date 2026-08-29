@@ -1,3 +1,13 @@
+/**
+ * @file test_coro.cpp
+ * @brief C++11 SqliteCoroutine & Generator Test Suite (-nostdlib++ compliant).
+ *
+ * Verifies RAII C++11 stackful coroutine wrappers (`SqliteCoroutine`), type-erased closure execution,
+ * pointer value channeling across yields, range-based `for` loop iteration via `SqliteFiberGenerator<T>`,
+ * move semantics, polymorphic `SqliteValueOwned` streaming, fixed-schema row iteration (`SqliteRowStatic`),
+ * and dynamic array expansion across fiber yield points.
+ */
+
 #define SQLITE_CORE
 #include <sqlite3.h>
 #include <stdio.h>

@@ -114,10 +114,15 @@ static inline sqlite3_coro_pool_t* sqlite3_coro_ext_pool_acquire(const void* tag
 
     sqlite3_thread_mutex_lock(&reg->lock);
 
-    // Fast pointer-based search
+    /*
+     * STEP 1: FAST STATIC POINTER MATCH
+     * Scan the intrusive registry list for an existing pool node matching the
+     * static virtual memory tag address. Comparison is a single pointer equality check.
+     */
     sqlite3_coro_ext_node_t* curr = reg->head;
     while (curr) {
         if (curr->tag == tag) {
+            // Extension pool already exists -> increment connection reference count
             sqlite3_atomic_fetch_add(&curr->ref_count, 1);
             sqlite3_thread_mutex_unlock(&reg->lock);
             return &curr->pool;
@@ -125,7 +130,11 @@ static inline sqlite3_coro_pool_t* sqlite3_coro_ext_pool_acquire(const void* tag
         curr = curr->next;
     }
 
-    // Allocate new pool node
+    /*
+     * STEP 2: ALLOCATE & INITIALIZE NEW EXTENSION NODE
+     * Allocate a new registry descriptor via sqlite3_malloc64 to ensure 100% SQLite
+     * memory tracking accounting.
+     */
     sqlite3_coro_ext_node_t* node = (sqlite3_coro_ext_node_t*)sqlite3_malloc64(sizeof(sqlite3_coro_ext_node_t));
     if (!node) {
         sqlite3_thread_mutex_unlock(&reg->lock);
@@ -136,6 +145,7 @@ static inline sqlite3_coro_pool_t* sqlite3_coro_ext_pool_acquire(const void* tag
     node->tag = tag;
     sqlite3_atomic_store(&node->ref_count, 1);
 
+    // Initialize the dedicated M:N coroutine worker pool
     int rc = sqlite3_coro_pool_init(&node->pool, num_workers);
     if (rc != SQLITE_OK) {
         sqlite3_free(node);
@@ -143,6 +153,7 @@ static inline sqlite3_coro_pool_t* sqlite3_coro_ext_pool_acquire(const void* tag
         return NULL;
     }
 
+    // Prepend node to the registry singly-linked list
     node->next = reg->head;
     reg->head = node;
 
@@ -181,7 +192,8 @@ static inline sqlite3_coro_pool_t* sqlite3_coro_ext_pool_get(const void* tag) {
 /**
  * @brief Releases a reference from an active database connection using the tag pointer.
  *
- * When the reference count reaches 0, the pool is destroyed and freed.
+ * Atomically decrements the extension pool's reference count. When the reference count
+ * reaches 0, unlinks the node from the registry, stops its worker threads, and releases all resources.
  *
  * @param tag Static memory address pointer.
  */
@@ -200,6 +212,7 @@ static inline void sqlite3_coro_ext_pool_release(const void* tag) {
         if (curr->tag == tag) {
             int remaining = sqlite3_atomic_fetch_sub(&curr->ref_count, 1) - 1;
             if (remaining <= 0) {
+                // Last DB connection closed -> unlink node and destroy pool
                 if (prev) {
                     prev->next = curr->next;
                 } else {

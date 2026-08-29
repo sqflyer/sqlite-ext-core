@@ -44,36 +44,76 @@
 // C++ COROUTINE SCHEDULER & WORKER POOL
 // ============================================================================
 
+/**
+ * @class SqliteCoroScheduler
+ * @brief High-performance RAII M:N Cooperative Coroutine Scheduler and Worker Pool.
+ *
+ * Provides a modern C++11 interface over `sqlite3_coro_sched.h` with zero runtime overhead:
+ * - Schedules $M$ cooperative stackful coroutines (fibers) across $N$ OS worker threads.
+ * - Supports capturing lambdas, move-only functors, and raw function pointers without `<functional>` bloat.
+ * - Supports synchronous main-thread execution (`poll_one`, `run_until_empty`, `run_local`).
+ * - Manages process-wide singleton lifetimes via `acquire_global()` / `release_global()`.
+ *
+ * @code
+ * SqliteCoroScheduler sched(4); // 4 background worker threads
+ * sched.spawn([]() {
+ *     printf("Running in fiber\n");
+ *     SqliteCoroScheduler::yield();
+ *     printf("Resumed in fiber\n");
+ * });
+ * sched.wait_all();
+ * @endcode
+ */
 class SqliteCoroScheduler {
 private:
     sqlite3_coro_pool_t* m_pool;  /**< Pointer to heap-allocated stable C pool descriptor. */
 
 public:
-    // Type-erased base for executing C++ closures on C coroutine entrypoints
+    /**
+     * @struct TaskClosureBase
+     * @brief Type-erased base structure for dispatching C++ callable closures on C coroutine trampolines.
+     */
     struct TaskClosureBase {
-        void (*invoke_fn)(TaskClosureBase*);
-        void (*destroy_fn)(TaskClosureBase*);
+        void (*invoke_fn)(TaskClosureBase*);   /**< Invocation function pointer. */
+        void (*destroy_fn)(TaskClosureBase*);  /**< Deallocation function pointer. */
     };
 
+    /**
+     * @struct TaskClosure
+     * @brief Templated closure container storing user-supplied functors and lambdas.
+     * @tparam F Type of the stored callable object.
+     */
     template <typename F>
     struct TaskClosure : public TaskClosureBase {
-        F func;
+        F func;  /**< Stored callable instance. */
+
+        /** @brief Constructs closure from const lvalue reference. */
         TaskClosure(const F& f) : func(f) {
             invoke_fn = &invoke_impl;
             destroy_fn = &destroy_impl;
         }
+
+        /** @brief Constructs closure from rvalue reference (move semantics). */
         TaskClosure(F&& f) : func(sqlite_move(f)) {
             invoke_fn = &invoke_impl;
             destroy_fn = &destroy_impl;
         }
+
+        /** @brief Static trampoline invoking the stored callable. */
         static void invoke_impl(TaskClosureBase* self) {
             static_cast<TaskClosure<F>*>(self)->func();
         }
+
+        /** @brief Static trampoline freeing the closure container via sqlite_delete. */
         static void destroy_impl(TaskClosureBase* self) {
             sqlite_delete(static_cast<TaskClosure<F>*>(self));
         }
     };
 
+    /**
+     * @brief Static entry trampoline for executing type-erased closure instances.
+     * @param arg Pointer to `TaskClosureBase`.
+     */
     static void task_closure_trampoline(void* arg) {
         TaskClosureBase* closure = static_cast<TaskClosureBase*>(arg);
         if (closure) {
@@ -82,6 +122,10 @@ public:
         }
     }
 
+    /**
+     * @brief Static entry trampoline for raw function pointers.
+     * @param arg Function pointer cast to `void*`.
+     */
     static void raw_fn_trampoline(void* arg) {
         typedef void (*RawFn)();
         RawFn fn = reinterpret_cast<RawFn>(arg);
@@ -91,6 +135,9 @@ public:
 public:
     /**
      * @brief Constructs an M:N Coroutine Scheduler with the specified number of worker threads.
+     *
+     * Allocates the stable C pool descriptor via SQLite's allocator (`sqlite_new`) and
+     * starts the requested worker threads.
      *
      * @param num_workers Number of background worker threads (default 4; pass 0 for main-thread event loop mode).
      */
@@ -121,7 +168,7 @@ public:
     SqliteCoroScheduler& operator=(const SqliteCoroScheduler&) = delete;
 
     /**
-     * @brief Move constructor. Transfers ownership of the stable pool pointer.
+     * @brief Move constructor. Transfers ownership of the stable pool pointer in 1 CPU cycle.
      *
      * @param other Rvalue reference to scheduler being moved.
      */
@@ -130,7 +177,7 @@ public:
     }
 
     /**
-     * @brief Move assignment operator.
+     * @brief Move assignment operator. Safely tears down existing pool and assumes new ownership.
      *
      * @param other Rvalue reference to scheduler being moved.
      * @return Reference to this scheduler.
@@ -149,11 +196,13 @@ public:
 
     /**
      * @brief Returns true if the scheduler pool is valid and initialized.
+     * @return True if operational, false if moved-from or allocation failed.
      */
     inline bool is_valid() const noexcept { return m_pool != nullptr; }
 
     /**
      * @brief Returns the number of background worker threads.
+     * @return Worker thread count.
      */
     inline size_t worker_count() const noexcept {
         return m_pool ? static_cast<size_t>(m_pool->num_workers) : 0;
@@ -161,6 +210,7 @@ public:
 
     /**
      * @brief Returns the count of pending and actively running tasks.
+     * @return Pending task count.
      */
     inline size_t pending_tasks() const noexcept {
         return m_pool ? static_cast<size_t>(m_pool->pending_tasks) : 0;
@@ -168,6 +218,7 @@ public:
 
     /**
      * @brief Returns the underlying C `sqlite3_coro_pool_t*` pointer.
+     * @return Pointer to internal C pool descriptor.
      */
     inline sqlite3_coro_pool_t* raw_pool() const noexcept {
         return m_pool;

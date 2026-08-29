@@ -1,3 +1,12 @@
+/**
+ * @file test_coro_c.c
+ * @brief Pure C Coroutine & Fiber Subsystem Test Suite (sqlite3_coro.h).
+ *
+ * Verifies core Pure C coroutine execution, stackful fiber creation, value yielding (`sqlite3_coro_yield_value`),
+ * non-volatile XMM/SIMD register preservation (`FIBER_FLAG_FLOAT_SWITCH`), early fiber cancellation,
+ * interleaved coroutine execution, deep recursion stack preservation, and NULL safety checks.
+ */
+
 #include <stdio.h>
 #include <assert.h>
 #include <stdint.h>

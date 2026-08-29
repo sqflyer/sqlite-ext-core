@@ -1,3 +1,12 @@
+/**
+ * @file test_coro_ext_pool.cpp
+ * @brief C++11/C++20 SqliteExtCoroPool Test Suite (-nostdlib++ compliant).
+ *
+ * Verifies template-tagged extension pool isolation (`SqliteExtCoroPool<Tag>`), auto-acquiring
+ * lambda dispatch (`sqlite_coro_ext_spawn`), default template tag pool aliases (`SqliteExtensionCoroPool`),
+ * static helper class (`SqliteTaggedCoroPool`), and forcible shutdown handling.
+ */
+
 #define SQLITE_CORE
 #include <sqlite3.h>
 #include <stdio.h>

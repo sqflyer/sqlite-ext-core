@@ -1,3 +1,13 @@
+/**
+ * @file test_coro_sched_c.c
+ * @brief Pure C Coroutine Scheduler & Thread Pool Test Suite (sqlite3_coro_sched.h).
+ *
+ * Verifies M:N coroutine scheduling ($M$ fibers across $N$ OS worker threads), synchronous main-thread
+ * event loop polling (`sqlite3_coro_pool_poll_one`, `run_until_empty`), cooperative task migration,
+ * batch fan-out (100+ tasks), process-wide global pool acquisition and atomic reference counting,
+ * nested coroutine spawning, custom stack allocations (32 KB, 128 KB), and out-of-coroutine yield safety.
+ */
+
 #include <stdio.h>
 #include <assert.h>
 #include <stdint.h>

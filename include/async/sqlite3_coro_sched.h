@@ -108,7 +108,16 @@ static inline void sqlite3_coro_task_trampoline(void* arg) {
 }
 
 /**
- * @brief Worker thread loop pulling tasks from the ready queue and resuming fibers.
+ * @brief Worker thread main loop executing scheduled fibers in the M:N pool.
+ *
+ * Each worker thread converts itself to a primary fiber (with `FIBER_FLAG_FLOAT_SWITCH`)
+ * so that it can perform hardware context switches to and from task fibers.
+ *
+ * Workers wait on `pool->cond_work` until a task is enqueued. When a task runs:
+ * - If the task runs to completion: the fiber and task container are destroyed,
+ *   and `pool->pending_tasks` is decremented. If `pending_tasks == 0`, `cond_done` is signaled.
+ * - If the task yields cooperatively: it is re-appended to the tail of the ready queue
+ *   and `cond_work` is signaled to wake up any idle workers to resume it.
  *
  * @param arg Pointer to the parent `sqlite3_coro_pool_t` instance.
  * @return NULL upon thread termination.
@@ -121,11 +130,18 @@ static inline void* sqlite3_coro_pool_worker_loop(void* arg) {
 #ifndef FIBER_FLAG_FLOAT_SWITCH
 #define FIBER_FLAG_FLOAT_SWITCH 0x1
 #endif
+    /*
+     * STEP 1: CONVERT OS THREAD TO PRIMARY FIBER
+     * On Windows, a thread cannot call SwitchToFiber() unless it is converted
+     * into a fiber itself. We specify FIBER_FLAG_FLOAT_SWITCH (0x1) to ensure
+     * that the hardware floating-point and SSE registers (XMM6-XMM15) are
+     * preserved during fiber transitions under compiler optimization (-O2).
+     */
     void* cur_fiber = GetCurrentFiber();
     if (!cur_fiber || (uintptr_t)cur_fiber < (uintptr_t)0x10000) {
         cur_fiber = ConvertThreadToFiberEx(NULL, FIBER_FLAG_FLOAT_SWITCH);
         if (!cur_fiber) {
-            ConvertThreadToFiber(NULL);
+            cur_fiber = ConvertThreadToFiber(NULL);
         }
     }
 #endif
@@ -133,17 +149,23 @@ static inline void* sqlite3_coro_pool_worker_loop(void* arg) {
     while (1) {
         sqlite3_coro_task_t* task = NULL;
 
+        /*
+         * STEP 2: WAIT FOR WORK & DEQUEUE FROM FIFO READY QUEUE
+         * Lock the pool mutex and wait on cond_work while the queue is empty
+         * and the pool is active.
+         */
         sqlite3_thread_mutex_lock(&pool->lock);
         while (pool->is_running && pool->queue_head == NULL) {
             sqlite3_cond_wait(&pool->cond_work, &pool->lock);
         }
 
+        // Check if pool is shutting down and all tasks have been drained
         if (!pool->is_running && pool->queue_head == NULL) {
             sqlite3_thread_mutex_unlock(&pool->lock);
             break;
         }
 
-        // Dequeue task from the FIFO head
+        // Dequeue the next task from the FIFO head
         task = pool->queue_head;
         if (task) {
             pool->queue_head = task->next;
@@ -156,7 +178,11 @@ static inline void* sqlite3_coro_pool_worker_loop(void* arg) {
 
         if (!task) continue;
 
-        // Set thread-local active task pointer and resume fiber
+        /*
+         * STEP 3: RESUME FIBER TASK
+         * Bind the active task pointer to thread-local storage for state tracking,
+         * then perform a stackful context switch into the task fiber.
+         */
         sqlite3_coro_task_t* prev_task = g_active_pool_task;
         g_active_pool_task = task;
 
@@ -164,21 +190,27 @@ static inline void* sqlite3_coro_pool_worker_loop(void* arg) {
 
         g_active_pool_task = prev_task;
 
+        /*
+         * STEP 4: PROCESS TASK EXECUTION RESULT
+         * Evaluate whether the fiber completed execution or yielded cooperatively.
+         */
         if (sqlite3_coro_is_done(&task->coro)) {
-            // Task has executed to completion: destroy fiber and task container
+            // Case 4A: Task completed normally -> destroy fiber context and free task container
             sqlite3_coro_destroy(&task->coro);
             sqlite3_free(task);
 
             sqlite3_thread_mutex_lock(&pool->lock);
             pool->pending_tasks--;
             if (pool->pending_tasks == 0) {
+                // All pending tasks have finished -> broadcast completion signal
                 sqlite3_cond_broadcast(&pool->cond_done);
             }
             sqlite3_thread_mutex_unlock(&pool->lock);
         } else {
-            // Task cooperatively yielded: check if pool is shutting down
+            // Case 4B: Task yielded cooperatively -> inspect pool state and re-enqueue
             sqlite3_thread_mutex_lock(&pool->lock);
             if (!pool->is_running) {
+                // Pool is shutting down: discard and free suspended task
                 sqlite3_thread_mutex_unlock(&pool->lock);
                 sqlite3_coro_destroy(&task->coro);
                 sqlite3_free(task);
@@ -192,6 +224,7 @@ static inline void* sqlite3_coro_pool_worker_loop(void* arg) {
                 sqlite3_thread_mutex_unlock(&pool->lock);
                 break;
             } else {
+                // Re-enqueue task at the tail of the ready queue for subsequent scheduling
                 task->next = NULL;
                 if (pool->queue_tail) {
                     pool->queue_tail->next = task;
@@ -206,6 +239,10 @@ static inline void* sqlite3_coro_pool_worker_loop(void* arg) {
         }
     }
 
+    /*
+     * STEP 5: WORKER THREAD TERMINATION
+     * Returns NULL upon clean worker loop exit.
+     */
     return NULL;
 }
 
@@ -321,8 +358,13 @@ static inline int sqlite3_coro_pool_spawn(sqlite3_coro_pool_t* pool, sqlite3_cor
 /**
  * @brief Cooperatively yields the currently running task, transferring control back to scheduler.
  *
- * When called from inside a running task, suspends execution. The hosting worker thread or
- * main thread polling loop will automatically place the task back onto the ready queue.
+ * Suspends the calling fiber's execution. If executing on a background worker thread, the
+ * hosting worker automatically re-enqueues the task at the tail of the ready queue and wakes
+ * up available workers. If executing on the main thread via `poll_one()`, control returns to
+ * the polling loop.
+ *
+ * @note Safe to invoke from anywhere within the coroutine task's call stack. Calling outside
+ * an active coroutine is a safe no-op.
  */
 static inline void sqlite3_coro_pool_yield(void) {
     sqlite3_coro_yield();
@@ -331,17 +373,21 @@ static inline void sqlite3_coro_pool_yield(void) {
 /**
  * @brief Steps a single ready task on the calling (main) thread.
  *
- * Dequeues one task, resumes its fiber until it either completes or yields, and updates
- * the scheduler queue accordingly.
+ * Synchronously dequeues one task from the head of the ready queue, executes it until it
+ * either completes or cooperatively yields, and updates scheduler queues accordingly.
  *
- * @param pool Pointer to `sqlite3_coro_pool_t`.
- * @return 1 if a task step was processed, 0 if the queue was empty.
+ * @param pool Pointer to initialized `sqlite3_coro_pool_t` instance.
+ * @return `1` if a task step was processed, `0` if the ready queue was empty or pool is NULL.
  */
 static inline int sqlite3_coro_pool_poll_one(sqlite3_coro_pool_t* pool) {
     if (!pool) return 0;
 
     sqlite3_coro_task_t* task = NULL;
 
+    /*
+     * STEP 1: DEQUEUE A SINGLE TASK FROM FIFO HEAD
+     * Safely lock the pool mutex and extract the first ready task.
+     */
     sqlite3_thread_mutex_lock(&pool->lock);
     if (pool->queue_head) {
         task = pool->queue_head;
@@ -355,6 +401,10 @@ static inline int sqlite3_coro_pool_poll_one(sqlite3_coro_pool_t* pool) {
 
     if (!task) return 0;
 
+    /*
+     * STEP 2: RESUME TASK FIBER CONTEXT
+     * Set the thread-local active task pointer and perform a synchronous context switch.
+     */
     sqlite3_coro_task_t* prev = g_active_pool_task;
     g_active_pool_task = task;
 
@@ -362,7 +412,11 @@ static inline int sqlite3_coro_pool_poll_one(sqlite3_coro_pool_t* pool) {
 
     g_active_pool_task = prev;
 
+    /*
+     * STEP 3: HANDLE TASK COMPLETION OR RE-QUEUE
+     */
     if (sqlite3_coro_is_done(&task->coro)) {
+        // Case 3A: Task finished execution -> free fiber context and notify waiters
         sqlite3_coro_destroy(&task->coro);
         sqlite3_free(task);
 
@@ -373,6 +427,7 @@ static inline int sqlite3_coro_pool_poll_one(sqlite3_coro_pool_t* pool) {
         }
         sqlite3_thread_mutex_unlock(&pool->lock);
     } else {
+        // Case 3B: Task yielded cooperatively -> re-insert at tail of ready queue
         sqlite3_thread_mutex_lock(&pool->lock);
         task->next = NULL;
         if (pool->queue_tail) {
@@ -391,10 +446,10 @@ static inline int sqlite3_coro_pool_poll_one(sqlite3_coro_pool_t* pool) {
 /**
  * @brief Drains and executes all ready tasks on the calling (main) thread until empty.
  *
- * Runs a synchronous poll loop until all tasks currently ready in the queue have stepped
- * or finished.
+ * Runs a synchronous poll loop repeatedly stepping tasks until the ready queue is completely
+ * drained. Essential for single-threaded / WebAssembly environments, TVFs, and synchronous SQLite operations.
  *
- * @param pool Pointer to `sqlite3_coro_pool_t`.
+ * @param pool Pointer to initialized `sqlite3_coro_pool_t` instance.
  * @return Total number of task step executions processed.
  */
 static inline int sqlite3_coro_pool_run_until_empty(sqlite3_coro_pool_t* pool) {
@@ -408,7 +463,10 @@ static inline int sqlite3_coro_pool_run_until_empty(sqlite3_coro_pool_t* pool) {
 /**
  * @brief Blocks the calling thread until all pending and active tasks have finished execution.
  *
- * @param pool Pointer to `sqlite3_coro_pool_t`.
+ * Enters a condition variable wait on `pool->cond_done`. Uses periodic timed waits to ensure
+ * responsive shutdown and deadlock immunity.
+ *
+ * @param pool Pointer to initialized `sqlite3_coro_pool_t` instance.
  */
 static inline void sqlite3_coro_pool_wait(sqlite3_coro_pool_t* pool) {
     if (!pool) return;
@@ -423,7 +481,10 @@ static inline void sqlite3_coro_pool_wait(sqlite3_coro_pool_t* pool) {
 /**
  * @brief Stops all background worker threads, drains pending queues, and frees resources.
  *
- * @param pool Pointer to `sqlite3_coro_pool_t`.
+ * Signals all worker threads to terminate, waits for their exit via `sqlite3_thread_join`,
+ * cancels and frees all unexecuted tasks remaining in the queue, and destroys synchronization primitives.
+ *
+ * @param pool Pointer to initialized `sqlite3_coro_pool_t` instance.
  */
 static inline void sqlite3_coro_pool_destroy(sqlite3_coro_pool_t* pool) {
     if (!pool) return;
@@ -463,13 +524,25 @@ static inline void sqlite3_coro_pool_destroy(sqlite3_coro_pool_t* pool) {
 // EXTENSION-PRESENCE PROCESS-WIDE GLOBAL POOL
 // ============================================================================
 
+/**
+ * @struct sqlite3_coro_global_state_t
+ * @brief Internal state tracking the process-wide shared coroutine worker pool.
+ *
+ * Implements a reference-counted singleton ensuring that multiple loaded database
+ * connections within the same process share a single coroutine worker pool.
+ */
 typedef struct {
-    sqlite3_coro_pool_t*   pool;
-    int                    ref_count;
-    sqlite3_thread_mutex_t lock;
-    int                    lock_initialized;
+    sqlite3_coro_pool_t*   pool;              /**< Pointer to the shared worker pool instance. */
+    int                    ref_count;         /**< Count of active database connections referencing the pool. */
+    sqlite3_thread_mutex_t lock;              /**< Mutex protecting singleton creation, destruction, and ref counts. */
+    int                    lock_initialized;  /**< Flag indicating if the singleton mutex has been initialized. */
 } sqlite3_coro_global_state_t;
 
+/**
+ * @brief Retrieves the static singleton descriptor for the process-wide global pool.
+ *
+ * @return Pointer to static `sqlite3_coro_global_state_t` instance.
+ */
 static inline sqlite3_coro_global_state_t* sqlite3_coro_get_global_state(void) {
     static sqlite3_coro_global_state_t state;
     static int initialized = 0;
@@ -483,11 +556,12 @@ static inline sqlite3_coro_global_state_t* sqlite3_coro_get_global_state(void) {
 /**
  * @brief Acquires the process-wide extension presence coroutine pool.
  *
- * Automatically creates the shared pool on first call and increments reference count.
- * All loaded database connections in the process can share this single worker pool.
+ * Lazily allocates and initializes the shared M:N worker pool upon the first database
+ * connection's request, incrementing the reference count. Subsequent database connections
+ * reuse the exact same pool and worker threads, eliminating redundant OS thread creation.
  *
- * @param num_workers Number of background OS threads to allocate (defaults to 4 if <= 0).
- * @return Pointer to shared `sqlite3_coro_pool_t`, or NULL on allocation error.
+ * @param num_workers Number of background OS worker threads to allocate if creating the pool (defaults to 4).
+ * @return Pointer to shared `sqlite3_coro_pool_t`, or `NULL` on memory allocation error.
  */
 static inline sqlite3_coro_pool_t* sqlite3_coro_pool_acquire_global(int num_workers) {
     if (num_workers <= 0) num_workers = 4;
@@ -500,6 +574,10 @@ static inline sqlite3_coro_pool_t* sqlite3_coro_pool_acquire_global(int num_work
 
     sqlite3_thread_mutex_lock(&state->lock);
 
+    /*
+     * STEP 1: LAZY POOL INITIALIZATION
+     * If no global pool exists, allocate descriptor via sqlite3_malloc64 and start workers.
+     */
     if (!state->pool) {
         state->pool = (sqlite3_coro_pool_t*)sqlite3_malloc64(sizeof(sqlite3_coro_pool_t));
         if (!state->pool) {
@@ -515,6 +593,9 @@ static inline sqlite3_coro_pool_t* sqlite3_coro_pool_acquire_global(int num_work
         }
     }
 
+    /*
+     * STEP 2: INCREMENT CONNECTION REFERENCE COUNT
+     */
     state->ref_count++;
     sqlite3_coro_pool_t* ret = state->pool;
     sqlite3_thread_mutex_unlock(&state->lock);
@@ -524,7 +605,9 @@ static inline sqlite3_coro_pool_t* sqlite3_coro_pool_acquire_global(int num_work
 /**
  * @brief Releases a reference to the process-wide extension presence pool.
  *
- * When reference count drops to 0, automatically shuts down the pool and frees memory.
+ * Decrements the connection reference count. When the count drops to 0 (all database
+ * connections have closed), automatically terminates all background worker threads and
+ * frees the pool memory.
  */
 static inline void sqlite3_coro_pool_release_global(void) {
     sqlite3_coro_global_state_t* state = sqlite3_coro_get_global_state();
@@ -534,6 +617,7 @@ static inline void sqlite3_coro_pool_release_global(void) {
     if (state->ref_count > 0) {
         state->ref_count--;
         if (state->ref_count == 0 && state->pool) {
+            // Last connection closed -> destroy worker threads and free heap memory
             sqlite3_coro_pool_destroy(state->pool);
             sqlite3_free(state->pool);
             state->pool = NULL;
@@ -544,6 +628,9 @@ static inline void sqlite3_coro_pool_release_global(void) {
 
 /**
  * @brief Forcibly shuts down the process-wide extension presence pool immediately.
+ *
+ * Terminates all worker threads and frees pool memory regardless of the current reference
+ * count. Intended for use during extension module unloads (`sqlite3_extension_init` teardown / `sqlite3_close_v2`).
  */
 static inline void sqlite3_coro_pool_shutdown_global(void) {
     sqlite3_coro_global_state_t* state = sqlite3_coro_get_global_state();

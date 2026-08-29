@@ -1,7 +1,20 @@
+/**
+ * @file test_thread_c.c
+ * @brief Pure C Thread Lifecycle and Primitives Test Suite.
+ *
+ * Verifies cross-platform Pure C thread creation, worker execution, return value capture on join,
+ * detached thread execution, and cooperative CPU timeslice yielding.
+ */
+
 #include <stdio.h>
 #include <assert.h>
 #include "sqlite3_thread.h"
 
+/**
+ * @brief Worker function modifying data payload and returning an integer exit code.
+ * @param arg Pointer to integer payload.
+ * @return Exit status pointer (1234).
+ */
 static void* worker_increment(void* arg) {
     int* val = (int*)arg;
     sqlite3_time_sleep_ms(20);
@@ -9,6 +22,11 @@ static void* worker_increment(void* arg) {
     return (void*)1234;
 }
 
+/**
+ * @brief Worker function executing in detached mode.
+ * @param arg Pointer to integer payload.
+ * @return NULL.
+ */
 static void* worker_detach(void* arg) {
     int* val = (int*)arg;
     sqlite3_time_sleep_ms(10);
@@ -16,6 +34,9 @@ static void* worker_detach(void* arg) {
     return NULL;
 }
 
+/**
+ * @brief Test 1: Thread creation, argument passing, join synchronization, and return value capture.
+ */
 void test_thread_create_and_join(void) {
     printf("1. Testing Pure C thread creation and join with return value...\n");
     sqlite3_thread_t th;
@@ -41,6 +62,9 @@ void test_thread_create_and_join(void) {
     printf("   [PASS] Worker thread modified data to %d and returned %p\n", data, retval);
 }
 
+/**
+ * @brief Test 2: Thread detachment and asynchronous execution without parent joining.
+ */
 void test_thread_detach(void) {
     printf("2. Testing Pure C thread detachment...\n");
     sqlite3_thread_t th;
@@ -67,6 +91,9 @@ void test_thread_detach(void) {
     printf("   [PASS] Detached thread successfully executed asynchronously.\n");
 }
 
+/**
+ * @brief Test 3: Relinquishing execution timeslice via sqlite3_thread_yield.
+ */
 void test_thread_yield(void) {
     printf("3. Testing Pure C thread yield...\n");
     sqlite3_thread_yield();

@@ -1,3 +1,12 @@
+/**
+ * @file test_cond_c.c
+ * @brief Pure C Condition Variable & Synchronization Test Suite.
+ *
+ * Verifies cross-platform native condition variable signaling (`sqlite3_cond_signal`),
+ * accurate millisecond timed waiting (`sqlite3_cond_timedwait`), and multi-worker broadcast
+ * wakeups (`sqlite3_cond_broadcast`) protected by native OS recursive mutexes (`sqlite3_thread_mutex_t`).
+ */
+
 #include <stdio.h>
 #include <assert.h>
 #include "sqlite3_thread.h"
@@ -9,6 +18,9 @@ typedef struct {
     int counter;
 } sync_context_t;
 
+/**
+ * @brief Worker function signaling condition variable after updating payload.
+ */
 static void* worker_signal(void* arg) {
     sync_context_t* ctx = (sync_context_t*)arg;
     sqlite3_time_sleep_ms(25);
@@ -21,6 +33,9 @@ static void* worker_signal(void* arg) {
     return NULL;
 }
 
+/**
+ * @brief Worker function waiting for broadcast signal.
+ */
 static void* worker_broadcast(void* arg) {
     sync_context_t* ctx = (sync_context_t*)arg;
 
@@ -33,6 +48,9 @@ static void* worker_broadcast(void* arg) {
     return NULL;
 }
 
+/**
+ * @brief Test 1: Single worker notification via sqlite3_cond_signal.
+ */
 void test_cond_signal(void) {
     printf("1. Testing Pure C condition variable wait & signal...\n");
     sync_context_t ctx;
@@ -67,6 +85,9 @@ void test_cond_signal(void) {
     printf("   [PASS] Condition variable successfully signaled.\n");
 }
 
+/**
+ * @brief Test 2: Accurate timeout detection using sqlite3_cond_timedwait.
+ */
 void test_cond_timedwait(void) {
     printf("2. Testing Pure C condition variable timedwait...\n");
     sqlite3_thread_mutex_t mutex;
@@ -89,6 +110,9 @@ void test_cond_timedwait(void) {
     printf("   [PASS] Timedwait timed out accurately after %llu ms.\n", (unsigned long long)elapsed_ms);
 }
 
+/**
+ * @brief Test 3: Waking multiple blocked workers simultaneously using sqlite3_cond_broadcast.
+ */
 void test_cond_broadcast(void) {
     printf("3. Testing Pure C condition variable broadcast to multiple workers...\n");
     sync_context_t ctx;

@@ -1,7 +1,18 @@
+/**
+ * @file test_cond.cpp
+ * @brief C++11 SqliteConditionVariable & Synchronization Test Suite (-nostdlib++ compliant).
+ *
+ * Verifies predicate-based waiting loops guarding against spurious wakeups, accurate millisecond
+ * timeout detection (`wait_for`), and multi-worker broadcast signaling (`notify_all`).
+ */
+
 #include <stdio.h>
 #include <assert.h>
 #include "sqlite3_thread.hpp"
 
+/**
+ * @brief Test 1: Spurious-wakeup-safe predicate waiting on SqliteConditionVariable.
+ */
 void test_condition_variable_predicate() {
     printf("1. Testing SqliteConditionVariable wait with predicate...\n");
     SqliteThreadMutex mutex;
@@ -29,6 +40,9 @@ void test_condition_variable_predicate() {
     printf("   [PASS] Predicate wait completed successfully.\n");
 }
 
+/**
+ * @brief Test 2: Timed waiting via wait_for with accurate timeout detection.
+ */
 void test_condition_variable_wait_for() {
     printf("2. Testing SqliteConditionVariable wait_for with timeout...\n");
     SqliteThreadMutex mutex;
@@ -47,6 +61,9 @@ void test_condition_variable_wait_for() {
            static_cast<unsigned long long>(elapsed_ms));
 }
 
+/**
+ * @brief Test 3: Waking multiple concurrent workers via notify_all.
+ */
 void test_condition_variable_broadcast() {
     printf("3. Testing SqliteConditionVariable notify_all to multiple workers...\n");
     SqliteThreadMutex mutex;

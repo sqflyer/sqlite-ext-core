@@ -1,9 +1,19 @@
+/**
+ * @file test_coro_ext_pool_c.c
+ * @brief Pure C Tagged Extension Coroutine Pool Test Suite (sqlite3_coro_ext_pool.h).
+ *
+ * Verifies zero-collision static address token keying (`SQLITE_EXT_TAG_DECLARE`, `SQLITE_EXT_TAG`),
+ * multi-extension pool isolation, atomic reference counting across multiple database handles,
+ * intrusive linked-list unlinking on last pool release, wait barriers, and fallback safety.
+ */
+
 #define SQLITE_CORE
 #include <sqlite3.h>
 #include <stdio.h>
 #include <assert.h>
 #include <string.h>
 #include "async/sqlite3_coro_ext_pool.h"
+#include "sqlite3_atomic.h"
 
 // ----------------------------------------------------------------------------
 // Static Extension Tags (Pure C)
@@ -17,15 +27,15 @@ SQLITE_EXT_TAG_DECLARE(UnusedExtTag);
 // Helper Task Fiber
 // ----------------------------------------------------------------------------
 typedef struct {
-    int* counter;
-    int  delta;
+    sqlite3_atomic_int* counter;
+    int                 delta;
 } ExtTaskPayload;
 
 static void ext_test_fiber(void* arg) {
     ExtTaskPayload* p = (ExtTaskPayload*)arg;
-    *p->counter += p->delta;
+    sqlite3_atomic_fetch_add(p->counter, p->delta);
     sqlite3_coro_pool_yield();
-    *p->counter += p->delta;
+    sqlite3_atomic_fetch_add(p->counter, p->delta);
 }
 
 // ----------------------------------------------------------------------------
@@ -77,7 +87,7 @@ void test_multiple_tagged_pools_isolation() {
     assert(pool_v != NULL && pool_c != NULL && pool_b != NULL);
     assert(pool_v != pool_c && pool_c != pool_b);
 
-    int count_v = 0, count_c = 0, count_b = 0;
+    sqlite3_atomic_int count_v = 0, count_c = 0, count_b = 0;
     ExtTaskPayload pv = { &count_v, 10 };
     ExtTaskPayload pc = { &count_c, 50 };
     ExtTaskPayload pb = { &count_b, 100 };
@@ -90,9 +100,9 @@ void test_multiple_tagged_pools_isolation() {
     sqlite3_coro_ext_pool_wait(SQLITE_EXT_TAG(CryptoExtTag));
     sqlite3_coro_ext_pool_wait(SQLITE_EXT_TAG(BatchExtTag));
 
-    assert(count_v == 20);
-    assert(count_c == 100);
-    assert(count_b == 200);
+    assert(sqlite3_atomic_load(&count_v) == 20);
+    assert(sqlite3_atomic_load(&count_c) == 100);
+    assert(sqlite3_atomic_load(&count_b) == 200);
 
     // Delete middle node (Crypto) -> tests prev != NULL unlinking
     sqlite3_coro_ext_pool_release(SQLITE_EXT_TAG(CryptoExtTag));
@@ -122,7 +132,7 @@ void test_tagged_pool_wait_barrier() {
     sqlite3_coro_pool_t* pool = sqlite3_coro_ext_pool_acquire(SQLITE_EXT_TAG(BatchExtTag), 4);
     assert(pool != NULL);
 
-    int total_sum = 0;
+    sqlite3_atomic_int total_sum = 0;
     ExtTaskPayload payloads[10];
 
     for (int i = 0; i < 10; ++i) {
@@ -132,7 +142,7 @@ void test_tagged_pool_wait_barrier() {
     }
 
     sqlite3_coro_ext_pool_wait(SQLITE_EXT_TAG(BatchExtTag));
-    assert(total_sum == 100);
+    assert(sqlite3_atomic_load(&total_sum) == 100);
 
     sqlite3_coro_ext_pool_release(SQLITE_EXT_TAG(BatchExtTag));
     assert(sqlite3_coro_ext_pool_ref_count(SQLITE_EXT_TAG(BatchExtTag)) == 0);

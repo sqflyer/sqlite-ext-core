@@ -5,8 +5,26 @@
  * @file sqlite3_thread.hpp
  * @brief Zero-dependency C++11 threading, condition variable, and native mutex subsystem.
  *
- * Mimics std::thread and std::condition_variable while remaining strictly compliant with
- * -nostdlib++, -fno-exceptions, and -fno-rtti environments.
+ * ## Architectural Overview
+ * Mimics `std::thread`, `std::mutex`, `std::unique_lock`, and `std::condition_variable` while
+ * remaining strictly compliant with freestanding, `-nostdlib++`, `-fno-exceptions`, and `-fno-rtti`
+ * build environments:
+ *
+ * 1. **Zero Runtime Bloat**:
+ *    - Bypasses `<thread>`, `<mutex>`, `<condition_variable>`, and `<functional>` standard headers.
+ *    - Memory allocations for capturing lambdas route strictly through SQLite's allocator (`sqlite_new` / `sqlite_delete`).
+ *
+ * 2. **Native OS Synchronization**:
+ *    - `SqliteThreadMutex` wraps native OS recursive primitives (`CRITICAL_SECTION` on Windows, `pthread_mutex_t` on POSIX).
+ *    - `SqliteConditionVariable` maps directly to `CONDITION_VARIABLE` (Windows) and `pthread_cond_t` (POSIX) for
+ *      true kernel-managed sleeping with 0% CPU consumption.
+ *
+ * 3. **Ergonomic Predicate Waits**:
+ *    - Supports `wait(guard, predicate)` and `wait_for(guard, timeout_ms, predicate)` loop helpers guarding against
+ *      spurious wakeups.
+ *
+ * 4. **Move Semantics & Safe RAII Teardown**:
+ *    - `SqliteThread` is move-only and automatically detaches joinable handles on destruction to prevent resource leaks.
  */
 
 #include "sqlite3_thread.h"
@@ -17,11 +35,20 @@
 /**
  * @class SqliteThreadMutex
  * @brief Zero-overhead native OS mutex wrapper for condition variable synchronization.
- * Inherits from SqliteLockBase (-nostdlib++ compliant).
+ *
+ * Inherits from `SqliteLockBase` for compatibility with RAII guard wrappers.
+ *
+ * @code
+ * SqliteThreadMutex mtx;
+ * {
+ *     SqliteThreadMutexGuard guard(mtx);
+ *     // Critical section protected
+ * }
+ * @endcode
  */
 class SqliteThreadMutex : public SqliteLockBase {
 private:
-    sqlite3_thread_mutex_t m_mutex;
+    sqlite3_thread_mutex_t m_mutex;  /**< Underlying OS native mutex handle. */
 
 public:
     /**
@@ -32,14 +59,18 @@ public:
     }
 
     /**
-     * @brief Destroys the native OS mutex.
+     * @brief Destroys the native OS mutex and releases system resources.
      */
     inline ~SqliteThreadMutex() {
         sqlite3_thread_mutex_destroy(&m_mutex);
     }
 
+    // Non-copyable
+    SqliteThreadMutex(const SqliteThreadMutex&) = delete;
+    SqliteThreadMutex& operator=(const SqliteThreadMutex&) = delete;
+
     /**
-     * @brief Acquires exclusive ownership of the mutex.
+     * @brief Acquires exclusive ownership of the mutex, blocking until acquired.
      */
     inline void lock() {
         sqlite3_thread_mutex_lock(&m_mutex);
@@ -54,7 +85,7 @@ public:
 
     /**
      * @brief Returns the underlying native OS mutex handle.
-     * @return Pointer to the native sqlite3_thread_mutex_t.
+     * @return Pointer to the native `sqlite3_thread_mutex_t`.
      */
     inline sqlite3_thread_mutex_t* native_handle() {
         return &m_mutex;
@@ -63,16 +94,16 @@ public:
 
 /**
  * @class SqliteThreadMutexGuard
- * @brief Scoped RAII guard for acquiring and releasing a SqliteThreadMutex automatically.
+ * @brief Scoped RAII guard for acquiring and releasing a `SqliteThreadMutex` automatically.
  */
 class SqliteThreadMutexGuard : public SqliteGuardBase {
 private:
-    SqliteThreadMutex& m_mutex;
+    SqliteThreadMutex& m_mutex;  /**< Reference to the locked mutex. */
 
 public:
     /**
      * @brief Locks the associated mutex upon construction.
-     * @param m The SqliteThreadMutex reference to lock.
+     * @param m The `SqliteThreadMutex` reference to lock.
      */
     explicit inline SqliteThreadMutexGuard(SqliteThreadMutex& m) : m_mutex(m) {
         m_mutex.lock();
@@ -85,9 +116,13 @@ public:
         m_mutex.unlock();
     }
 
+    // Non-copyable
+    SqliteThreadMutexGuard(const SqliteThreadMutexGuard&) = delete;
+    SqliteThreadMutexGuard& operator=(const SqliteThreadMutexGuard&) = delete;
+
     /**
      * @brief Returns reference to the guarded mutex.
-     * @return Reference to the underlying SqliteThreadMutex.
+     * @return Reference to the underlying `SqliteThreadMutex`.
      */
     inline SqliteThreadMutex& mutex() {
         return m_mutex;
@@ -97,10 +132,31 @@ public:
 /**
  * @class SqliteConditionVariable
  * @brief Freestanding C++11 condition variable wrapping native OS synchronization primitives.
+ *
+ * Provides thread notification mechanisms (`notify_one`, `notify_all`) and predicate wait loops.
+ *
+ * @code
+ * SqliteThreadMutex mtx;
+ * SqliteConditionVariable cv;
+ * bool ready = false;
+ *
+ * // Consumer
+ * {
+ *     SqliteThreadMutexGuard guard(mtx);
+ *     cv.wait(guard, [&ready]() { return ready; });
+ * }
+ *
+ * // Producer
+ * {
+ *     SqliteThreadMutexGuard guard(mtx);
+ *     ready = true;
+ *     cv.notify_one();
+ * }
+ * @endcode
  */
 class SqliteConditionVariable {
 private:
-    sqlite3_cond_t m_cond;
+    sqlite3_cond_t m_cond;  /**< Underlying OS native condition variable handle. */
 
 public:
     /**
@@ -122,30 +178,30 @@ public:
     SqliteConditionVariable& operator=(const SqliteConditionVariable&) = delete;
 
     /**
-     * @brief Wakes up one waiting thread.
+     * @brief Wakes up at least one waiting thread.
      */
     inline void notify_one() {
         sqlite3_cond_signal(&m_cond);
     }
 
     /**
-     * @brief Wakes up all waiting threads.
+     * @brief Wakes up all waiting threads simultaneously.
      */
     inline void notify_all() {
         sqlite3_cond_broadcast(&m_cond);
     }
 
     /**
-     * @brief Atomically unlocks the mutex and blocks until notified.
-     * @param mutex The locked SqliteThreadMutex instance.
+     * @brief Atomically unlocks the mutex and blocks indefinitely until notified.
+     * @param mutex The locked `SqliteThreadMutex` instance.
      */
     inline void wait(SqliteThreadMutex& mutex) {
         sqlite3_cond_wait(&m_cond, mutex.native_handle());
     }
 
     /**
-     * @brief Atomically unlocks the mutex guard and blocks until notified.
-     * @param guard The locked SqliteThreadMutexGuard instance.
+     * @brief Atomically unlocks the mutex guard and blocks indefinitely until notified.
+     * @param guard The locked `SqliteThreadMutexGuard` instance.
      */
     inline void wait(SqliteThreadMutexGuard& guard) {
         sqlite3_cond_wait(&m_cond, guard.mutex().native_handle());
@@ -153,9 +209,9 @@ public:
 
     /**
      * @brief Atomically blocks until notified or timeout expires.
-     * @param guard The locked SqliteThreadMutexGuard instance.
+     * @param guard The locked `SqliteThreadMutexGuard` instance.
      * @param timeout_ms Maximum time to wait in milliseconds.
-     * @return True if signaled, false if timed out.
+     * @return True if signaled before timeout, false if timed out.
      */
     inline bool wait_for(SqliteThreadMutexGuard& guard, unsigned int timeout_ms) {
         int rc = sqlite3_cond_timedwait(&m_cond, guard.mutex().native_handle(), timeout_ms);
@@ -164,8 +220,11 @@ public:
 
     /**
      * @brief Blocks until notified and the given predicate evaluates to true.
+     *
+     * Automatically loops on predicate evaluation to protect against spurious wakeups.
+     *
      * @tparam Predicate Callable returning boolean.
-     * @param guard The locked SqliteThreadMutexGuard instance.
+     * @param guard The locked `SqliteThreadMutexGuard` instance.
      * @param pred Predicate function or lambda to check.
      */
     template <typename Predicate>
@@ -177,8 +236,9 @@ public:
 
     /**
      * @brief Blocks until notified and predicate is true, or timeout expires.
+     *
      * @tparam Predicate Callable returning boolean.
-     * @param guard The locked SqliteThreadMutexGuard instance.
+     * @param guard The locked `SqliteThreadMutexGuard` instance.
      * @param timeout_ms Maximum time to wait in milliseconds.
      * @param pred Predicate function or lambda to check.
      * @return True if predicate evaluated to true, false if timed out.
@@ -201,19 +261,38 @@ public:
 
 /**
  * @class SqliteThread
- * @brief Zero-dependency C++11 thread wrapper mimicking std::thread without standard library dependencies.
- * Supports move semantics, function pointers, and stateless/stateful lambdas.
+ * @brief Zero-dependency C++11 thread wrapper mimicking `std::thread` without standard library dependencies.
+ *
+ * Supports move semantics, raw function pointers, capturing lambdas, and member function invocations.
+ *
+ * @code
+ * // Spawning a capturing lambda
+ * int val = 10;
+ * SqliteThread t([&val]() {
+ *     val += 20;
+ * });
+ * t.join();
+ * assert(val == 30);
+ * @endcode
  */
 class SqliteThread {
 private:
-    sqlite3_thread_t m_thread;
-    bool m_joinable;
+    sqlite3_thread_t m_thread;    /**< Underlying cross-platform thread handle. */
+    bool             m_joinable;  /**< Tracks whether thread is active and joinable. */
 
+    /**
+     * @struct CallableHolderBase
+     * @brief Non-virtual type-erased closure holder for thread execution.
+     */
     struct CallableHolderBase {
-        void (*invoke_fn)(CallableHolderBase*);
-        void (*destroy_fn)(CallableHolderBase*);
+        void (*invoke_fn)(CallableHolderBase*);   /**< Invocation function pointer. */
+        void (*destroy_fn)(CallableHolderBase*);  /**< Destruction function pointer. */
     };
 
+    /**
+     * @struct CallableHolder
+     * @brief Templated closure container storing user-supplied functors and lambdas.
+     */
     template <typename F>
     struct CallableHolder : public CallableHolderBase {
         F func;
@@ -263,7 +342,7 @@ public:
 
     /**
      * @brief Constructs and launches a thread from a parameterless function pointer.
-     * @param fn Function pointer of type void (*fn)().
+     * @param fn Function pointer of type `void (*)()`.
      */
     inline explicit SqliteThread(void (*fn)()) : m_joinable(false) {
         int rc = sqlite3_thread_create(&m_thread, fn_trampoline, reinterpret_cast<void*>(fn));
@@ -273,7 +352,7 @@ public:
     /**
      * @brief Constructs and launches a thread from a function pointer with user data.
      * @tparam Arg Type of the argument structure.
-     * @param func Function pointer of type void* (*func)(Arg*).
+     * @param func Function pointer of type `void* (*)(Arg*)`.
      * @param arg Pointer to pass as argument.
      */
     template <typename Arg>
@@ -284,7 +363,7 @@ public:
     }
 
     /**
-     * @brief Constructs and launches a thread from a callable object or lambda.
+     * @brief Constructs and launches a thread from a callable object or capturing lambda.
      * @tparam Callable Type of the callable closure.
      * @param callable Lambda or functor to execute in the background thread.
      */

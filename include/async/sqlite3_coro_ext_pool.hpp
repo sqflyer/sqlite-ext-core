@@ -189,25 +189,50 @@ inline bool sqlite_coro_ext_spawn(F&& f, size_t stack_size = SQLITE3_CORO_DEFAUL
 /**
  * @class SqliteTaggedCoroPool
  * @brief C++ wrapper around the collision-proof static tag registry (`sqlite3_coro_ext_pool.h`).
+ *
+ * Provides a clean C++ static interface for managing pools keyed by raw static pointer addresses
+ * (`SQLITE_EXT_TAG(MyTag)`).
  */
 class SqliteTaggedCoroPool {
 public:
+    /**
+     * @brief Acquires the worker pool associated with the specified pointer tag.
+     * @param tag Static memory address pointer token.
+     * @param num_workers Worker thread count if creating the pool (default 4).
+     * @return Pointer to underlying `sqlite3_coro_pool_t`, or nullptr on failure.
+     */
     static inline sqlite3_coro_pool_t* acquire(const void* tag, int num_workers = 4) {
         return sqlite3_coro_ext_pool_acquire(tag, num_workers);
     }
 
+    /**
+     * @brief Releases a reference from an active database connection using the tag pointer.
+     * @param tag Static memory address pointer token.
+     */
     static inline void release(const void* tag) {
         sqlite3_coro_ext_pool_release(tag);
     }
 
+    /**
+     * @brief Blocks until all active/queued fibers in the specified tagged pool complete.
+     * @param tag Static memory address pointer token.
+     */
     static inline void wait_all(const void* tag) {
         sqlite3_coro_ext_pool_wait(tag);
     }
 
+    /**
+     * @brief Returns active database connection reference count for the tagged pool.
+     * @param tag Static memory address pointer token.
+     * @return Reference count, or 0 if inactive.
+     */
     static inline int ref_count(const void* tag) {
         return sqlite3_coro_ext_pool_ref_count(tag);
     }
 
+    /**
+     * @brief Forcibly destroys and frees all tagged pools registered across the process.
+     */
     static inline void shutdown_all() {
         sqlite3_coro_ext_pool_shutdown_all();
     }

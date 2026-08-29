@@ -1,3 +1,13 @@
+/**
+ * @file test_coro_sched.cpp
+ * @brief C++11/C++20 SqliteCoroScheduler Test Suite (-nostdlib++ compliant).
+ *
+ * Verifies RAII C++11 M:N coroutine scheduler wrapper (`SqliteCoroScheduler`), capturing lambda task dispatch,
+ * process-wide singleton global acquisition (`SqliteCoroScheduler::acquire_global`), move semantics,
+ * multi-stage pipeline closures across workers, standalone template spawn helpers (`sqlite_coro_spawn`),
+ * custom stack allocations, and high-concurrency throughput testing.
+ */
+
 #define SQLITE_CORE
 #include <sqlite3.h>
 #include <stdio.h>

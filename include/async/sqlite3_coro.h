@@ -3,12 +3,41 @@
 
 /**
  * @file sqlite3_coro.h
- * @brief Zero-dependency, freestanding Pure C Stackful Coroutine & Fiber Subsystem.
+ * @brief Zero-dependency, freestanding Pure C Stackful Coroutine & Fiber Subsystem for SQLite extensions.
  *
- * Provides cooperative multitasking, stackful context switching, and value yielding
- * without standard library runtime dependencies. Uses native Win32 Fibers on Windows
- * and POSIX ucontext_t on POSIX platforms, with stack and state memory allocated
- * strictly via sqlite3_malloc64 / sqlite3_free.
+ * ## Architectural Overview
+ * `sqlite3_coro.h` provides cooperative, stackful coroutine primitives (fibers) designed
+ * specifically for high-throughput, low-overhead database workloads, loadable extensions,
+ * and TVF (Table-Valued Function) streaming:
+ *
+ * 1. **Dual-Backend Native Execution**:
+ *    - **Windows (`_WIN32` / `_WIN64`)**: Implemented via native Win32 Fibers (`CreateFiberEx`,
+ *      `ConvertThreadToFiberEx`, `SwitchToFiber`). Fiber contexts allocate hardware execution
+ *      stacks and maintain exact TEB (Thread Environment Block) stack limit registers.
+ *    - **POSIX (Linux / macOS / BSD)**: Implemented via POSIX `ucontext_t` hardware context
+ *      switching (`makecontext`, `swapcontext`), backed by heap stacks allocated strictly via
+ *      `sqlite3_malloc64`.
+ *
+ * 2. **SSE / Floating-Point Register Preservation (`FIBER_FLAG_FLOAT_SWITCH`)**:
+ *    - On x86_64 Windows ABI, registers `XMM6` through `XMM15` are non-volatile (callee-saved).
+ *    - Standard `CreateFiber` does *not* preserve SIMD/SSE registers across context switches.
+ *    - Under aggressive compiler optimization (`-O2` / `/O2`), vector arithmetic, structs, and loop
+ *      variables reside in XMM registers. `sqlite3_coro.h` strictly creates and converts fibers using
+ *      `CreateFiberEx(..., FIBER_FLAG_FLOAT_SWITCH)` and `ConvertThreadToFiberEx(NULL, FIBER_FLAG_FLOAT_SWITCH)`
+ *      (flag `0x1`), guaranteeing zero register clobbering across multi-threaded yields.
+ *
+ * 3. **Cross-Thread Migration & Native `GetFiberData()` Resolution**:
+ *    - In an M:N thread pool, a fiber may yield on Thread A and resume on Thread B.
+ *    - Thread-Local Storage (`__thread` / `__declspec(thread)`) belongs to the hosting OS thread,
+ *      not the fiber itself.
+ *    - On Windows, `sqlite3_coro.h` stores the `sqlite3_coro_state_t*` pointer in the Win32 Fiber's
+ *      native data slot (`GetFiberData()`). Wherever the fiber executes, `sqlite3_coro_active_state()`
+ *      resolves the exact fiber state in a single CPU instruction (`__readgsqword(0x10)`).
+ *
+ * 4. **Deterministic SQLite Memory Tracking**:
+ *    - All coroutine state containers and POSIX stack allocations route strictly through
+ *      `sqlite3_malloc64` and `sqlite3_free`, ensuring 100% visibility in `sqlite3_memory_used()`.
+ *    - Fully compatible with `-nostdlib`, `-nostdlib++`, `-fno-exceptions`, and `-fno-rtti`.
  */
 
 #include <sqlite3.h>
@@ -53,6 +82,9 @@ extern "C" {
 
 /**
  * @brief Default stack size for newly created coroutines (64 KB).
+ *
+ * Provides ample headroom for database queries, string manipulation, and nested function calls
+ * while maintaining a minimal memory footprint.
  */
 #define SQLITE3_CORO_DEFAULT_STACK_SIZE (64 * 1024)
 
@@ -85,7 +117,7 @@ typedef struct sqlite3_coro_state {
 
 /**
  * @struct sqlite3_coro
- * @brief Coroutine handle struct.
+ * @brief Opaque stackful coroutine handle struct.
  */
 typedef struct sqlite3_coro {
     sqlite3_coro_state_t* state;         /**< Stable heap state pointer. */
@@ -102,7 +134,15 @@ static SQLITE_CORO_THREAD_LOCAL sqlite3_coro_state_t* g_active_coro_state = NULL
 
 /**
  * @brief Internal Win32 fiber entry trampoline.
- * @param param Pointer to the stable sqlite3_coro_state_t.
+ *
+ * Executes the user's entry function. Upon completion, marks the coroutine as finished
+ * and switches control back to the calling fiber in a non-returning loop.
+ *
+ * @note The `caller` handle is cached locally on the fiber stack prior to state mutation.
+ * This guarantees that if the resuming caller frees `st` immediately upon task completion,
+ * the trampoline does not dereference `st->caller_fiber` (preventing use-after-free).
+ *
+ * @param param Pointer to the stable `sqlite3_coro_state_t` descriptor.
  */
 static void CALLBACK sqlite3_coro_win_trampoline(void* param) {
     sqlite3_coro_state_t* st = (sqlite3_coro_state_t*)param;
@@ -137,7 +177,8 @@ static void CALLBACK sqlite3_coro_win_trampoline(void* param) {
  * @brief Initializes and creates a stackful coroutine (fiber).
  *
  * Allocates an internal state structure and dedicated fiber context. On Windows,
- * creates a Win32 Fiber via `CreateFiberEx`. Memory is allocated strictly via `sqlite3_malloc64`.
+ * creates a Win32 Fiber via `CreateFiberEx` with `FIBER_FLAG_FLOAT_SWITCH`.
+ * Memory is allocated strictly via `sqlite3_malloc64`.
  *
  * @param coro Pointer to uninitialized `sqlite3_coro_t` handle.
  * @param stack_size Requested fiber stack size in bytes (pass 0 for default 64KB).
@@ -184,11 +225,12 @@ static inline int sqlite3_coro_create(
 /**
  * @brief Resumes execution of the coroutine from its last yield point.
  *
- * Converts the calling OS thread to a fiber if necessary, saves the active caller
- * context, and performs a stackful hardware context switch to the coroutine fiber.
+ * Converts the calling OS thread to a fiber if necessary (with `FIBER_FLAG_FLOAT_SWITCH`),
+ * saves the active caller context, validates user-mode pointer bounds (`>= 0x10000`), and
+ * performs a stackful hardware context switch to the target coroutine fiber.
  *
  * @param coro Pointer to the coroutine to resume.
- * @return `SQLITE_OK` on success, or `SQLITE_MISUSE` if the coroutine is finished, running, or invalid.
+ * @return `SQLITE_OK` on success, `SQLITE_MISUSE` if already finished/running, or `SQLITE_ERROR` on failure.
  */
 static inline int sqlite3_coro_resume(sqlite3_coro_t* coro) {
     if (!coro || !coro->state || coro->state->is_done || !coro->state->fiber_handle) {
@@ -197,7 +239,7 @@ static inline int sqlite3_coro_resume(sqlite3_coro_t* coro) {
 
     sqlite3_coro_state_t* st = coro->state;
 
-    /* Ensure current thread is converted to a fiber with SSE/Float preservation */
+    /* Ensure current calling thread is converted to a fiber with SSE/Float preservation */
     void* cur_fiber = GetCurrentFiber();
     if (!cur_fiber || (uintptr_t)cur_fiber < (uintptr_t)0x10000) {
         cur_fiber = ConvertThreadToFiberEx(NULL, FIBER_FLAG_FLOAT_SWITCH);
@@ -235,7 +277,9 @@ static inline int sqlite3_coro_resume(sqlite3_coro_t* coro) {
  * @brief Retrieves the active coroutine state from the current fiber context.
  *
  * Uses native `GetFiberData()` on Windows to guarantee exact fiber state resolution
- * even when fibers migrate across multiple OS worker threads.
+ * even when fibers migrate across multiple OS worker threads in an M:N thread pool.
+ *
+ * @return Pointer to active `sqlite3_coro_state_t`, or `NULL` if called outside any coroutine.
  */
 static inline sqlite3_coro_state_t* sqlite3_coro_active_state(void) {
 #if defined(_WIN32) || defined(_WIN64)
@@ -252,6 +296,7 @@ static inline sqlite3_coro_state_t* sqlite3_coro_active_state(void) {
  *
  * Suspends the active coroutine's execution, preserves its entire call stack and CPU
  * register state, and transfers control back to the thread or fiber that called `sqlite3_coro_resume`.
+ * Safe to call from anywhere inside the coroutine call tree.
  */
 static inline void sqlite3_coro_yield(void) {
     sqlite3_coro_state_t* st = sqlite3_coro_active_state();
@@ -478,12 +523,21 @@ static inline int sqlite3_coro_resume(sqlite3_coro_t* coro) {
 }
 
 /**
+ * @brief Retrieves the active POSIX coroutine state descriptor.
+ *
+ * @return Pointer to active `sqlite3_coro_state_t`, or `NULL` if called outside any coroutine.
+ */
+static inline sqlite3_coro_state_t* sqlite3_coro_active_state(void) {
+    return g_active_coro_state;
+}
+
+/**
  * @brief Yields execution back to the caller from inside the active POSIX coroutine.
  *
  * Saves the coroutine's context and swaps back to the caller context via `swapcontext`.
  */
 static inline void sqlite3_coro_yield(void) {
-    sqlite3_coro_state_t* st = g_active_coro_state;
+    sqlite3_coro_state_t* st = sqlite3_coro_active_state();
     if (!st) return;
 
     st->is_running = 0;
@@ -505,7 +559,7 @@ static inline void sqlite3_coro_yield(void) {
  * @param val Pointer to data to yield back to caller.
  */
 static inline void sqlite3_coro_yield_value(void* val) {
-    sqlite3_coro_state_t* st = g_active_coro_state;
+    sqlite3_coro_state_t* st = sqlite3_coro_active_state();
     if (st) {
         st->yield_value = val;
     }
