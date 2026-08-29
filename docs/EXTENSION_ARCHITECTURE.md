@@ -220,3 +220,16 @@ Stateful extensions require per-database isolation and thread-safe mutation. `Sq
 | **Windows (MinGW GCC)** | Default | `__declspec(dllexport)` | C++11, C++14, C++17, C++20 |
 | **Windows (MSVC)** | Default | `__declspec(dllexport)` | `/std:c++14`, `/std:c++17`, `/std:c++20` |
 | **macOS (Apple Clang)** | Default | `__attribute__((visibility("default")))` | C++11, C++14, C++17, C++20 |
+
+---
+
+## 8. Multi-Extension Dynamic Loading & ASan ODR Handling
+
+When multiple SQLite dynamic extensions (`.so`, `.dll`, `.dylib`) are dynamically loaded via `sqlite3_load_extension()` (`dlopen` / `LoadLibrary`) into the same host process:
+
+1. **Per-Extension Dispatch Table**:
+   - Each extension includes `SQLITE_EXTENSION_INIT1`, defining an independent global `const sqlite3_api_routines *sqlite3_api` variable within its own binary image.
+2. **AddressSanitizer (ASan) ODR Checker Configuration**:
+   - AddressSanitizer's default One Definition Rule (ODR) checker flags duplicate global variable names across distinct `dlopen`ed shared libraries.
+   - For host test loaders exercising multiple SQLite extensions concurrently under ASan, `ASAN_OPTIONS=detect_odr_violation=0` is configured to allow separate shared libraries to maintain their own `sqlite3_api` dispatch table without false-positive ODR aborts.
+

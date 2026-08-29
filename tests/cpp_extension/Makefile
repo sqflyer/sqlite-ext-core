@@ -9,6 +9,7 @@ ifeq ($(UNAME_S),Linux)
     CC := gcc
     SAN_FLAGS := -fsanitize=address,leak
     EXT_SUFFIX := .so
+    RUN_ENV := ASAN_OPTIONS=detect_odr_violation=0
 else
     # macOS (Darwin) & Windows (MSYS2 / MinGW / CYGWIN)
     ifneq ($(wildcard /clang64/bin),)
@@ -20,6 +21,7 @@ else
         CC := clang
     endif
     SAN_FLAGS := -fsanitize=address
+    RUN_ENV :=
     ifeq ($(UNAME_S),Darwin)
         EXT_SUFFIX := .dylib
     else
@@ -55,7 +57,7 @@ $(LOADER): test_loader.cpp | $(TARGET_DIR)
 	$(CXX) $(CXXFLAGS) -o $@ $< -lsqlite3
 
 test: $(ALL_LIBS) $(LOADER)
-	./$(LOADER) $(STATELESS_LIB) $(STATEFUL_LIB) $(MIXED_LIB)
+	$(RUN_ENV) ./$(LOADER) $(STATELESS_LIB) $(STATEFUL_LIB) $(MIXED_LIB)
 
 clean:
 	rm -rf $(TARGET_DIR)

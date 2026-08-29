@@ -10,6 +10,15 @@
  * Compatible with C99, C11, C++11, -nostdlib, and -nostdlib++.
  */
 
+#if !defined(_WIN32) && !defined(_WIN64)
+#ifndef _DEFAULT_SOURCE
+#define _DEFAULT_SOURCE
+#endif
+#ifndef _POSIX_C_SOURCE
+#define _POSIX_C_SOURCE 200809L
+#endif
+#endif
+
 #include <stdint.h>
 #include <time.h>
 
@@ -126,7 +135,7 @@ static inline long sqlite3_time_timezone_offset_sec(void) {
     localtime_r(&now, &tm_local);
 #endif
 
-#if defined(__linux__) || defined(__APPLE__) || defined(__FreeBSD__)
+#if (defined(__linux__) || defined(__APPLE__) || defined(__FreeBSD__)) && (defined(__USE_MISC) || defined(_GNU_SOURCE) || defined(_DEFAULT_SOURCE) || defined(_BSD_SOURCE))
     return tm_local.tm_gmtoff;
 #else
     struct tm tm_utc;
@@ -150,7 +159,10 @@ static inline void sqlite3_time_sleep_ms(unsigned int ms) {
 #if defined(_WIN32) || defined(_WIN64)
     Sleep((DWORD)ms);
 #else
-    usleep((useconds_t)ms * 1000U);
+    struct timespec ts;
+    ts.tv_sec = (time_t)(ms / 1000U);
+    ts.tv_nsec = (long)((ms % 1000U) * 1000000L);
+    nanosleep(&ts, NULL);
 #endif
 }
 
@@ -167,7 +179,10 @@ static inline void sqlite3_time_sleep_us(unsigned int us) {
         Sleep(0);
     }
 #else
-    usleep((useconds_t)us);
+    struct timespec ts;
+    ts.tv_sec = (time_t)(us / 1000000U);
+    ts.tv_nsec = (long)((us % 1000000U) * 1000L);
+    nanosleep(&ts, NULL);
 #endif
 }
 

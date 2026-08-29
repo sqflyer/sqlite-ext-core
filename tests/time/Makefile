@@ -8,6 +8,7 @@ ifeq ($(UNAME_S),Linux)
     CXX := g++
     CC := gcc
     SAN_FLAGS := -fsanitize=address,leak
+    POSIX_FLAGS := -D_DEFAULT_SOURCE -D_POSIX_C_SOURCE=200809L
 else
     # macOS (Darwin) & Windows (MSYS2 / MinGW / CYGWIN)
     ifneq ($(wildcard /clang64/bin),)
@@ -19,10 +20,11 @@ else
         CC := clang
     endif
     SAN_FLAGS := -fsanitize=address
+    POSIX_FLAGS :=
 endif
 
-CFLAGS := -std=c99 -Wall -Wextra -O2 -I../../include $(SAN_FLAGS)
-CXXFLAGS := -std=c++11 -Wall -Wextra -O2 -I../../include -fno-exceptions -fno-rtti $(SAN_FLAGS)
+CFLAGS := -std=c99 $(POSIX_FLAGS) -Wall -Wextra -O2 -I../../include $(SAN_FLAGS)
+CXXFLAGS := -std=c++11 $(POSIX_FLAGS) -Wall -Wextra -O2 -I../../include -fno-exceptions -fno-rtti $(SAN_FLAGS)
 
 BIN_DIR = bin
 
