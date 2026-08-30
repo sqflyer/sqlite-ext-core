@@ -6,20 +6,20 @@
  * Provides a footprint-optimized, zero-dependency pair of value container
  * templates:
  *
- * 1. `SqliteValueTuple<size_t N>`:
+ * 1. `SqliteValueTuple<size_t N = 0>`:
  *    - Specialization $N \in [1..8]$: Exact $N \times 16\text{B}$ in-situ stack
  * array. Zero heap allocations, zero capacity overhead, exact L1 cache line
  * alignment (16B, 32B, 48B, 64B, 128B). Designed for compile-time fixed-arity
  * Primary Keys, Composite Index Keys, and Fixed Records.
- *    - Specialization $N \ge 9$: Compiles directly to dynamic heap buffer via
- * `sqlite3_malloc64`.
+ *    - Specialization $N = 0$ (default `SqliteValueTuple<>`): Direct dynamic heap tuple
+ * with runtime-sized buffer via `sqlite3_malloc64`.
  *
- * 2. `SqliteValueVec<size_t N>`:
+ * 2. `SqliteValueVec<size_t N = 0>`:
  *    - Specialization $N \in [1..8]$: Small Buffer Optimized (SBO) dynamic
  * vector with $N \times 16\text{B}$ in-situ stack storage. Seamlessly spills to
  * heap (`sqlite3_malloc64`) when resized $> N$, and safely returns to stack
  * when shrunk back $\le N$.
- *    - Specialization $N \ge 9$: Direct dynamic heap vector.
+ *    - Specialization $N = 0$ (default `SqliteValueVec<>`): Direct dynamic heap vector with 0 stack SBO overhead.
  *
  * 3. `withSqliteRowOwned(int size, Callable&& fn)`:
  *    - Zero-heap stack allocation dispatcher evaluating runtime column counts
@@ -70,8 +70,8 @@ template <typename T> struct sqlite_container_enable_if<true, T> {
 };
 
 // Forward declarations for container template predicates
-template <size_t N, typename Enable> class SqliteValueTuple;
-template <size_t N, typename Enable> class SqliteValueVec;
+template <size_t N = 0, typename Enable = void> class SqliteValueTuple;
+template <size_t N = 0, typename Enable = void> class SqliteValueVec;
 
 namespace sqlite_container_internal {
 // ------------------------------------------------------------------------
@@ -244,6 +244,176 @@ template <> struct TupleHashHelper<1> {
 } // namespace sqlite_container_internal
 
 // ============================================================================
+// STANDARD TUPLE & VECTOR MODIFIER SYNTHESIS MACROS
+// ============================================================================
+
+#ifndef SQLITE_DERIVE_STD_TUPLE_MODIFIERS
+/**
+ * @def SQLITE_DERIVE_STD_TUPLE_MODIFIERS
+ * @brief Synthesizes fill() modifiers for fixed-size tuple containers.
+ * @param DataPtr Contiguous pointer to beginning of elements.
+ * @param SizeVal Number of elements to fill.
+ */
+#define SQLITE_DERIVE_STD_TUPLE_MODIFIERS(DataPtr, SizeVal) \
+  /** @brief Overwrites all tuple elements with clones of the given owned value. */ \
+  inline void fill(const SqliteValueOwned& val) { \
+    size_type sz = static_cast<size_type>(SizeVal); \
+    for (size_type i = 0; i < sz; ++i) (DataPtr)[i] = val.clone(); \
+  } \
+  /** @brief Overwrites all tuple elements with values constructed from a primitive literal. */ \
+  template <typename TPrimitive, typename sqlite_enable_if<!sqlite_is_same<typename sqlite_remove_reference<TPrimitive>::type, SqliteValueOwned>::value, int>::type = 0> \
+  inline void fill(const TPrimitive& val) { \
+    size_type sz = static_cast<size_type>(SizeVal); \
+    for (size_type i = 0; i < sz; ++i) (DataPtr)[i] = SqliteValueOwned(val); \
+  }
+#endif
+
+#ifndef SQLITE_DERIVE_STD_VEC_METHODS
+/**
+ * @def SQLITE_DERIVE_STD_VEC_METHODS
+ * @brief Synthesizes complete std::vector compliant modifiers (max_size, resize with value, insert, erase, assign, swap).
+ * @param ContainerType The concrete vector type name.
+ */
+#define SQLITE_DERIVE_STD_VEC_METHODS(ContainerType) \
+  /** @brief Returns maximum theoretical element capacity for the vector. */ \
+  inline constexpr size_type max_size() const noexcept { return static_cast<size_type>(-1) / sizeof(SqliteValueOwned); } \
+  /** @brief Resizes container, appending cloned copies of val if count > size(). */ \
+  inline void resize(size_type count, const SqliteValueOwned& val) { \
+    size_type old_sz = static_cast<size_type>(size()); \
+    resize(static_cast<int>(count)); \
+    for (size_type i = old_sz; i < count; ++i) { \
+      (*this)[static_cast<int>(i)] = val.clone(); \
+    } \
+  } \
+  /** @brief Resizes container, appending primitive-constructed values if count > size(). */ \
+  template <typename TPrimitive, typename sqlite_enable_if<!sqlite_is_same<typename sqlite_remove_reference<TPrimitive>::type, SqliteValueOwned>::value, int>::type = 0> \
+  inline void resize(size_type count, const TPrimitive& val) { \
+    size_type old_sz = static_cast<size_type>(size()); \
+    resize(static_cast<int>(count)); \
+    for (size_type i = old_sz; i < count; ++i) { \
+      (*this)[static_cast<int>(i)] = SqliteValueOwned(val); \
+    } \
+  } \
+  /** @brief Inserts a cloned copy of an owned value before pos. */ \
+  inline iterator insert(const_iterator pos, const SqliteValueOwned& val) { \
+    difference_type idx = pos - cbegin(); \
+    if (idx < 0) idx = 0; \
+    if (idx > static_cast<difference_type>(size())) idx = static_cast<difference_type>(size()); \
+    int sz = size(); \
+    resize(sz + 1); \
+    pointer d = data(); \
+    for (int i = sz; i > idx; --i) { \
+      d[i] = sqlite_move(d[i - 1]); \
+    } \
+    d[idx] = val.clone(); \
+    return d + idx; \
+  } \
+  /** @brief Moves an owned rvalue into position before pos. */ \
+  inline iterator insert(const_iterator pos, SqliteValueOwned&& val) { \
+    difference_type idx = pos - cbegin(); \
+    if (idx < 0) idx = 0; \
+    if (idx > static_cast<difference_type>(size())) idx = static_cast<difference_type>(size()); \
+    int sz = size(); \
+    resize(sz + 1); \
+    pointer d = data(); \
+    for (int i = sz; i > idx; --i) { \
+      d[i] = sqlite_move(d[i - 1]); \
+    } \
+    d[idx] = sqlite_move(val); \
+    return d + idx; \
+  } \
+  /** @brief Inserts a value constructed from a primitive literal before pos. */ \
+  template <typename TPrimitive, typename sqlite_enable_if<!sqlite_is_same<typename sqlite_remove_reference<TPrimitive>::type, SqliteValueOwned>::value, int>::type = 0> \
+  inline iterator insert(const_iterator pos, const TPrimitive& val) { \
+    return insert(pos, SqliteValueOwned(val)); \
+  } \
+  /** @brief Inserts count copies of an owned value before pos. */ \
+  inline iterator insert(const_iterator pos, size_type count, const SqliteValueOwned& val) { \
+    difference_type idx = pos - cbegin(); \
+    if (idx < 0) idx = 0; \
+    if (idx > static_cast<difference_type>(size())) idx = static_cast<difference_type>(size()); \
+    int sz = size(); \
+    resize(sz + static_cast<int>(count)); \
+    pointer d = data(); \
+    for (int i = sz - 1; i >= idx; --i) { \
+      d[i + count] = sqlite_move(d[i]); \
+    } \
+    for (size_type i = 0; i < count; ++i) { \
+      d[idx + i] = val.clone(); \
+    } \
+    return d + idx; \
+  } \
+  /** @brief Inserts count copies constructed from a primitive literal before pos. */ \
+  template <typename TPrimitive, typename sqlite_enable_if<!sqlite_is_same<typename sqlite_remove_reference<TPrimitive>::type, SqliteValueOwned>::value, int>::type = 0> \
+  inline iterator insert(const_iterator pos, size_type count, const TPrimitive& val) { \
+    return insert(pos, count, SqliteValueOwned(val)); \
+  } \
+  /** @brief Erases element at pos. */ \
+  inline iterator erase(const_iterator pos) { \
+    difference_type idx = pos - cbegin(); \
+    int sz = size(); \
+    if (idx >= 0 && idx < sz) { \
+      pointer d = data(); \
+      for (int i = static_cast<int>(idx); i + 1 < sz; ++i) { \
+        d[i] = sqlite_move(d[i + 1]); \
+      } \
+      resize(sz - 1); \
+      return data() + idx; \
+    } \
+    return end(); \
+  } \
+  /** @brief Erases elements in the range [first, last). */ \
+  inline iterator erase(const_iterator first, const_iterator last) { \
+    difference_type idx_first = first - cbegin(); \
+    difference_type idx_last = last - cbegin(); \
+    int sz = size(); \
+    if (idx_first < 0) idx_first = 0; \
+    if (idx_last > sz) idx_last = sz; \
+    if (idx_first < idx_last) { \
+      difference_type cnt = idx_last - idx_first; \
+      pointer d = data(); \
+      for (int i = static_cast<int>(idx_first); i + cnt < sz; ++i) { \
+        d[i] = sqlite_move(d[i + cnt]); \
+      } \
+      resize(sz - static_cast<int>(cnt)); \
+      return data() + idx_first; \
+    } \
+    return data() + idx_first; \
+  } \
+  /** @brief Replaces contents with count copies of the given owned value. */ \
+  inline void assign(size_type count, const SqliteValueOwned& val) { \
+    clear(); \
+    resize(static_cast<int>(count)); \
+    for (size_type i = 0; i < count; ++i) { \
+      (*this)[static_cast<int>(i)] = val.clone(); \
+    } \
+  } \
+  /** @brief Replaces contents with count copies constructed from a primitive literal. */ \
+  template <typename TPrimitive, typename sqlite_enable_if<!sqlite_is_same<typename sqlite_remove_reference<TPrimitive>::type, SqliteValueOwned>::value, int>::type = 0> \
+  inline void assign(size_type count, const TPrimitive& val) { \
+    clear(); \
+    resize(static_cast<int>(count)); \
+    for (size_type i = 0; i < count; ++i) { \
+      (*this)[static_cast<int>(i)] = SqliteValueOwned(val); \
+    } \
+  } \
+  /** @brief Replaces contents with elements from the given pointer/iterator range [first, last). */ \
+  template <typename InputIt> \
+  inline void assign(InputIt* first, InputIt* last) { \
+    clear(); \
+    for (; first != last; ++first) { \
+      push_back(*first); \
+    } \
+  } \
+  /** @brief Swaps the contents of this vector with other via zero-allocation move semantics. */ \
+  inline void swap(ContainerType& other) noexcept { \
+    ContainerType tmp = sqlite_move(*this); \
+    *this = sqlite_move(other); \
+    other = sqlite_move(tmp); \
+  }
+#endif
+
+// ============================================================================
 // GENERIC CONSTRUCTOR SYNTHESIS MACROS
 // ============================================================================
 
@@ -392,7 +562,7 @@ template <> struct TupleHashHelper<1> {
  * @tparam N Fixed column count.
  * @tparam Enable SFINAE specialization selector.
  */
-template <size_t N = 1, typename Enable = void> class SqliteValueTuple;
+template <size_t N, typename Enable> class SqliteValueTuple;
 
 /**
  * @brief Specialization 1: N in [1..8] (Exact In-Situ Static Memory, 0 Heap
@@ -542,6 +712,9 @@ public:
   inline SqliteValueTuple &
   operator=(SqliteValueTuple &&other) noexcept = default;
 
+  // Standard C++ Container Type Definitions
+  SQLITE_DERIVE_STANDARD_CONTAINER_TYPEDEFS(SqliteValueOwned, SqliteValueOwned&, const SqliteValueOwned&, SqliteValueOwned*, const SqliteValueOwned*, SqliteValueOwned*, const SqliteValueOwned*)
+
   /** @brief Compile-time constant column count (0 runtime cycles). */
   inline constexpr int size() const noexcept { return static_cast<int>(N); }
 
@@ -560,6 +733,12 @@ public:
   /** @brief Always false for N in [1..8] (0 heap allocations). */
   inline constexpr bool is_heap() const noexcept { return false; }
 
+  /** @brief Returns pointer to contiguous in-situ element array. */
+  inline pointer       data() noexcept { return m_values; }
+
+  /** @brief Returns const pointer to contiguous in-situ element array. */
+  inline const_pointer data() const noexcept { return m_values; }
+
   /** @brief Resets all N columns in the tuple to SQLITE_NULL. */
   inline void set_null_all() noexcept {
     for (size_t i = 0; i < N; ++i) {
@@ -567,30 +746,25 @@ public:
     }
   }
 
-  /** @brief Returns pointer to contiguous in-situ element array. */
-  inline SqliteValueOwned *data() noexcept { return m_values; }
+  // Standard Array Accessors, Iterators, and Modifiers
+  SQLITE_DERIVE_STD_ARRAY_METHODS(m_values, N, fallback_null(), N)
+  SQLITE_DERIVE_STD_TUPLE_MODIFIERS(m_values, N)
 
-  /** @brief Returns const pointer to contiguous in-situ element array. */
-  inline const SqliteValueOwned *data() const noexcept { return m_values; }
-
-  /**
-   * @brief Bounds-safe mutable column element accessor.
-   * @param idx 0-based column index.
-   * @return Mutable reference to SqliteValueOwned at idx.
-   */
-  inline SqliteValueOwned &operator[](int idx) noexcept {
-    return m_values[idx >= 0 && idx < static_cast<int>(N) ? idx : 0];
+  /** @brief Swaps the contents of this tuple with another. */
+  inline void swap(SqliteValueTuple& other) noexcept {
+    for (size_t i = 0; i < N; ++i) {
+      SqliteValueOwned tmp = sqlite_move(m_values[i]);
+      m_values[i] = sqlite_move(other.m_values[i]);
+      other.m_values[i] = sqlite_move(tmp);
+    }
   }
 
-  /**
-   * @brief Bounds-safe const column element accessor.
-   * @param idx 0-based column index.
-   * @return Const reference to SqliteValueOwned at idx.
-   */
-  inline const SqliteValueOwned &operator[](int idx) const noexcept {
-    return m_values[idx >= 0 && idx < static_cast<int>(N) ? idx : 0];
+private:
+  static inline SqliteValueOwned& fallback_null() noexcept {
+    return const_cast<SqliteValueOwned&>(SqliteValueOwned::static_null());
   }
 
+public:
   /**
    * @brief Creates a lightweight non-owning span wrapper over this tuple.
    * @return 16-byte SqliteRowOwnedWrapper spanning m_values[0..N-1].
@@ -614,9 +788,8 @@ public:
     return sqlite_container_internal::TupleHashHelper<N>::compute(m_values);
   }
 
-  // Synthesized Typed Accessors, Range-Based Iterator & Full Relational Ops
+  // Synthesized Typed Accessors & Full Relational Ops
   SQLITE_DERIVE_ARRAY_ACCESSORS
-  SQLITE_DERIVE_ARRAY_ITERATOR(SqliteValueTuple, const SqliteValueOwned &)
   SQLITE_DERIVE_CONTAINER_RELATIONAL_OPS(SqliteValueTuple)
   SQLITE_DERIVE_CONTAINER_RELATIONAL_OPS(SqliteRowOwnedWrapper)
   SQLITE_DERIVE_CONTAINER_RELATIONAL_OPS(SqliteRowView)
@@ -624,20 +797,20 @@ public:
 };
 
 /**
- * @brief Specialization 2: N >= 9 (Compiles directly to Heap via
- * sqlite3_malloc64).
+ * @brief Specialization 2: N == 0 (Direct Dynamic Heap Tuple).
  *
- * For large fixed-column counts (N >= 9), memory is allocated dynamically via
- * SQLite's memory profiler to avoid consuming excessive stack space.
+ * For tuple base capacity N == 0 (default dynamic heap tuple),
+ * memory is allocated dynamically on the heap based on the size passed to the constructor.
  *
- * @tparam N Fixed column count >= 9.
+ * @tparam N Base capacity 0.
  */
 template <size_t N>
-class SqliteValueTuple<N, typename sqlite_container_enable_if<(N >= 9)>::type> {
+class SqliteValueTuple<
+    N, typename sqlite_container_enable_if<(N == 0)>::type> {
 private:
   SqliteValueOwned *m_data =
       nullptr; ///< Contiguous heap buffer allocated via sqlite3_malloc64.
-  uint32_t m_size = 0;     ///< Active element count (always equals N).
+  uint32_t m_size = 0;     ///< Active element count.
   uint32_t m_capacity = 0; ///< Allocated element capacity.
 
   inline void release_memory() noexcept {
@@ -694,13 +867,12 @@ private:
    */
   template <typename TValueType>
   inline void init_from_range(const TValueType *src, int count) {
-    allocate_memory(static_cast<uint32_t>(N));
-    m_size = static_cast<uint32_t>(N);
+    uint32_t req_size = count > 0 ? static_cast<uint32_t>(count) : 0;
+    allocate_memory(req_size);
+    m_size = req_size;
     init_null_values();
     if (src && count > 0) {
-      int limit =
-          static_cast<int>(m_size) < count ? static_cast<int>(m_size) : count;
-      for (int i = 0; i < limit; ++i) {
+      for (int i = 0; i < count; ++i) {
         m_data[i] = SqliteValueOwned(src[i]);
       }
     }
@@ -708,17 +880,25 @@ private:
 
 public:
   /**
-   * @brief Default constructor. Allocates N elements on the heap and
-   * initializes via SIMD memcpy.
+   * @brief Default constructor. Constructs an empty tuple (size = 0, capacity = 0).
    */
-  inline SqliteValueTuple() : m_data(nullptr), m_size(0), m_capacity(0) {
-    allocate_memory(static_cast<uint32_t>(N));
-    m_size = static_cast<uint32_t>(N);
-    init_null_values();
+  inline SqliteValueTuple() : m_data(nullptr), m_size(0), m_capacity(0) {}
+
+  /**
+   * @brief Sized constructor. Allocates `size` elements on the heap and initializes via SIMD memcpy.
+   * @param size Number of columns in this tuple.
+   */
+  inline explicit SqliteValueTuple(int size)
+      : m_data(nullptr), m_size(0), m_capacity(0) {
+    if (size > 0) {
+      allocate_memory(static_cast<uint32_t>(size));
+      m_size = static_cast<uint32_t>(size);
+      init_null_values();
+    }
   }
 
   // Synthesizes all primitive, array, and variadic heterogeneous constructors
-  SQLITE_DERIVE_TUPLE_CONSTRUCTORS(SqliteValueTuple)
+  SQLITE_DERIVE_VEC_CONSTRUCTORS(SqliteValueTuple)
 
   /**
    * @brief Multi-column initializing constructor from SqliteRowView.
@@ -726,14 +906,13 @@ public:
    */
   inline explicit SqliteValueTuple(const SqliteRowView &view_arr)
       : m_data(nullptr), m_size(0), m_capacity(0) {
-    allocate_memory(static_cast<uint32_t>(N));
-    m_size = static_cast<uint32_t>(N);
-    init_null_values();
-    int limit = static_cast<int>(m_size) < view_arr.size()
-                    ? static_cast<int>(m_size)
-                    : view_arr.size();
-    for (int i = 0; i < limit; ++i) {
-      m_data[i] = view_arr[i].to_owned();
+    if (view_arr.size() > 0) {
+      allocate_memory(static_cast<uint32_t>(view_arr.size()));
+      m_size = static_cast<uint32_t>(view_arr.size());
+      init_null_values();
+      for (int i = 0; i < view_arr.size(); ++i) {
+        m_data[i] = view_arr[i].to_owned();
+      }
     }
   }
 
@@ -744,22 +923,22 @@ public:
    * `.size()`.
    * @param full_row Complete row containing all table columns.
    * @param col_indices Array of column indices to project. If null, uses
-   * identity 0..N-1.
+   * identity 0..count-1.
    * @param count Number of indices in col_indices.
    */
   template <typename RowType>
   inline SqliteValueTuple(const RowType &full_row, const int *col_indices,
                           int count)
       : m_data(nullptr), m_size(0), m_capacity(0) {
-    allocate_memory(static_cast<uint32_t>(N));
-    m_size = static_cast<uint32_t>(N);
-    init_null_values();
-    int limit =
-        static_cast<int>(m_size) < count ? static_cast<int>(m_size) : count;
-    for (int i = 0; i < limit; ++i) {
-      int col = col_indices ? col_indices[i] : i;
-      if (col >= 0 && col < full_row.size()) {
-        m_data[i] = full_row[col].clone();
+    if (count > 0) {
+      allocate_memory(static_cast<uint32_t>(count));
+      m_size = static_cast<uint32_t>(count);
+      init_null_values();
+      for (int i = 0; i < count; ++i) {
+        int col = col_indices ? col_indices[i] : i;
+        if (col >= 0 && col < full_row.size()) {
+          m_data[i] = full_row[col].clone();
+        }
       }
     }
   }
@@ -827,6 +1006,9 @@ public:
     return *this;
   }
 
+  // Standard C++ Container Type Definitions
+  SQLITE_DERIVE_STANDARD_CONTAINER_TYPEDEFS(SqliteValueOwned, SqliteValueOwned&, const SqliteValueOwned&, SqliteValueOwned*, const SqliteValueOwned*, SqliteValueOwned*, const SqliteValueOwned*)
+
   /** @brief Active column count. */
   inline int size() const noexcept { return static_cast<int>(m_size); }
 
@@ -839,11 +1021,17 @@ public:
   /** @brief Checks if the tuple is empty. */
   inline bool empty() const noexcept { return m_size == 0; }
 
-  /** @brief Always false for N >= 9 (resides on heap). */
+  /** @brief Always false for N == 0 (resides on heap). */
   inline constexpr bool is_inline() const noexcept { return false; }
 
-  /** @brief Always true for N >= 9 (resides on heap). */
+  /** @brief Always true for N == 0 (resides on heap). */
   inline constexpr bool is_heap() const noexcept { return true; }
+
+  /** @brief Returns pointer to contiguous heap buffer. */
+  inline pointer       data() noexcept { return m_data; }
+
+  /** @brief Returns const pointer to contiguous heap buffer. */
+  inline const_pointer data() const noexcept { return m_data; }
 
   /** @brief Resets all columns in the heap tuple to SQLITE_NULL. */
   inline void set_null_all() noexcept {
@@ -852,32 +1040,21 @@ public:
     }
   }
 
-  /** @brief Returns pointer to contiguous heap buffer. */
-  inline SqliteValueOwned *data() noexcept { return m_data; }
+  // Standard Array Accessors, Iterators, and Modifiers
+  SQLITE_DERIVE_STD_ARRAY_METHODS(m_data, m_size, fallback_null(), m_size)
+  SQLITE_DERIVE_STD_TUPLE_MODIFIERS(m_data, m_size)
 
-  /** @brief Returns const pointer to contiguous heap buffer. */
-  inline const SqliteValueOwned *data() const noexcept { return m_data; }
-
-  /**
-   * @brief Bounds-safe mutable element accessor.
-   * @param idx 0-based column index.
-   * @return Mutable reference to SqliteValueOwned at idx.
-   */
-  inline SqliteValueOwned &operator[](int idx) noexcept {
-    return (m_data && idx >= 0 && idx < static_cast<int>(m_size))
-               ? m_data[idx]
-               : fallback_null();
-  }
-
-  /**
-   * @brief Bounds-safe const element accessor.
-   * @param idx 0-based column index.
-   * @return Const reference to SqliteValueOwned at idx.
-   */
-  inline const SqliteValueOwned &operator[](int idx) const noexcept {
-    return (m_data && idx >= 0 && idx < static_cast<int>(m_size))
-               ? m_data[idx]
-               : fallback_null();
+  /** @brief Swaps the heap buffers of this tuple with another. */
+  inline void swap(SqliteValueTuple& other) noexcept {
+    SqliteValueOwned* tmp_ptr = m_data;
+    uint32_t tmp_sz = m_size;
+    uint32_t tmp_cap = m_capacity;
+    m_data = other.m_data;
+    m_size = other.m_size;
+    m_capacity = other.m_capacity;
+    other.m_data = tmp_ptr;
+    other.m_size = tmp_sz;
+    other.m_capacity = tmp_cap;
   }
 
 private:
@@ -913,9 +1090,8 @@ public:
     return h;
   }
 
-  // Synthesized Typed Accessors, Range-Based Iterator & Full Relational Ops
+  // Synthesized Typed Accessors & Full Relational Ops
   SQLITE_DERIVE_ARRAY_ACCESSORS
-  SQLITE_DERIVE_ARRAY_ITERATOR(SqliteValueTuple, const SqliteValueOwned &)
   SQLITE_DERIVE_CONTAINER_RELATIONAL_OPS(SqliteValueTuple)
   SQLITE_DERIVE_CONTAINER_RELATIONAL_OPS(SqliteRowOwnedWrapper)
   SQLITE_DERIVE_CONTAINER_RELATIONAL_OPS(SqliteRowView)
@@ -923,15 +1099,15 @@ public:
 };
 
 // ============================================================================
-// PART 2: SqliteValueVec<size_t N = 1> (Adaptive Vector with Full Heap Spill)
+// PART 2: SqliteValueVec<size_t N = 0> (Adaptive Vector with Full Heap Spill)
 // ============================================================================
 
 /**
  * @brief Primary template declaration for SqliteValueVec.
- * @tparam N Small Buffer Optimization inline capacity.
+ * @tparam N Small Buffer Optimization inline capacity (default N = 0 for pure dynamic heap).
  * @tparam Enable SFINAE specialization selector.
  */
-template <size_t N = 1, typename Enable = void> class SqliteValueVec;
+template <size_t N, typename Enable> class SqliteValueVec;
 
 /**
  * @brief Specialization 1: N in [1..8] (In-Situ Stack SBO -> Completely Spills
@@ -1481,36 +1657,48 @@ public:
     }
   }
 
+  // Standard C++ Container Type Definitions
+  SQLITE_DERIVE_STANDARD_CONTAINER_TYPEDEFS(SqliteValueOwned, SqliteValueOwned&, const SqliteValueOwned&, SqliteValueOwned*, const SqliteValueOwned*, SqliteValueOwned*, const SqliteValueOwned*)
+
   /** @brief Returns pointer to contiguous active element buffer (stack or
    * heap). */
-  inline SqliteValueOwned *data() noexcept {
+  inline pointer       data() noexcept {
     return is_heap() ? m_heap.ptr : m_inline;
   }
 
   /** @brief Returns const pointer to contiguous active element buffer (stack or
    * heap). */
-  inline const SqliteValueOwned *data() const noexcept {
+  inline const_pointer data() const noexcept {
     return is_heap() ? m_heap.ptr : m_inline;
   }
 
-  /**
-   * @brief Bounds-safe mutable element accessor.
-   * @param idx 0-based column index.
-   * @return Mutable reference to SqliteValueOwned at idx.
-   */
-  inline SqliteValueOwned &operator[](int idx) noexcept {
-    return data()[idx >= 0 && idx < size() ? idx : 0];
+  // Standard Vector Iterators, Accessors, and Modifiers
+  SQLITE_DERIVE_ARRAY_ITERATORS(data(), size())
+  SQLITE_DERIVE_ARRAY_ELEMENT_ACCESSORS(data(), size(), fallback_null())
+  SQLITE_DERIVE_STD_VEC_METHODS(SqliteValueVec)
+
+  /** @brief Shrinks capacity to fit actual element count. */
+  inline void shrink_to_fit() {
+    int sz = size();
+    if (is_heap() && sz <= static_cast<int>(N)) {
+      resize_heap_to_stack(static_cast<uint32_t>(sz));
+    } else if (is_heap() && sz < static_cast<int>(m_heap.capacity)) {
+      SqliteValueOwned* new_buf = sqlite_new_array_zeroed<SqliteValueOwned>(sz);
+      if (sz > 0 && m_heap.ptr) {
+        memcpy(static_cast<void*>(new_buf), static_cast<const void*>(m_heap.ptr), sz * sizeof(SqliteValueOwned));
+      }
+      if (m_heap.ptr) sqlite_delete_array(m_heap.ptr);
+      m_heap.ptr = new_buf;
+      m_heap.capacity = static_cast<uint16_t>(sz);
+    }
   }
 
-  /**
-   * @brief Bounds-safe const element accessor.
-   * @param idx 0-based column index.
-   * @return Const reference to SqliteValueOwned at idx.
-   */
-  inline const SqliteValueOwned &operator[](int idx) const noexcept {
-    return data()[idx >= 0 && idx < size() ? idx : 0];
+private:
+  static inline SqliteValueOwned& fallback_null() noexcept {
+    return const_cast<SqliteValueOwned&>(SqliteValueOwned::static_null());
   }
 
+public:
   /**
    * @brief Creates a lightweight non-owning span wrapper over this vector.
    * @return 16-byte SqliteRowOwnedWrapper spanning data()[0..size-1].
@@ -1544,26 +1732,25 @@ public:
     return h;
   }
 
-  // Synthesized Typed Accessors, Range-Based Iterator & Full Relational Ops
+  // Synthesized Typed Accessors & Full Relational Ops
   SQLITE_DERIVE_ARRAY_ACCESSORS
-  SQLITE_DERIVE_ARRAY_ITERATOR(SqliteValueVec, const SqliteValueOwned &)
   SQLITE_DERIVE_CONTAINER_RELATIONAL_OPS(SqliteValueVec)
   SQLITE_DERIVE_CONTAINER_RELATIONAL_OPS(SqliteRowOwnedWrapper)
   SQLITE_DERIVE_CONTAINER_RELATIONAL_OPS(SqliteRowView)
-  SQLITE_DERIVE_ALL_SCALAR_RELATIONAL_OPS
+    SQLITE_DERIVE_ALL_SCALAR_RELATIONAL_OPS
 };
 
 /**
- * @brief Specialization 2: N >= 9 (Complete Dynamic Heap Allocation via
- * sqlite3_malloc64).
+ * @brief Specialization 2: N == 0 (Direct Dynamic Heap Vector).
  *
- * For vector base capacities >= 9, elements are always allocated dynamically on
- * the heap.
+ * For vector base capacity N == 0 (default unbounded dynamic vector),
+ * elements are always allocated dynamically on the heap with 0 SBO stack union overhead.
  *
- * @tparam N Base capacity >= 9.
+ * @tparam N Base capacity 0.
  */
 template <size_t N>
-class SqliteValueVec<N, typename sqlite_container_enable_if<(N >= 9)>::type> {
+class SqliteValueVec<
+    N, typename sqlite_container_enable_if<(N == 0)>::type> {
 private:
   SqliteValueOwned *m_data =
       nullptr; ///< Contiguous heap buffer allocated via sqlite3_malloc64.
@@ -1600,14 +1787,9 @@ private:
 
 public:
   /**
-   * @brief Default constructor. Pre-allocates N elements on the heap.
+   * @brief Default constructor. Constructs an empty vector on the heap (size = 0, capacity = 0).
    */
-  inline SqliteValueVec() : m_data(nullptr), m_size(0), m_capacity(0) {
-    allocate_memory(static_cast<uint32_t>(N));
-    m_size = static_cast<uint32_t>(N);
-    for (uint32_t i = 0; i < m_size; ++i)
-      sqlite_construct_at(&m_data[i]);
-  }
+  inline SqliteValueVec() : m_data(nullptr), m_size(0), m_capacity(0) {}
 
   /**
    * @brief Sized constructor. Pre-allocates and constructs `count` elements.
@@ -1699,10 +1881,10 @@ public:
   /** @brief Checks if the vector contains 0 active elements. */
   inline bool empty() const noexcept { return m_size == 0; }
 
-  /** @brief Always false for N >= 9 (resides on heap). */
+  /** @brief Always false for N == 0 (resides on heap). */
   inline constexpr bool is_inline() const noexcept { return false; }
 
-  /** @brief Always true for N >= 9 (resides on heap). */
+  /** @brief Always true for N == 0 (resides on heap). */
   inline constexpr bool is_heap() const noexcept { return true; }
 
   /** @brief Resets all active elements in the heap vector to SQLITE_NULL. */
@@ -1870,32 +2052,35 @@ public:
     }
   }
 
+  // Standard C++ Container Type Definitions
+  SQLITE_DERIVE_STANDARD_CONTAINER_TYPEDEFS(SqliteValueOwned, SqliteValueOwned&, const SqliteValueOwned&, SqliteValueOwned*, const SqliteValueOwned*, SqliteValueOwned*, const SqliteValueOwned*)
+
   /** @brief Returns pointer to contiguous heap buffer. */
-  inline SqliteValueOwned *data() noexcept { return m_data; }
+  inline pointer       data() noexcept { return m_data; }
 
   /** @brief Returns const pointer to contiguous heap buffer. */
-  inline const SqliteValueOwned *data() const noexcept { return m_data; }
+  inline const_pointer data() const noexcept { return m_data; }
 
-  /**
-   * @brief Bounds-safe mutable element accessor.
-   * @param idx 0-based column index.
-   * @return Mutable reference to SqliteValueOwned at idx.
-   */
-  inline SqliteValueOwned &operator[](int idx) noexcept {
-    return (m_data && idx >= 0 && idx < static_cast<int>(m_size))
-               ? m_data[idx]
-               : fallback_null();
-  }
+  // Standard Vector Iterators, Accessors, and Modifiers
+  SQLITE_DERIVE_ARRAY_ITERATORS(data(), size())
+  SQLITE_DERIVE_ARRAY_ELEMENT_ACCESSORS(data(), size(), fallback_null())
+  SQLITE_DERIVE_STD_VEC_METHODS(SqliteValueVec)
 
-  /**
-   * @brief Bounds-safe const element accessor.
-   * @param idx 0-based column index.
-   * @return Const reference to SqliteValueOwned at idx.
-   */
-  inline const SqliteValueOwned &operator[](int idx) const noexcept {
-    return (m_data && idx >= 0 && idx < static_cast<int>(m_size))
-               ? m_data[idx]
-               : fallback_null();
+  /** @brief Shrinks capacity to fit actual element count. */
+  inline void shrink_to_fit() {
+    if (m_capacity > m_size) {
+      if (m_size == 0) {
+        release_memory();
+      } else {
+        SqliteValueOwned* new_buf = sqlite_new_array_zeroed<SqliteValueOwned>(m_size);
+        if (m_data) {
+          memcpy(static_cast<void*>(new_buf), static_cast<const void*>(m_data), m_size * sizeof(SqliteValueOwned));
+          sqlite_delete_array(m_data);
+        }
+        m_data = new_buf;
+        m_capacity = m_size;
+      }
+    }
   }
 
 private:
@@ -1931,9 +2116,8 @@ public:
     return h;
   }
 
-  // Synthesized Typed Accessors, Range-Based Iterator & Full Relational Ops
+  // Synthesized Typed Accessors & Full Relational Ops
   SQLITE_DERIVE_ARRAY_ACCESSORS
-  SQLITE_DERIVE_ARRAY_ITERATOR(SqliteValueVec, const SqliteValueOwned &)
   SQLITE_DERIVE_CONTAINER_RELATIONAL_OPS(SqliteValueVec)
   SQLITE_DERIVE_CONTAINER_RELATIONAL_OPS(SqliteRowOwnedWrapper)
   SQLITE_DERIVE_CONTAINER_RELATIONAL_OPS(SqliteRowView)
@@ -2005,10 +2189,10 @@ inline auto withSqliteRowOwned(int size, Callable &&fn)
     if (size <= 0) {
       return fn(SqliteRowOwnedWrapper(nullptr, 0));
     }
-    // For sizes >= 9, use SqliteValueVec<1> which has a minimal 16-byte stack
-    // footprint and allocates the required count on the heap via
+    // For sizes > 8, use SqliteValueTuple<> (N = 0) which compiles to the direct heap
+    // tuple template specialization, allocating the dynamic buffer via
     // sqlite3_malloc64.
-    SqliteValueVec<1> arr(size);
+    SqliteValueTuple<> arr(size);
     return fn(SqliteRowOwnedWrapper(arr.data(), size));
   }
   }
@@ -2018,6 +2202,10 @@ inline auto withSqliteRowOwned(int size, Callable &&fn)
 // PART 4: Static Footprint Verifications
 // ============================================================================
 
+static_assert(sizeof(SqliteValueTuple<0>) == 16,
+              "SqliteValueTuple<0> must be 16 bytes (ptr + size + capacity)!");
+static_assert(sizeof(SqliteValueTuple<>) == 16,
+              "SqliteValueTuple<> must be 16 bytes (default pure heap)!");
 static_assert(sizeof(SqliteValueTuple<1>) == 16,
               "SqliteValueTuple<1> must be 16 bytes!");
 static_assert(sizeof(SqliteValueTuple<2>) == 32,
@@ -2027,6 +2215,10 @@ static_assert(sizeof(SqliteValueTuple<4>) == 64,
 static_assert(sizeof(SqliteValueTuple<8>) == 128,
               "SqliteValueTuple<8> must be 128 bytes (2 L1 Lines)!");
 
+static_assert(sizeof(SqliteValueVec<0>) == 16,
+              "SqliteValueVec<0> must be 16 bytes (ptr + size + capacity)!");
+static_assert(sizeof(SqliteValueVec<>) == 16,
+              "SqliteValueVec<> must be 16 bytes (default pure heap)!");
 static_assert(sizeof(SqliteValueVec<1>) == 16,
               "SqliteValueVec<1> must be 16 bytes!");
 static_assert(sizeof(SqliteValueVec<2>) == 32,

@@ -264,8 +264,8 @@ auto type_rank = [](int t) -> int {
 ## 9. Value Containers Architecture (`SqliteValueTuple<N>` / `SqliteValueVec<N>`)
 
 Multi-column composite keys and rows are modeled as contiguous RAII-managed arrays of `SqliteValueOwned` elements with 100% stack data density:
-- **`SqliteValueTuple<N>` ($N \in [1..8]$)**: Exact stack array ($N \times 16\text{B}$, 0 mallocs). $N \ge 9$ falls back to `sqlite3_malloc64`.
-- **`SqliteValueVec<N>` ($N \in [1..8]$)**: Adaptive Small Buffer Optimized (SBO) vector living in-situ on stack when size $\le N$ and spilling dynamically to heap when resized $> N$.
+- **`SqliteValueTuple<N = 0>` ($N \in [1..8]$ Stack, $N = 0$ Direct Heap)**: Exact stack array ($N \times 16\text{B}$, 0 mallocs) for $N \in [1..8]$. $N = 0$ (`SqliteValueTuple<>`) provides an immutable dynamic heap tuple.
+- **`SqliteValueVec<N = 0>` ($N \in [1..8]$ SBO, $N = 0$ Direct Heap)**: Adaptive Small Buffer Optimized (SBO) vector living in-situ on stack when size $\le N$ ($N \in [1..8]$), spilling dynamically to heap when resized $> N$, or direct dynamic heap vector for $N = 0$ (`SqliteValueVec<>`).
 
 > For complete architectural details, binary diagrams, and 8x8 matrix dispatching, see [`docs/VALUE_CONTAINERS_ARCHITECTURE.md`](VALUE_CONTAINERS_ARCHITECTURE.md).
 

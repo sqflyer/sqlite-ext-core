@@ -12,10 +12,11 @@ When building C++ SQLite extensions with strict compiler flags like `-nostdlib++
 
 - **Standard Library Independence**: 100% free of `<new>`, `<utility>`, `<type_traits>`, and `libstdc++`.
 - **Memory Profiler Integration**: Routes all allocations through `sqlite3_malloc` and `sqlite3_free`, ensuring your C++ objects respect SQLite's memory hard limits and profilers.
-- **In-place Construction**: Provides `sqlite_construct_at` for safe placement-new C++ object initialization without `<new>`.
+- **In-place Construction**: Provides `sqlite_construct_at` and `sqlite_construct_n` for safe placement-new C++ object initialization without `<new>`.
 - **Zero-Dependency Move Semantics**: Includes `sqlite_move` and `sqlite_move_ptr` to completely replace `std::move`.
 - **Perfect Forwarding**: Includes `sqlite_forward` to mimic `std::forward`.
-- **SIMD Fast Memory Copy**: Provides `SQLITE_FAST_MEMCPY` optimized across GCC/Clang built-ins and MSVC intrinsics.
+- **Freestanding Type Traits**: Includes `sqlite_is_same`, `sqlite_enable_if`, `sqlite_remove_reference`, and `sqlite_is_trivially_copyable`.
+- **SIMD Fast Memory Copy**: Provides `SQLITE_FAST_MEMCPY` optimized across GCC/Clang built-ins (`__builtin_memcpy`) and MSVC intrinsics (`__movsb`).
 - **Smart Pointer Ready**: Acts as the foundational memory layer for `SqliteSharedPtr` and `SqliteUniquePtr`.
 
 ## Usage
@@ -47,13 +48,19 @@ To allocate an array of objects, use `sqlite_new_array`. Note that for raw perfo
 // Allocates raw memory for 100 objects (uninitialized)
 MyClass* arr = sqlite_new_array<MyClass>(100);
 
-// Frees the memory without calling destructors
+// In-place construct N elements
+sqlite_construct_n(arr, 100, 10, "test");
+
+// Destroy N elements before freeing
+sqlite_destroy_n(arr, 100);
+
+// Frees the raw buffer
 sqlite_delete_array(arr);
 ```
 
 ### 4. In-Place Construction
 
-If you already have pre-allocated memory (e.g. inside a larger struct), use `sqlite_construct_at` to explicitly invoke a C++ constructor on that memory without `#include <new>`.
+If you already have pre-allocated memory (e.g. inside a larger struct or on the stack), use `sqlite_construct_at` to explicitly invoke a C++ constructor on that memory without `#include <new>`.
 
 ```cpp
 struct Wrapper {

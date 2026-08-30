@@ -351,7 +351,7 @@ to invoke exact C-API:          to compute MurmurHash2:         Sorting Hierarch
 - **0 Heap Allocations**: Specialization $N \in [1..8]$ lives entirely on the stack ($N \times 16\text{B}$).
 - **0 Capacity Overhead**: `sizeof(SqliteValueTuple<N>) == N * 16` bytes exactly.
 - **Heterogeneous Storage**: Each column in a single tuple can be a completely different SQLite datatype, governed by its respective tag.
-- **Heap Fallback ($N \ge 9$)**: For tuples with 9 or more columns, automatically compiles to a dynamic buffer managed via `sqlite3_malloc64` and `sqlite3_free`.
+- **Direct Heap Model ($N = 0$)**: $N = 0$ (default `SqliteValueTuple<>`) provides an immutable dynamic buffer managed via `sqlite3_malloc64` and `sqlite3_free` with runtime-configured width.
 
 ---
 

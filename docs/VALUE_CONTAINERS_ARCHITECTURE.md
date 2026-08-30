@@ -1,31 +1,31 @@
 # Value Containers & 8x8 Dispatch Architecture (`sqlite3_value_containers.hpp` & `sqlite3_dispatch_8x8.hpp`)
 
-This document details the internal systems architecture, binary layout, Small Buffer Optimization (SBO) state machine, L1 cache line density calculations, and compile-time matrix dispatch mechanics for multi-column value containers.
+This document details the internal systems architecture, binary layout, Small Buffer Optimization (SBO) state machine, L1 cache line density calculations, standard `std::array` / `std::vector` alignment, and compile-time matrix dispatch mechanics for multi-column value containers.
 
 ---
 
 ## 1. Architectural Philosophy & Design Goals
 
 `sqlite-ext-core` extensions often operate on multi-column records:
-1. **Primary & Composite Keys**: Fixed number of columns ($N \in [1..8]$), immutable width, heavily queried in hash tables and B-Trees.
-2. **Payload Values & Rows**: Variable or adaptive column counts, subject to dynamic projection and updates.
+1. **Primary & Composite Keys**: Fixed number of columns ($N \in [1..8]$), immutable width, heavily queried in hash tables and B-Trees. Aligned to the standard `std::array` interface.
+2. **Payload Values & Rows**: Variable or adaptive column counts, subject to dynamic projection, updates, insertions, and erasures. Aligned to the standard `std::vector` interface.
 
-To achieve maximum performance without standard library containers (`std::vector`, `std::tuple`), the system introduces two specialized, orthogonal container templates:
+To achieve maximum performance without standard library container overheads (`std::vector`, `std::tuple`), the system introduces two specialized, orthogonal container templates:
 
 ```
 ┌───────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┐
-│                                       THE VALUE CONTAINER DUAL ARCHITECTURE                                          │
+│                                       THE VALUE CONTAINER DUAL ARCHITECTURE                                           │
 ├──────────────────────────┬───────────────────────────────────────────┬────────────────────────────────────────────────┤
-│ Container Type           │ Memory & Allocation Semantics             │ Primary Architectural Role                     │
+│ Container Type           │ Memory & Allocation Semantics             │ Standard Alignment & Role                      │
 ├──────────────────────────┼───────────────────────────────────────────┼────────────────────────────────────────────────┤
-│ SqliteValueTuple<N>      │ Exact N x 16B stack array for N = 1..8.   │ Compile-time fixed-arity Primary Keys,         │
-│                          │ 0 heap allocations, 0 capacity overhead. │ Composite Index Keys, Fixed Record Tuples.     │
-│                          │ N >= 9: sqlite3_malloc64 dynamic buffer.  │                                                │
+│ SqliteValueTuple<N = 0>  │ Exact N x 16B stack array for N = 1..8.   │ std::array compliant. Fixed-arity Primary      │
+│                          │ 0 heap allocations, 0 capacity overhead.  │ Keys, Composite Index Keys, Fixed Records.     │
+│                          │ N = 0 (SqliteValueTuple<>): Direct heap.  │                                                │
 ├──────────────────────────┼───────────────────────────────────────────┼────────────────────────────────────────────────┤
-│ SqliteValueVec<N>        │ 16-byte aligned in-situ SBO stack buffer  │ Adaptive dynamic payload rows, non-PK value    │
-│                          │ for N = 1..8, spills dynamically to       │ columns, variable-length scratch vectors,      │
-│                          │ sqlite3_malloc64 when resized > N.        │ reversible stack-to-heap lifecycle.            │
-│                          │ N >= 9: Direct dynamic heap vector.       │                                                │
+│ SqliteValueVec<N = 0>    │ 16-byte aligned in-situ SBO stack buffer  │ std::vector compliant. Adaptive payload rows,  │
+│                          │ for N = 1..8, spills dynamically to       │ variable-length scratch vectors, reversible    │
+│                          │ sqlite3_malloc64 when resized > N.        │ stack-to-heap lifecycle, insert/erase/assign.  │
+│                          │ N = 0 (SqliteValueVec<>): Direct heap.    │                                                │
 └──────────────────────────┴───────────────────────────────────────────┴────────────────────────────────────────────────┘
 ```
 
@@ -51,7 +51,37 @@ SqliteValueTuple<8> / SqliteValueVec<8> (128 Bytes):
 
 ---
 
-## 3. Small Buffer Optimization (SBO) State Machine in `SqliteValueVec<N>`
+## 3. Standard Library Container Compliance & Macro Synthesis
+
+Both `SqliteValueTuple` and `SqliteValueVec` are synthesized using modular macro blocks:
+
+```
+┌───────────────────────────────────────────────────────────────────────────┐
+│               STANDARD CONTAINER SYNTHESIS ARCHITECTURE                   │
+├───────────────────────────────────────────────────────────────────────────┤
+│ SQLITE_DERIVE_STANDARD_CONTAINER_TYPEDEFS (sqlite3_row.hpp)               │
+│ - value_type, size_type, difference_type, reference, pointer, iterators   │
+├───────────────────────────────────────────────────────────────────────────┤
+│ SQLITE_DERIVE_STD_ARRAY_METHODS (sqlite3_row.hpp)                         │
+│ - begin(), end(), cbegin(), cend(), rbegin(), rend(), crbegin(), crend()  │
+│ - front(), back(), at(), operator[]                                       │
+│ - max_size()                                                              │
+├───────────────────────────────────────────────────────────────────────────┤
+│ SQLITE_DERIVE_STD_TUPLE_MODIFIERS (sqlite3_value_containers.hpp)          │
+│ - fill(const SqliteValueOwned& val), fill(const TPrimitive& val)          │
+├───────────────────────────────────────────────────────────────────────────┤
+│ SQLITE_DERIVE_STD_VEC_METHODS (sqlite3_value_containers.hpp)              │
+│ - resize(count, val), max_size()                                          │
+│ - insert(pos, val), insert(pos, count, val)                               │
+│ - erase(pos), erase(first, last)                                          │
+│ - assign(count, val), assign(first, last)                                 │
+│ - swap(other)                                                             │
+└───────────────────────────────────────────────────────────────────────────┘
+```
+
+---
+
+## 4. Small Buffer Optimization (SBO) State Machine in `SqliteValueVec<N>`
 
 `SqliteValueVec<N>` manages a dual-representation union:
 
@@ -79,7 +109,7 @@ SqliteValueTuple<8> / SqliteValueVec<8> (128 Bytes):
 
 ---
 
-## 4. Generic $8 \times 8$ Compile-Time Matrix Dispatcher (`sqlite3_dispatch_8x8.hpp`)
+## 5. Generic $8 \times 8$ Compile-Time Matrix Dispatcher (`sqlite3_dispatch_8x8.hpp`)
 
 Virtual tables and in-memory key-value engines (`memkv_map`, `memkv_lru`, `memkv_zset`, `memkv_ring`) determine table schemas at runtime (`pk_count` and `val_count`).
 
@@ -91,25 +121,20 @@ To avoid runtime branching inside inner iteration loops, `sqlite3_dispatch_8x8.h
         case 1:  { constexpr size_t N = 1; __VA_ARGS__; } break; \
         ... \
         case 8:  { constexpr size_t N = 8; __VA_ARGS__; } break; \
-        default: { constexpr size_t N = 9; __VA_ARGS__; } break; \
+        default: { constexpr size_t N = 0; __VA_ARGS__; } break; \
     }
 
 #define SQLITE_DISPATCH_2D_8X8(KeyN, ValN, pk_count, val_count, ...) \
     switch ((pk_count) <= 0 ? 1 : (pk_count)) { \
         case 1:  { constexpr size_t KeyN = 1; SQLITE_DISPATCH_1D_8(ValN, val_count, __VA_ARGS__) } break; \
         ... \
-        default: { constexpr size_t KeyN = 9; SQLITE_DISPATCH_1D_8(ValN, val_count, __VA_ARGS__) } break; \
+        default: { constexpr size_t KeyN = 0; SQLITE_DISPATCH_1D_8(ValN, val_count, __VA_ARGS__) } break; \
     }
 ```
 
-### Benefits:
-1. **Zero Runtime Dispatch in Loops**: Once constructed, container indexing and hashing operate at compile-time fixed offsets.
-2. **Universal Compatibility**: Works with `MapTable`, `LruTable`, `ZSetTable`, `RingTable`, and any custom user template.
-3. **1-Line Factory Creation**: Replaces 100+ lines of switch boilerplate with `SQLITE_MAKE_DEFAULT_STORAGE_8X8(...)`.
-
 ---
 
-## 5. The 1-Byte Control Tag Discriminator (`0x20`) & 100% Stack Data Density
+## 6. The 1-Byte Control Tag Discriminator (`0x20`) & 100% Stack Data Density
 
 ### Bitfield Layout of `SqliteOwnedValueTag` (Offset 15)
 
@@ -139,17 +164,97 @@ Uninitialized slots, cleared elements, and container markers have `type == 0` (`
 
 $$\text{tag.is\_active()} \iff (\text{raw} \ge \text{0x20}) \iff (\text{type}() \in [1..5])$$
 
+### Performance Best Practice: Hoisting `vec.size()` vs. Range-Based `for` Loops
+
+Because `SqliteValueVec<N>` ($N \in [1..8]$) computes its in-situ stack size dynamically via the backwards tag scan (`tag >= 0x20`), invoking `vec.size()` on every single loop iteration (`for (int i = 0; i < vec.size(); ++i)`) re-evaluates the tag scan if the compiler cannot prove memory invariance across the loop body.
+
+#### 1. Hoisting Size to a Variable
+```cpp
+// Explicit size hoisting
+const int sz = vec.size();
+for (int i = 0; i < sz; ++i) {
+    process(vec[i]);
+}
+```
+
+#### 2. Range-Based `for` Loops (Compiler-Optimized)
+C++11 range-based `for` loops are **mechanically optimal** for both `SqliteValueTuple` and `SqliteValueVec`:
+```cpp
+for (const auto& col : vec) {
+    process(col);
+}
+```
+Under the hood, C++ lowers this into:
+```cpp
+auto __begin = vec.begin();
+auto __end   = vec.end();    // <-- Computed ONCE before the loop enters!
+for (; __begin != __end; ++__begin) {
+    auto& col = *__begin;
+    process(col);
+}
+```
+- `vec.end()` evaluates `m_data + size()` **exactly once** upon loop entry.
+- Each iteration executes only a single direct pointer comparison (`__begin != __end`) and pointer increment (`++__begin`), with **0 repeated tag scans** and 0 indexing multiplications.
+- Supports in-place mutation: `for (auto& col : vec) { col = 42; }`.
+- Supports standard reverse iteration: `for (auto it = vec.rbegin(); it != vec.rend(); ++it)`.
+
 ---
 
-## 6. Architectural Distinction: `is_active()` vs. `is_heap()` in Tuples and Vectors
+## 7. 0 Elements (Empty) vs. NULL Elements Semantics
 
-A critical design distinction in `sqlite-ext-core` is why `is_active()` is used by `SqliteValueVec<N>`, why `SqliteValueTuple<N>` never needs it, and how `is_heap()` functions across both containers:
+There are two critical dimensions to understanding **0 vs. NULL** in `sqlite-ext-core`:
+
+### A. Element Count Semantics: 0 Elements (Empty) vs. $N$ NULL Elements
+
+```
+┌────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┐
+│                                    0 ELEMENTS VS. NULL ELEMENTS MATRIX                                             │
+├──────────────────────────┬───────────────────────────────┬─────────────────────────────┬───────────────────────────┤
+│ Container                │ Default Constructor           │ Sized Constructor (count)   │ Initial State             │
+├──────────────────────────┼───────────────────────────────┼─────────────────────────────┼───────────────────────────┤
+│ SqliteValueTuple<N>      │ SqliteValueTuple<N>()         │ N/A (Fixed Arity N)         │ N Active SQLITE_NULL      │
+│ (N in [1..8] Stack)      │ -> size() == N, empty()=false │                             │ elements (0 heap mallocs) │
+├──────────────────────────┼───────────────────────────────┼─────────────────────────────┼───────────────────────────┤
+│ SqliteValueTuple<0>      │ SqliteValueTuple<>()          │ SqliteValueTuple<>(count)   │ Default: 0 Elements       │
+│ (N = 0 Direct Heap)      │ -> size() == 0, empty()=true  │ -> size() == count          │ Sized: count SQLITE_NULL  │
+├──────────────────────────┼───────────────────────────────┼─────────────────────────────┼───────────────────────────┤
+│ SqliteValueVec<N>        │ SqliteValueVec<N>()           │ SqliteValueVec<N>(count)    │ Default: 0 Elements       │
+│ (N in [1..8] SBO Stack)  │ -> size() == 0, empty()=true  │ -> size() == count          │ Sized: count SQLITE_NULL  │
+├──────────────────────────┼───────────────────────────────┼─────────────────────────────┼───────────────────────────┤
+│ SqliteValueVec<0>        │ SqliteValueVec<>()            │ SqliteValueVec<>(count)     │ Default: 0 Elements       │
+│ (N = 0 Direct Heap)      │ -> size() == 0, empty()=true  │ -> size() == count          │ Sized: count SQLITE_NULL  │
+└──────────────────────────┴───────────────────────────────┴─────────────────────────────┴───────────────────────────┘
+```
+
+1. **`SqliteValueTuple<N>` ($N \in [1..8]$)** models a **fixed-arity record** (like `std::array<SqliteValueOwned, N>`). It never starts empty; all $N$ slots are immediately populated with canonical `SQLITE_NULL` via 128-byte SIMD bursts.
+2. **`SqliteValueVec<N>` ($N \in [1..8]$)** models a **dynamic vector** (like `std::vector<SqliteValueOwned>`). It starts with **0 active elements** (`size() == 0`). Its inline stack buffer slots are inactive until populated via `push_back()` or `resize()`.
+3. **`SqliteValueTuple<0>` & `SqliteValueVec<0>`** default construct with **0 elements** (`m_data = nullptr, m_size = 0, m_capacity = 0`), allocating only when initialized with an explicit size, `SqliteRowView`, or initializer list.
+
+### B. Control Tag Discriminator: Inactive Slot (`0x00`) vs. Active SQL NULL (`0xA0`)
+
+```
+┌─────────────────────────────────────────────────────────────────────────────────────────────────────────────┐
+│ Control Tag              │ Control Byte (Offset 15)  │ is_active()  │ is_null()  │ Role                     │
+├──────────────────────────┼───────────────────────────┼──────────────┼────────────┼──────────────────────────┤
+│ Inactive Slot            │ 0x00 (< 0x20)             │ false        │ false      │ Empty capacity in SBO    │
+│                          │                           │              │            │ stack buffer. Ignored.   │
+├──────────────────────────┼───────────────────────────┼──────────────┼────────────┼──────────────────────────┤
+│ Active SQLITE_NULL       │ 0xA0 (>= 0x20, type = 5)  │ true         │ true       │ Real SQL NULL value in   │
+│                          │                           │              │            │ a tuple or active vector.│
+└──────────────────────────┴───────────────────────────┴──────────────┴────────────┴──────────────────────────┘
+```
+
+---
+
+## 8. Summary Comparison Matrix: Tuple vs. Vector
 
 ```
 ┌─────────────────────────────────────────────────────────────────────────────────────────────────────────────┐
 │                                   TUPLE VS. VECTOR ARCHITECTURAL MATRIX                                     │
 ├──────────────────────────┬───────────────────────────────────────────┬──────────────────────────────────────┤
 │ Architectural Property   │ SqliteValueTuple<N>                       │ SqliteValueVec<N>                    │
+├──────────────────────────┼───────────────────────────────────────────┼──────────────────────────────────────┤
+│ Standard Compliance      │ std::array                                │ std::vector                          │
 ├──────────────────────────┼───────────────────────────────────────────┼──────────────────────────────────────┤
 │ Arity & Capacity         │ Fixed, Immutable ($N$ columns)            │ Variable ($0 \le \text{size} \le N$) │
 ├──────────────────────────┼───────────────────────────────────────────┼──────────────────────────────────────┤
@@ -159,52 +264,6 @@ A critical design distinction in `sqlite-ext-core` is why `is_active()` is used 
 ├──────────────────────────┼───────────────────────────────────────────┼──────────────────────────────────────┤
 │ Needs `is_active()`?     │ **No** (Never has inactive slots)         │ **Yes** (Distinguishes active slots) │
 ├──────────────────────────┼───────────────────────────────────────────┼──────────────────────────────────────┤
-│ Needs Initial `memset`?  │ **No** (All elements default constructed) │ **Yes** (Clears stack garbage)       │
-├──────────────────────────┼───────────────────────────────────────────┼──────────────────────────────────────┤
-│ Container-Level Heap     │ Static Compile-Time ($N \ge 9$)           │ Dynamic Runtime Spill ($\text{sz}>N$)│
+│ Container-Level Heap     │ Dynamic Heap ($N = 0$)                    │ Dynamic Runtime Spill ($\text{sz}>N$)│
 └──────────────────────────┴───────────────────────────────────────────┴──────────────────────────────────────┘
 ```
-
-### 1. Why `SqliteValueVec<N>` Needs `is_active()`
-- **Variable-Length on Stack**: `SqliteValueVec<4>` reserves 64 bytes on the stack, but may logically contain 0, 1, 2, 3, or 4 active elements.
-- **100% Stack Data Density**: To avoid wasting 4 to 8 bytes on an external `uint32_t m_size` header on the stack, `SqliteValueVec` deduces its size by scanning backwards from slot $N-1$ down to $0$ checking `m_inline[i].is_active()`.
-- **Empty Slot Representation**: Unused slots hold `tag == 0x00` ($< \text{0x20}$). The backwards scan immediately stops at the highest slot where `tag >= 0x20`.
-
-### 2. Why `SqliteValueTuple<N>` Never Needs `is_active()`
-- **Fixed Arity**: A `SqliteValueTuple<3>` represents a static 3-column Primary Key or fixed record. All 3 slots are **always active** from creation to destruction.
-- **Static Size**: Its `size()` method is a `constexpr` constant returning $N$ directly:
-  ```cpp
-  constexpr int size() const noexcept { return static_cast<int>(N); }
-  ```
-- **No Inactive Slots**: Default-constructing a tuple initializes all $N$ elements to active `SQLITE_NULL` values (`tag = 0xA0 >= 0x20`). It never needs to scan tags to discover its length.
-
-### 3. Container-Level vs. Element-Level `is_heap()`
-
-`is_heap()` operates at two distinct architectural tiers:
-
-#### Tier A: Container-Level `is_heap()` (Container Storage Location)
-- **`SqliteValueVec<N>` (Adaptive Runtime Spill)**:
-  - Sizes $\le N$: Operates in-situ on the stack (`is_heap() == false`).
-  - Resized $> N$: Spills dynamically to `sqlite3_malloc64` on the heap (`is_heap() == true`).
-  - Tested via: `m_heap.tag.is_heap_container(m_heap.ptr)` (checks `raw == 0x00 && ptr != nullptr`).
-- **`SqliteValueTuple<N>` (Static Compile-Time Selection)**:
-  - $N \le 8$: 100% stack array (`m_values[N]`), 0 heap allocations.
-  - $N \ge 9$: 100% heap buffer (`sqlite3_malloc64`), because large tuples exceed stack frame safety limits.
-
-#### Tier B: Element-Level `tag.is_heap()` (Inside Each Individual Column)
-Regardless of whether a column is stored inside a Tuple or a Vector, each individual `SqliteValueOwned` element uses bit 4 (`0x10`) of its tag to track where its string/blob payload lives:
-- **Short text / blob** ($\le 13$ chars / $\le 14$ bytes): Inline SBO buffer (**`tag.is_heap() == false`**, 0 mallocs).
-- **Long text / blob** ($> 13$ chars): `sqlite3_value*` duplicated on heap (**`tag.is_heap() == true`**).
-
----
-
-## 7. Why `memset` is Required ONLY for `SqliteValueVec<N>`
-
-1. **The Stack Garbage Problem**:
-   Uninitialized stack memory contains random residual bytes from previous function calls. If byte offset 15 of an uninitialized stack slot happened to contain a garbage byte $\ge \text{0x20}$ (e.g. `0x7F`, `0x42`, `0xA0`), `SqliteValueVec::size()` would falsely interpret that uninitialized slot as an active element.
-2. **The `memset` Solution**:
-   `SqliteValueVec<N>` invokes `init_empty()`, which executes `memset(this, 0, sizeof(SqliteValueVec))`. This sets all $N$ tags at byte offset 15 to **`0x00` ($< \text{0x20}$, inactive)** in a single hardware memory burst.
-3. **Single-Burst SIMD Lowering**:
-   Because `sizeof(SqliteValueVec)` is a `constexpr` constant ($16, 32, 64, 128\text{ B}$), the compiler lowers `memset` to **1–2 SIMD instructions** (`pxor`, `movups`, `vmovups`) executing in **~0.3–0.6 ns (1–2 CPU clock cycles)** without a runtime function call.
-4. **Truncation Zeroing**:
-   When shrinking (`resize(smaller_count)`), truncated tail elements are destroyed and their slots are wiped with `memset(&m_inline[K], 0, (M - K) * 16)` to guarantee that `is_active()` stops cleanly at the new truncated size.

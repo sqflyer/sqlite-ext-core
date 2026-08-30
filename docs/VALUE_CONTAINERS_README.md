@@ -6,30 +6,34 @@
 
 ## 1. Quick Start
 
-### A. Fixed-Arity Compile-Time Primary Key (`SqliteValueTuple<N>`)
+### A. Fixed-Arity Compile-Time Primary Key (`SqliteValueTuple<N>` - std::array compliant)
 
 ```cpp
 #include "sqlite3_value_containers.hpp"
 
 // Stack-allocated composite key (2 columns = exact 32 bytes, 0 mallocs)
-SqliteValueTuple<2> pk;
-pk[0] = SqliteValueOwned(1001LL);
-pk[1] = SqliteValueOwned("sensor_alpha");
+SqliteValueTuple<2> pk(1001LL, "sensor_alpha");
 
-// Typed column extraction (zero allocation)
-int id = pk.as_int(0);
-SqliteStringView name = pk.as_text(1);
+// Standard element accessors & capacity
+int id = pk.front().as_int();
+SqliteStringView name = pk.back().as_text();
+assert(pk.size() == 2);
+assert(pk.max_size() == 2);
+assert(!pk.empty());
 
-// Range-based for loop iteration
-for (const SqliteValueOwned& val : pk) {
-    printf("Type: %d\n", val.type());
+// Standard reverse iteration
+for (auto it = pk.rbegin(); it != pk.rend(); ++it) {
+    printf("Reverse col type: %d\n", it->type());
 }
+
+// In-place fill & swap modifiers
+pk.fill(0);
 
 // Convert to non-owning row span
 SqliteRowOwnedWrapper span = pk.view();
 ```
 
-### B. Adaptive Small Buffer Optimized Dynamic Row (`SqliteValueVec<N>`)
+### B. Adaptive Small Buffer Optimized Dynamic Row (`SqliteValueVec<N>` - std::vector compliant)
 
 ```cpp
 #include "sqlite3_value_containers.hpp"
@@ -46,16 +50,30 @@ row.emplace_back("sensor_tag");      // emplace in-place
 assert(row.size() == 4);
 assert(row.is_inline());             // 100% stack data density!
 
-// 2. Dynamically spills to heap if grown beyond N (4)
-row.push_back(true);                 // 5th element triggers heap spill
-assert(row.size() == 5);
-assert(!row.is_inline());            // Now on heap via sqlite3_malloc64
+// 2. Standard insertion, erasure, assignment & resize
+row.insert(row.begin() + 1, "inserted_val");
+row.erase(row.begin() + 2);
+row.resize(6, "filler");             // Resizes and spills to heap if > 4
 
 // 3. Pre-allocation, popping, and fast clearing
 row.reserve(32);                     // Pre-allocates buffer for >= 32 elements
-row.pop_back();                      // Removes last element (size becomes 4)
+row.pop_back();                      // Removes last element
 row.clear();                         // Resets size to 0 for reuse in hot loops
 assert(row.empty());
+
+// 4. Performance Tip: Cache size into a local variable in hot loops
+const int row_sz = row.size();       // Avoids repeated tag scanning in tight index loop
+for (int i = 0; i < row_sz; ++i) {
+    // process row[i]...
+}
+
+// 5. Optimal Range-Based for Loop (evaluates begin/end once):
+for (const auto& col : row) {        // Const read-only traversal
+    printf("Type: %d\n", col.type());
+}
+for (auto& col : row) {              // In-place mutation without reallocating
+    col = 42;
+}
 ```
 
 ### C. Stack-Allocated Row Scope Dispatcher (`withSqliteRowOwned`)
@@ -91,13 +109,24 @@ ITableStorage* create_storage(int total_cols, int pk_count, const int* pk_indice
 | Feature | `SqliteValueTuple<N>` | `SqliteValueVec<N>` | `SqliteRowOwnedWrapper` | `SqliteRowView` (`SqliteUdfArgs`) |
 | :--- | :---: | :---: | :---: | :---: |
 | **Ownership** | Owning (RAII) | Owning (RAII) | Non-Owning (Span) | Non-Owning (Multi-Source View) |
+| **Standard Alignment** | `std::array` | `std::vector` | `std::array` | `std::array` |
 | **Stack SBO Limit** | Exact $N \times 16\text{B}$ ($N \le 8$) | $N \times 16\text{B}$ in-situ ($N \le 8$) | 16 Bytes (Pointer + Len) | 24 Bytes (Tagged Union + Len) |
-| **Heap Fallback** | $N \ge 9$ (Heap Tuple) | Dynamic Spill ($> N$) | N/A | N/A |
-| **Element Modification** | In-place mutable | Grow / Shrink / Append | In-place mutable | Read-Only View |
+| **Heap Model** | $N = 0$ (`SqliteValueTuple<>`) | Dynamic Spill ($> N$) / $N = 0$ | N/A | N/A |
+| **Default Creation** | $N$ active `SQLITE_NULL` elements ($N \in [1..8]$) | 0 active elements (`empty() == true`) | 0 length span | 0 length view |
+| **Element Access** | `front`, `back`, `at`, `[]`, `data` | `front`, `back`, `at`, `[]`, `data` | `front`, `back`, `at`, `[]`, `data` | `front`, `back`, `at`, `[]`, `data` |
+| **Iterators** | Forward + Reverse (`rbegin`/`rend`) | Forward + Reverse (`rbegin`/`rend`) | Forward + Reverse (`rbegin`/`rend`) | Forward + Reverse (`rbegin`/`rend`) |
+| **Modifiers** | `fill(val)`, `swap(other)` | `insert`, `erase`, `assign`, `resize`, `swap` | In-place element mutation | Read-Only |
 | **Relational Operators** | Full (`==`, `!=`, `<`, `<=`, `>`, `>=`) | Full (`==`, `!=`, `<`, `<=`, `>`, `>=`) | Full (`==`, `!=`, `<`, `<=`, `>`, `>=`) | Full (`==`, `!=`, `<`, `<=`, `>`, `>=`) |
-| **Range Iteration** | `for (const auto& v : c)` | `for (const auto& v : c)` | `for (const auto& v : c)` | `for (SqliteValueView v : c)` |
 | **Swiss Table Hashing** | `SqliteRowHash` | `SqliteRowHash` | `SqliteRowHash` | `SqliteRowHash` |
 | **Heterogeneous B-Tree** | `SqliteRowLess` | `SqliteRowLess` | `SqliteRowLess` | `SqliteRowLess` |
+
+### 0 Elements (Empty) vs. NULL Elements Semantics
+
+| State / Container | `SqliteValueTuple<N>` ($N \in [1..8]$) | `SqliteValueTuple<0>` (`SqliteValueTuple<>`) | `SqliteValueVec<N>` ($N \in [1..8]$) | `SqliteValueVec<0>` (`SqliteValueVec<>`) |
+| :--- | :--- | :--- | :--- | :--- |
+| **Default Construction** | `size() == N`, `empty() == false`<br>(All $N$ slots initialized to `SQLITE_NULL`) | `size() == 0`, `empty() == true`<br>(0 heap allocations, `nullptr`) | `size() == 0`, `empty() == true`<br>(All SBO stack slots inactive `0x00`) | `size() == 0`, `empty() == true`<br>(0 heap allocations, `nullptr`) |
+| **Sized Construction `(k)`** | N/A (Fixed compile-time $N$) | `size() == k`<br>(Allocates $k$ `SQLITE_NULL` elements) | `size() == k`<br>(Activates $k$ `SQLITE_NULL` elements) | `size() == k`<br>(Allocates $k$ `SQLITE_NULL` elements) |
+| **Slot Control Tag** | `0xA0` (Active `SQLITE_NULL`) | `0xA0` (Active `SQLITE_NULL`) | `0x00` (Inactive) vs `0xA0` (Active `NULL`) | `0xA0` (Active `SQLITE_NULL`) |
 
 ---
 
@@ -112,9 +141,7 @@ ITableStorage* create_storage(int total_cols, int pk_count, const int* pk_indice
 // Transparent Swiss Table with multi-column tuple keys
 std::unordered_map<SqliteValueTuple<2>, std::string, SqliteRowHash, SqliteRowEqual> cache;
 
-SqliteValueTuple<2> k1;
-k1[0] = SqliteValueOwned(42);
-k1[1] = SqliteValueOwned("sensor_A");
+SqliteValueTuple<2> k1(42, "sensor_A");
 cache[k1] = "Active Station";
 
 assert(cache.find(k1) != cache.end());
@@ -139,24 +166,41 @@ auto it_lb = index.lower_bound(100);
 
 ## 4. API Reference
 
-### `SqliteValueTuple<N>` Methods
+### `SqliteValueTuple<N>` Standard Array Methods
 
-- `int size() const noexcept` / `int count() const noexcept`: Returns fixed column count $N$.
+- `size_type size() const noexcept` / `size_type count() const noexcept`: Returns fixed column count $N$.
+- `size_type max_size() const noexcept`: Returns fixed column count $N$.
 - `bool empty() const noexcept`: Returns true if $N == 0$.
-- `bool is_inline() const noexcept`: Returns true if $N \in [1..8]$.
+- `reference front() noexcept` / `const_reference front() const noexcept`: Accesses first element.
+- `reference back() noexcept` / `const_reference back() const noexcept`: Accesses last element.
+- `reference at(size_type pos) noexcept`: Bounds-checked column reference with fallback to static null.
 - `SqliteValueOwned* data() noexcept`: Returns contiguous pointer to elements.
-- `SqliteValueOwned& operator[](int idx) noexcept`: Bounds-safe column reference.
+- `SqliteValueOwned& operator[](int idx) noexcept`: Subscript access.
+- `iterator begin() / end()`, `reverse_iterator rbegin() / rend()`, `cbegin() / cend()`, `crbegin() / crend()`.
+- `void fill(const SqliteValueOwned& val)` / `void fill(const TPrimitive& val)`: Replaces all elements with `val`.
+- `void swap(SqliteValueTuple<N>& other) noexcept`: In-place swap.
 - `SqliteRowOwnedWrapper view() const noexcept`: Returns non-owning span.
 - `unsigned long long hash() const noexcept`: 64-bit MurmurHash2 hash value.
 
-### `SqliteValueVec<N>` Methods
+### `SqliteValueVec<N>` Standard Vector Methods
 
-- `int size() const noexcept` / `int column_count() const noexcept`: Returns current active element count.
+- `size_type size() const noexcept` / `size_type column_count() const noexcept`: Returns active element count.
+- `size_type max_size() const noexcept`: Returns maximum possible capacity.
+- `size_type capacity() const noexcept`: Returns current allocated capacity.
 - `bool empty() const noexcept`: Returns true if active size is 0.
-- `bool is_inline() const noexcept`: Returns true if currently operating on the stack.
-- `void resize(int new_count)`: Resizes vector, spilling to heap or returning to stack as appropriate.
+- `bool is_inline() const noexcept`: Returns true if operating in stack SBO storage.
+- `reference front() noexcept` / `const_reference front() const noexcept`: Accesses first element.
+- `reference back() noexcept` / `const_reference back() const noexcept`: Accesses last element.
+- `reference at(size_type pos) noexcept`: Bounds-checked column reference.
 - `SqliteValueOwned* data() noexcept`: Returns pointer to active contiguous buffer.
-- `SqliteValueOwned& operator[](int idx) noexcept`: Bounds-safe column reference.
+- `void reserve(size_type new_cap)`: Pre-allocates buffer.
+- `void shrink_to_fit()`: Compacts dynamic allocation.
+- `void resize(size_type count)` / `void resize(size_type count, const SqliteValueOwned& val)`: Resizes vector.
+- `iterator insert(const_iterator pos, const SqliteValueOwned& val)` (copy, move, primitive, and count overloads).
+- `iterator erase(const_iterator pos)` / `iterator erase(const_iterator first, const_iterator last)`.
+- `void assign(size_type count, const SqliteValueOwned& val)` / `assign(first, last)`.
+- `void swap(SqliteValueVec<N>& other) noexcept`.
+- `void push_back(...)`, `emplace_back(...)`, `pop_back()`, `clear()`.
 - `SqliteRowOwnedWrapper view() const noexcept`: Returns non-owning span.
 - `unsigned long long hash() const noexcept`: 64-bit MurmurHash2 hash value.
 

@@ -124,12 +124,12 @@ static void test_value_tuple_static() {
 }
 
 // ============================================================================
-// 2. SqliteValueTuple Heap Fallback Tests (N >= 9)
+// 2. SqliteValueTuple Heap Fallback Tests (N == 0 / default SqliteValueTuple<>)
 // ============================================================================
 static void test_value_tuple_heap() {
-  printf("2. Testing SqliteValueTuple<N> heap fallback (N >= 9)...\n");
+  printf("2. Testing SqliteValueTuple<> / SqliteValueTuple<0> direct heap tuple...\n");
 
-  SqliteValueTuple<9> t9;
+  SqliteValueTuple<> t9(9);
   assert(t9.size() == 9);
   assert(!t9.empty());
   assert(!t9.is_inline());
@@ -143,7 +143,7 @@ static void test_value_tuple_heap() {
   }
 
   // Copy & Move semantics for heap tuples
-  SqliteValueTuple<9> t9_copy(t9);
+  SqliteValueTuple<0> t9_copy(t9);
   assert(t9_copy == t9);
   assert(t9_copy.hash() == t9.hash());
 
@@ -151,10 +151,10 @@ static void test_value_tuple_heap() {
   assert(t9_copy != t9);
   assert(t9[0].as_int() == 1);
 
-  SqliteValueTuple<9> t9_move(sqlite_move(t9_copy));
+  SqliteValueTuple<> t9_move(sqlite_move(t9_copy));
   assert(t9_move[0].as_int() == 999);
 
-  SqliteValueTuple<16> t16;
+  SqliteValueTuple<> t16(16);
   assert(t16.size() == 16);
   t16[15] = SqliteValueOwned("last_col");
   SqliteRowOwnedWrapper span16 = t16.view();
@@ -162,15 +162,14 @@ static void test_value_tuple_heap() {
   assert(span16[15].as_text() == SqliteStringView("last_col"));
 
   // Single value and projecting constructors for heap tuples
-  SqliteValueTuple<9> t9_single(SqliteValueOwned(777));
+  SqliteValueTuple<> t9_single(SqliteValueOwned(777));
+  assert(t9_single.size() == 1);
   assert(t9_single[0].as_int() == 777);
-  assert(t9_single[1].is_null());
-  assert(t9_single[8].is_null());
 
-  SqliteValueTuple<9> t9_projected(t9, nullptr, 9);
+  SqliteValueTuple<> t9_projected(t9, nullptr, 9);
   assert(t9_projected == t9);
 
-  printf("   [PASS] SqliteValueTuple<N> heap verified.\n");
+  printf("   [PASS] SqliteValueTuple<0> heap verified.\n");
 }
 
 // ============================================================================
@@ -336,12 +335,12 @@ static void test_value_vec_adaptive_sbo() {
 }
 
 // ============================================================================
-// 4. SqliteValueVec Direct Heap Vector Tests (N >= 9)
+// 4. SqliteValueVec Direct Heap Vector Tests (N == 0 / default SqliteValueVec<>)
 // ============================================================================
 static void test_value_vec_heap() {
-  printf("4. Testing SqliteValueVec<N> direct heap vector (N >= 9)...\n");
+  printf("4. Testing SqliteValueVec<> / SqliteValueVec<0> direct heap vector...\n");
 
-  SqliteValueVec<10> vec(12);
+  SqliteValueVec<> vec(12);
   assert(vec.size() == 12);
   assert(!vec.is_inline());
 
@@ -361,21 +360,18 @@ static void test_value_vec_heap() {
   assert(vec.size() == 5);
   assert(vec[4].as_int() == 20);
 
-  SqliteValueVec<10> vec_copy(vec);
+  SqliteValueVec<0> vec_copy(vec);
   assert(vec_copy == vec);
 
-  SqliteValueVec<10> vec_moved(sqlite_move(vec));
+  SqliteValueVec<> vec_moved(sqlite_move(vec));
   assert(vec_moved.size() == 5);
   assert(vec.empty());
 
-  // Dynamic methods on heap vector
-  SqliteValueVec<12> h_vec;
-  assert(h_vec.size() == 12);
-  assert(h_vec.capacity() == 12);
-
-  h_vec.clear();
+  // Dynamic methods on heap vector (default constructed empty)
+  SqliteValueVec<> h_vec;
   assert(h_vec.empty());
   assert(h_vec.size() == 0);
+  assert(h_vec.capacity() == 0);
 
   h_vec.push_back(555);
   assert(h_vec.size() == 1);
@@ -393,7 +389,11 @@ static void test_value_vec_heap() {
   assert(h_vec.capacity() >= 64);
   assert(h_vec.size() == 1);
 
-  printf("   [PASS] SqliteValueVec<N> direct heap verified.\n");
+  h_vec.clear();
+  assert(h_vec.empty());
+  assert(h_vec.size() == 0);
+
+  printf("   [PASS] SqliteValueVec<0> direct heap verified.\n");
 }
 
 // ============================================================================
@@ -620,7 +620,7 @@ static void test_dispatch_framework() {
     if (cols <= 8) {
       assert(dispatched_1d_n == cols);
     } else {
-      assert(dispatched_1d_n == 9); // Fallback to 9
+      assert(dispatched_1d_n == 0); // Fallback to 0 (direct heap)
     }
   }
 
@@ -633,8 +633,8 @@ static void test_dispatch_framework() {
         observed_k = KeyN;
         observed_v = ValN;
       });
-      assert(observed_k == (k <= 8 ? (size_t)k : 9));
-      assert(observed_v == (v <= 8 ? (size_t)v : 9));
+      assert(observed_k == (k <= 8 ? (size_t)k : 0));
+      assert(observed_v == (v <= 8 ? (size_t)v : 0));
     }
   }
 
@@ -765,7 +765,7 @@ static void test_null_mechanics_and_simd_init() {
   for (int i = 0; i < 8; ++i)
     assert(t8[i].is_null());
 
-  SqliteValueTuple<9> t9;
+  SqliteValueTuple<> t9(9);
   for (int i = 0; i < 9; ++i)
     t9[i] = SqliteValueOwned(i + 1);
   assert(!t9[0].is_null());
@@ -774,7 +774,7 @@ static void test_null_mechanics_and_simd_init() {
     assert(t9[i].is_null());
 
   // 9. Test Wide Heap Tuple (N=16) SIMD Chunked Initialization & Reset
-  SqliteValueTuple<16> t16;
+  SqliteValueTuple<> t16(16);
   assert(t16.size() == 16);
   assert(t16.is_heap());
   for (int i = 0; i < 16; ++i) {
@@ -877,7 +877,8 @@ static void test_null_mechanics_and_simd_init() {
   assert(v_hetero_args[1].as_text() == SqliteStringView("vector_data"));
   assert(v_hetero_args[2].as_double() > 3.14);
 
-  SqliteValueTuple<9> t9_hetero(1, "two", 3.0, 4, "five", 6.0, 7, "eight", 9.0);
+  SqliteValueTuple<> t9_hetero(1, "two", 3.0, 4, "five", 6.0, 7, "eight", 9.0);
+  assert(t9_hetero.size() == 9);
   assert(t9_hetero[0].as_int() == 1);
   assert(t9_hetero[1].as_text() == SqliteStringView("two"));
   assert(t9_hetero[8].as_double() == 9.0);
@@ -922,9 +923,9 @@ static void test_generic_constructors_and_variadic_pack() {
   assert(t8[6].as_double() == 7.7);
   assert(t8[7].as_int() == 88);
 
-  // Heap-allocated tuple (N >= 9) with 10 heterogeneous variadic arguments
-  SqliteValueTuple<10> t10(1, 2.0, "three", true, int64_t(5), "six", 7.0, 8,
-                           "nine", 10.0);
+  // Heap-allocated tuple (N = 0) with 10 heterogeneous variadic arguments
+  SqliteValueTuple<> t10(1, 2.0, "three", true, int64_t(5), "six", 7.0, 8,
+                         "nine", 10.0);
   assert(t10.size() == 10);
   assert(t10[0].as_int() == 1);
   assert(t10[2].as_text() == SqliteStringView("three"));
@@ -959,9 +960,9 @@ static void test_generic_constructors_and_variadic_pack() {
   assert(v4_spill[4].as_text() == SqliteStringView("five"));
   assert(v4_spill[5].as_double() == 6.0);
 
-  // Direct heap vector (N >= 9) variadic constructor
-  SqliteValueVec<12> v12(1, "two", 3.0, 4, "five", 6.0, 7, "eight", 9.0, 10,
-                         "eleven", 12.0);
+  // Direct heap vector (N = 0) variadic constructor
+  SqliteValueVec<> v12(1, "two", 3.0, 4, "five", 6.0, 7, "eight", 9.0, 10,
+                       "eleven", 12.0);
   assert(v12.size() == 12);
   assert(v12[0].as_int() == 1);
   assert(v12[11].as_double() == 12.0);
@@ -1229,9 +1230,8 @@ static void test_exhaustive_edge_cases_and_coverage() {
   assert(v_empty_stack.empty());
   assert(v_empty_stack.size() == 0);
 
-  SqliteValueVec<12> v_empty_heap;
-  assert(v_empty_heap.size() == 12);
-  v_empty_heap.clear();
+  SqliteValueVec<> v_empty_heap;
+  assert(v_empty_heap.size() == 0);
   assert(v_empty_heap.empty());
   v_empty_heap.pop_back();
   assert(v_empty_heap.empty());
@@ -1245,7 +1245,7 @@ static void test_exhaustive_edge_cases_and_coverage() {
   assert(v_neg.empty());
   assert(v_neg.size() == 0);
 
-  SqliteValueVec<10> v_neg_heap;
+  SqliteValueVec<> v_neg_heap;
   v_neg_heap.resize(-100);
   assert(v_neg_heap.empty());
   assert(v_neg_heap.size() == 0);
@@ -1277,9 +1277,9 @@ static void test_exhaustive_edge_cases_and_coverage() {
   assert(t_self[0].as_int() == 10);
   assert(t_self[2].as_int() == 30);
 
-  SqliteValueTuple<10> t_self_heap;
+  SqliteValueTuple<> t_self_heap(10);
   t_self_heap[0] = 500;
-  SqliteValueTuple<10> &t_self_heap_ref = t_self_heap;
+  SqliteValueTuple<> &t_self_heap_ref = t_self_heap;
   t_self_heap = t_self_heap_ref; // Heap self copy
   assert(t_self_heap[0].as_int() == 500);
 
@@ -1366,10 +1366,409 @@ static void test_exhaustive_edge_cases_and_coverage() {
          "verified.\n");
 }
 
+// ============================================================================
+// 12. Complete std::array & std::vector Standard Library Alignment Tests
+// ============================================================================
+static void test_std_array_and_vector_alignment() {
+  printf("12. Testing Complete std::array & std::vector Standard Library Alignment...\n");
+
+  // ------------------------------------------------------------------------
+  // A. SqliteValueTuple<N> (std::array Interface Alignment)
+  // ------------------------------------------------------------------------
+  {
+    // 1. Static Tuple (N = 4)
+    SqliteValueTuple<4> t_stk(10, 20, 30, 40);
+    assert(t_stk.max_size() == 4);
+    assert(t_stk.front().as_int() == 10);
+    assert(t_stk.back().as_int() == 40);
+    assert(t_stk.at(1).as_int() == 20);
+    assert(t_stk.at(99).is_null()); // Safe out-of-bounds fallback
+
+    // Reverse Iteration
+    int expected_rev[4] = { 40, 30, 20, 10 };
+    int rev_idx = 0;
+    for (auto it = t_stk.rbegin(); it != t_stk.rend(); ++it) {
+      assert(it->as_int() == expected_rev[rev_idx++]);
+    }
+    assert(rev_idx == 4);
+
+    // Const Reverse Iteration
+    const auto& c_t_stk = t_stk;
+    rev_idx = 0;
+    for (auto it = c_t_stk.crbegin(); it != c_t_stk.crend(); ++it) {
+      assert(it->as_int() == expected_rev[rev_idx++]);
+    }
+
+    // fill() & swap()
+    t_stk.fill(999);
+    for (const auto& elem : t_stk) {
+      assert(elem.as_int() == 999);
+    }
+
+    SqliteValueTuple<4> t_stk2(1, 2, 3, 4);
+    t_stk.swap(t_stk2);
+    assert(t_stk[0].as_int() == 1);
+    assert(t_stk2[0].as_int() == 999);
+
+    // 2. Heap Tuple (N = 0 / sized 10)
+    SqliteValueTuple<> t_hp(10);
+    assert(t_hp.max_size() == 10);
+    t_hp.fill("tuple_fill");
+    for (const auto& elem : t_hp) {
+      assert(elem.as_text() == SqliteStringView("tuple_fill"));
+    }
+
+    SqliteValueTuple<> t_hp2(10);
+    t_hp2.fill(12345);
+    t_hp.swap(t_hp2);
+    assert(t_hp[0].as_int() == 12345);
+    assert(t_hp2[0].as_text() == SqliteStringView("tuple_fill"));
+  }
+
+  // ------------------------------------------------------------------------
+  // B. SqliteRowOwnedWrapper (std::array Interface Alignment)
+  // ------------------------------------------------------------------------
+  {
+    SqliteValueOwned vals[3] = { SqliteValueOwned(111), SqliteValueOwned(222), SqliteValueOwned(333) };
+    SqliteRowOwnedWrapper row_wrap(vals, 3);
+    assert(row_wrap.front().as_int() == 111);
+    assert(row_wrap.back().as_int() == 333);
+    assert(row_wrap.at(1).as_int() == 222);
+
+    int wrap_exp[3] = { 333, 222, 111 };
+    int wrap_i = 0;
+    for (auto it = row_wrap.rbegin(); it != row_wrap.rend(); ++it) {
+      assert(it->as_int() == wrap_exp[wrap_i++]);
+    }
+    assert(wrap_i == 3);
+
+    row_wrap.fill(777);
+    assert(vals[0].as_int() == 777 && vals[2].as_int() == 777);
+  }
+
+  // ------------------------------------------------------------------------
+  // C. SqliteRowView (std::array Interface Alignment)
+  // ------------------------------------------------------------------------
+  {
+    sqlite3* db = nullptr;
+    sqlite3_open(":memory:", &db);
+    sqlite3_stmt* stmt = nullptr;
+    sqlite3_prepare_v2(db, "SELECT 444, 555, 666", -1, &stmt, nullptr);
+    sqlite3_step(stmt);
+    SqliteRowView r_view(stmt);
+    assert(r_view.max_size() > 0);
+    assert(r_view.front().as_int() == 444);
+    assert(r_view.back().as_int() == 666);
+    assert(r_view.at(1).as_int() == 555);
+
+    int rview_exp[3] = { 666, 555, 444 };
+    int rview_i = 0;
+    for (auto it = r_view.rbegin(); it != r_view.rend(); ++it) {
+      assert(it->as_int() == rview_exp[rview_i++]);
+    }
+    assert(rview_i == 3);
+
+    sqlite3_finalize(stmt);
+    sqlite3_close(db);
+  }
+
+  // ------------------------------------------------------------------------
+  // D. SqliteValueVec<N> (std::vector Interface Alignment)
+  // ------------------------------------------------------------------------
+  {
+    // 1. SBO Vector (N = 4) - Element access & Reverse Iterators
+    SqliteValueVec<4> v_stk;
+    v_stk.push_back(100);
+    v_stk.push_back(200);
+    v_stk.push_back(300);
+    assert(v_stk.front().as_int() == 100);
+    assert(v_stk.back().as_int() == 300);
+    assert(v_stk.at(1).as_int() == 200);
+    assert(v_stk.at(99).is_null()); // Safe out-of-bounds fallback
+
+    int v_exp_rev[3] = { 300, 200, 100 };
+    int v_rev_i = 0;
+    for (auto it = v_stk.rbegin(); it != v_stk.rend(); ++it) {
+      assert(it->as_int() == v_exp_rev[v_rev_i++]);
+    }
+    assert(v_rev_i == 3);
+
+    // 2. insert(pos, val) - Copy & Move & Multi-count
+    auto it_ins1 = v_stk.insert(v_stk.begin(), 50);
+    assert(it_ins1 == v_stk.begin());
+    assert(v_stk.size() == 4);
+    assert(v_stk[0].as_int() == 50);
+
+    // Insert with SBO spill: [50, 100, 150, 200, 300]
+    SqliteValueOwned val_150(150);
+    auto it_ins2 = v_stk.insert(v_stk.begin() + 2, sqlite_move(val_150));
+    assert(it_ins2 == v_stk.begin() + 2);
+    assert(v_stk.size() == 5);
+    assert(!v_stk.is_inline()); // Spilled to heap!
+    assert(v_stk[0].as_int() == 50);
+    assert(v_stk[1].as_int() == 100);
+    assert(v_stk[2].as_int() == 150);
+    assert(v_stk[3].as_int() == 200);
+    assert(v_stk[4].as_int() == 300);
+
+    // Insert count: insert 2 copies of 777 at index 1
+    v_stk.insert(v_stk.begin() + 1, 2, 777);
+    assert(v_stk.size() == 7);
+    assert(v_stk[0].as_int() == 50);
+    assert(v_stk[1].as_int() == 777);
+    assert(v_stk[2].as_int() == 777);
+    assert(v_stk[3].as_int() == 100);
+
+    // 3. erase(pos) & erase(first, last)
+    v_stk.erase(v_stk.begin() + 1, v_stk.begin() + 3);
+    assert(v_stk.size() == 5);
+    assert(v_stk[0].as_int() == 50);
+    assert(v_stk[1].as_int() == 100);
+
+    auto it_era = v_stk.erase(v_stk.begin());
+    assert(it_era == v_stk.begin());
+    assert(v_stk.size() == 4);
+    assert(v_stk[0].as_int() == 100);
+
+    // Deep Erase Destruction Verification: Erase inline and heap-allocated string payloads
+    {
+      SqliteValueVec<4> v_strings;
+      v_strings.push_back("str_1");
+      v_strings.push_back("str_2");
+      v_strings.push_back("str_3");
+      v_strings.push_back("str_4");
+      v_strings.push_back("str_5");
+      assert(v_strings.size() == 5);
+      assert(!v_strings.is_inline());
+
+      // Erase element in the middle (index 1) - moves elements [2..4] left by 1 and frees old index 1
+      auto it_h1 = v_strings.erase(v_strings.begin() + 1);
+      assert(it_h1 == v_strings.begin() + 1);
+      assert(v_strings.size() == 4);
+      assert(v_strings[0].as_text() == SqliteStringView("str_1"));
+      assert(v_strings[1].as_text() == SqliteStringView("str_3"));
+      assert(v_strings[2].as_text() == SqliteStringView("str_4"));
+      assert(v_strings[3].as_text() == SqliteStringView("str_5"));
+
+      // Erase range [1, 3) - erases elements 1 and 2, moving element 3 into index 1
+      auto it_h2 = v_strings.erase(v_strings.begin() + 1, v_strings.begin() + 3);
+      assert(it_h2 == v_strings.begin() + 1);
+      assert(v_strings.size() == 2);
+      assert(v_strings[0].as_text() == SqliteStringView("str_1"));
+      assert(v_strings[1].as_text() == SqliteStringView("str_5"));
+
+      // Erase last remaining elements
+      v_strings.erase(v_strings.begin(), v_strings.end());
+      assert(v_strings.empty());
+      assert(v_strings.size() == 0);
+    }
+
+    // 4. shrink_to_fit() - Contracts back to stack SBO when size <= N
+    v_stk.shrink_to_fit();
+    assert(v_stk.is_inline());
+    assert(v_stk.size() == 4);
+
+    // 5. assign(count, val) & assign(first, last)
+    v_stk.assign(3, "assigned_text");
+    assert(v_stk.size() == 3);
+    for (const auto& elem : v_stk) {
+      assert(elem.as_text() == SqliteStringView("assigned_text"));
+    }
+
+    const int test_src[4] = { 11, 22, 33, 44 };
+    v_stk.assign(test_src, test_src + 4);
+    assert(v_stk.size() == 4);
+    assert(v_stk[0].as_int() == 11);
+    assert(v_stk[3].as_int() == 44);
+
+    // 6. swap(other) - Exhaustive Multi-State Matrix
+    {
+      // Stack <-> Heap Swap
+      SqliteValueVec<4> v_stk_swap;
+      v_stk_swap.push_back(10);
+      v_stk_swap.push_back(20);
+      assert(v_stk_swap.is_inline());
+
+      SqliteValueVec<4> v_hp_swap;
+      for (int i = 0; i < 6; ++i) v_hp_swap.push_back(i * 100);
+      assert(!v_hp_swap.is_inline());
+
+      v_stk_swap.swap(v_hp_swap);
+      assert(!v_stk_swap.is_inline());
+      assert(v_stk_swap.size() == 6 && v_stk_swap[0].as_int() == 0 && v_stk_swap[5].as_int() == 500);
+      assert(v_hp_swap.is_inline());
+      assert(v_hp_swap.size() == 2 && v_hp_swap[0].as_int() == 10 && v_hp_swap[1].as_int() == 20);
+
+      // Heap <-> Heap Swap
+      SqliteValueVec<4> v_hp2;
+      for (int i = 0; i < 8; ++i) v_hp2.push_back(i + 1);
+      assert(!v_hp2.is_inline());
+
+      v_stk_swap.swap(v_hp2);
+      assert(v_stk_swap.size() == 8 && v_stk_swap[0].as_int() == 1 && v_stk_swap[7].as_int() == 8);
+      assert(v_hp2.size() == 6 && v_hp2[0].as_int() == 0 && v_hp2[5].as_int() == 500);
+
+      // Empty <-> Populated Swap
+      SqliteValueVec<4> v_empty;
+      v_empty.swap(v_stk_swap);
+      assert(v_stk_swap.empty() && v_stk_swap.size() == 0);
+      assert(v_empty.size() == 8 && v_empty[0].as_int() == 1);
+    }
+
+    // 7. resize(count, val) with values and primitives
+    {
+      SqliteValueVec<4> v_resize_val;
+      v_resize_val.resize(3, 42);
+      assert(v_resize_val.size() == 3);
+      assert(v_resize_val.is_inline());
+      for (const auto& elem : v_resize_val) {
+        assert(elem.as_int() == 42);
+      }
+
+      // Grow with SBO spill and value padding
+      v_resize_val.resize(6, "padding");
+      assert(v_resize_val.size() == 6);
+      assert(!v_resize_val.is_inline());
+      assert(v_resize_val[0].as_int() == 42);
+      assert(v_resize_val[2].as_int() == 42);
+      assert(v_resize_val[3].as_text() == SqliteStringView("padding"));
+      assert(v_resize_val[5].as_text() == SqliteStringView("padding"));
+
+      // Contract back to stack
+      v_resize_val.resize(2);
+      assert(v_resize_val.size() == 2);
+      assert(v_resize_val.is_inline());
+      assert(v_resize_val[0].as_int() == 42);
+      assert(v_resize_val[1].as_int() == 42);
+    }
+
+    // 8. Insertion at Extreme Boundaries (Begin, End, Middle)
+    {
+      SqliteValueVec<4> v_bound;
+      v_bound.push_back(100);
+      v_bound.push_back(200);
+
+      // Prefix bulk insert: [1, 1, 1, 100, 200] -> spills to heap
+      v_bound.insert(v_bound.begin(), 3, 1);
+      assert(v_bound.size() == 5);
+      assert(!v_bound.is_inline());
+      assert(v_bound[0].as_int() == 1);
+      assert(v_bound[2].as_int() == 1);
+      assert(v_bound[3].as_int() == 100);
+      assert(v_bound[4].as_int() == 200);
+
+      // Suffix bulk insert (at end): [1, 1, 1, 100, 200, 999, 999]
+      v_bound.insert(v_bound.end(), 2, 999);
+      assert(v_bound.size() == 7);
+      assert(v_bound[5].as_int() == 999);
+      assert(v_bound[6].as_int() == 999);
+    }
+
+    // 9. Empty Container Zero-Crash & Safe Fallback Guarantees
+    {
+      SqliteValueVec<4> v_zero;
+      assert(v_zero.empty());
+      assert(v_zero.size() == 0);
+      assert(v_zero.front().is_null());
+      assert(v_zero.back().is_null());
+      assert(v_zero.at(0).is_null());
+      assert(v_zero.at(100).is_null());
+      assert(v_zero[0].is_null());
+      assert(v_zero[-1].is_null());
+
+      // Safe erase / insert on empty vector
+      v_zero.erase(v_zero.begin(), v_zero.end());
+      assert(v_zero.empty());
+
+      auto it_ins0 = v_zero.insert(v_zero.begin(), 777);
+      assert(it_ins0 == v_zero.begin());
+      assert(v_zero.size() == 1 && v_zero[0].as_int() == 777);
+      assert(v_zero.front().as_int() == 777);
+      assert(v_zero.back().as_int() == 777);
+    }
+
+    // 10. Const Iterators & Subscript Bounds Robustness
+    {
+      SqliteValueVec<4> v_mut;
+      v_mut.push_back(10);
+      v_mut.push_back(20);
+      v_mut.push_back(30);
+
+      const SqliteValueVec<4>& v_const = v_mut;
+      assert(v_const.front().as_int() == 10);
+      assert(v_const.back().as_int() == 30);
+      assert(v_const.at(1).as_int() == 20);
+      assert(v_const.at(999).is_null());
+      assert(v_const[static_cast<size_t>(1)].as_int() == 20);
+      assert(v_const[static_cast<size_t>(999)].is_null());
+      assert(v_const[-10].is_null());
+
+      int const_exp[3] = { 10, 20, 30 };
+      int c_i = 0;
+      for (auto it = v_const.cbegin(); it != v_const.cend(); ++it) {
+        assert(it->as_int() == const_exp[c_i++]);
+      }
+      assert(c_i == 3);
+
+      int const_rev_exp[3] = { 30, 20, 10 };
+      int cr_i = 0;
+      for (auto it = v_const.crbegin(); it != v_const.crend(); ++it) {
+        assert(it->as_int() == const_rev_exp[cr_i++]);
+      }
+      assert(cr_i == 3);
+    }
+
+    // 11. Direct Heap Vector (N = 0) Modifiers & Reverse Iterators
+    {
+      SqliteValueVec<> v_dh;
+      assert(v_dh.empty());
+      assert(v_dh.front().is_null());
+      assert(v_dh.back().is_null());
+
+      v_dh.assign(5, 777);
+      assert(v_dh.size() == 5);
+      v_dh.shrink_to_fit();
+      assert(v_dh.capacity() == 5);
+
+      v_dh.insert(v_dh.begin() + 2, 888);
+      assert(v_dh.size() == 6);
+      assert(v_dh[2].as_int() == 888);
+
+      v_dh.erase(v_dh.begin() + 2);
+      assert(v_dh.size() == 5);
+      assert(v_dh[2].as_int() == 777);
+
+      v_dh.resize(8, 999);
+      assert(v_dh.size() == 8);
+      assert(v_dh[4].as_int() == 777);
+      assert(v_dh[7].as_int() == 999);
+
+      int dh_rev_cnt = 0;
+      for (auto it = v_dh.rbegin(); it != v_dh.rend(); ++it) {
+        assert(it->as_int() == 999 || it->as_int() == 777);
+        ++dh_rev_cnt;
+      }
+      assert(dh_rev_cnt == 8);
+
+      // Direct Heap Tuple (N = 0 / sized 10) reverse iteration & out-of-bounds
+      const SqliteValueTuple<> t_dh_const(10);
+      assert(t_dh_const.at(100).is_null());
+      assert(t_dh_const[-1].is_null());
+      int t_dh_rev_cnt = 0;
+      for (auto it = t_dh_const.crbegin(); it != t_dh_const.crend(); ++it) {
+        assert(it->is_null());
+        ++t_dh_rev_cnt;
+      }
+      assert(t_dh_rev_cnt == 10);
+    }
+  }
+
+  printf("   [PASS] Complete std::array & std::vector Standard Library Alignment verified.\n");
+}
+
 int main() {
   printf("=================================================================\n");
-  printf(
-      "Running Value Containers (sqlite3_value_containers.hpp) Core Tests\n");
+  printf("Running Value Containers (sqlite3_value_containers.hpp) Core Tests\n");
   printf("=================================================================\n");
 
   test_value_tuple_static();
@@ -1383,6 +1782,7 @@ int main() {
   test_generic_constructors_and_variadic_pack();
   test_value_vec_dynamic_growth_and_capacity();
   test_exhaustive_edge_cases_and_coverage();
+  test_std_array_and_vector_alignment();
 
   printf("=================================================================\n");
   printf("All Value Container Core Tests Passed Successfully (100%%)!\n");

@@ -29,7 +29,7 @@
         case 6:  { constexpr size_t N = 6; __VA_ARGS__; } break; \
         case 7:  { constexpr size_t N = 7; __VA_ARGS__; } break; \
         case 8:  { constexpr size_t N = 8; __VA_ARGS__; } break; \
-        default: { constexpr size_t N = 9; __VA_ARGS__; } break; /* Dynamic Heap Fallback */ \
+        default: { constexpr size_t N = 0; __VA_ARGS__; } break; /* Dynamic Heap Fallback */ \
     }
 
 // ============================================================================
@@ -58,7 +58,7 @@
         case 6:  { constexpr size_t KeyN = 6; SQLITE_DISPATCH_1D_8(ValN, val_count, __VA_ARGS__) } break; \
         case 7:  { constexpr size_t KeyN = 7; SQLITE_DISPATCH_1D_8(ValN, val_count, __VA_ARGS__) } break; \
         case 8:  { constexpr size_t KeyN = 8; SQLITE_DISPATCH_1D_8(ValN, val_count, __VA_ARGS__) } break; \
-        default: { constexpr size_t KeyN = 9; SQLITE_DISPATCH_1D_8(ValN, val_count, __VA_ARGS__) } break; \
+        default: { constexpr size_t KeyN = 0; SQLITE_DISPATCH_1D_8(ValN, val_count, __VA_ARGS__) } break; \
     }
 
 // ============================================================================

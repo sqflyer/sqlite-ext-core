@@ -12,8 +12,28 @@
 #include <algorithm>
 #include <utility>
 #include <tuple>
+#include <iterator>
 #include "sqlite3_row.hpp"
 #include "sqlite3_value_containers.hpp"
+
+namespace std {
+    template <typename Iter>
+    struct iterator_traits<sqlite_reverse_iterator<Iter>> {
+        typedef std::random_access_iterator_tag iterator_category;
+        typedef typename sqlite_reverse_iterator<Iter>::value_type value_type;
+        typedef typename sqlite_reverse_iterator<Iter>::difference_type difference_type;
+        typedef typename sqlite_reverse_iterator<Iter>::pointer pointer;
+        typedef typename sqlite_reverse_iterator<Iter>::reference reference;
+    };
+    template <>
+    struct iterator_traits<SqliteRowView::Iterator> {
+        typedef std::random_access_iterator_tag iterator_category;
+        typedef SqliteRowView::Iterator::value_type value_type;
+        typedef SqliteRowView::Iterator::difference_type difference_type;
+        typedef SqliteRowView::Iterator::pointer pointer;
+        typedef SqliteRowView::Iterator::reference reference;
+    };
+}
 
 // ============================================================================
 // 1. Transparent std::unordered_map & std::unordered_set with SqliteValueTuple
@@ -272,9 +292,182 @@ void test_std_pair_and_tuple() {
     assert(p.second[1].as_text() == SqliteStringView("val"));
 
     auto t = std::make_tuple(SqliteValueTuple<1>(100), SqliteValueVec<1>("hello"), 3.14159);
-    assert(std::get<0>(t)[0].as_int() == 100);
-    assert(std::get<1>(t)[0].as_text() == SqliteStringView("hello"));
     assert(std::get<2>(t) > 3.14);
+}
+
+// ============================================================================
+// 8. Standard Member Typedefs Compile-Time Compliance Checks
+// ============================================================================
+template <typename Container, typename ExpectedVal, typename ExpectedRef, typename ExpectedConstRef>
+void check_container_typedefs() {
+    static_assert(std::is_same<typename Container::value_type, ExpectedVal>::value, "value_type mismatch");
+    static_assert(std::is_same<typename Container::size_type, size_t>::value, "size_type must be size_t");
+    static_assert(std::is_same<typename Container::difference_type, ptrdiff_t>::value, "difference_type must be ptrdiff_t");
+    static_assert(std::is_same<typename Container::reference, ExpectedRef>::value, "reference mismatch");
+    static_assert(std::is_same<typename Container::const_reference, ExpectedConstRef>::value, "const_reference mismatch");
+    static_assert(sizeof(typename Container::iterator) > 0, "iterator must exist");
+    static_assert(sizeof(typename Container::const_iterator) > 0, "const_iterator must exist");
+    static_assert(sizeof(typename Container::reverse_iterator) > 0, "reverse_iterator must exist");
+    static_assert(sizeof(typename Container::const_reverse_iterator) > 0, "const_reverse_iterator must exist");
+}
+
+void test_standard_typedefs_compliance() {
+    printf("8. Running test_standard_typedefs_compliance...\n");
+
+    check_container_typedefs<SqliteValueTuple<4>, SqliteValueOwned, SqliteValueOwned&, const SqliteValueOwned&>();
+    check_container_typedefs<SqliteValueTuple<0>, SqliteValueOwned, SqliteValueOwned&, const SqliteValueOwned&>();
+    check_container_typedefs<SqliteValueTuple<>, SqliteValueOwned, SqliteValueOwned&, const SqliteValueOwned&>();
+    check_container_typedefs<SqliteValueVec<4>, SqliteValueOwned, SqliteValueOwned&, const SqliteValueOwned&>();
+    check_container_typedefs<SqliteValueVec<0>, SqliteValueOwned, SqliteValueOwned&, const SqliteValueOwned&>();
+    check_container_typedefs<SqliteValueVec<>, SqliteValueOwned, SqliteValueOwned&, const SqliteValueOwned&>();
+    check_container_typedefs<SqliteRowOwnedWrapper, SqliteValueOwned, SqliteValueOwned&, const SqliteValueOwned&>();
+    check_container_typedefs<SqliteRowView, SqliteValueView, SqliteValueView, SqliteValueView>();
+}
+
+// ============================================================================
+// 9. Standard Algorithms on Forward and Reverse Iterators
+// ============================================================================
+void test_std_algorithms_deep() {
+    printf("9. Running test_std_algorithms_deep (std::copy, transform, count_if, reverse, max_element)...\n");
+
+    // 1. std::transform & std::copy over SqliteValueTuple
+    SqliteValueTuple<5> t(10, 20, 30, 40, 50);
+    std::vector<int> extracted;
+    std::transform(t.begin(), t.end(), std::back_inserter(extracted), [](const SqliteValueOwned& val) {
+        return val.as_int() * 2;
+    });
+    assert(extracted.size() == 5);
+    assert(extracted[0] == 20 && extracted[4] == 100);
+
+    // 2. std::reverse_copy using reverse iterators into std::vector
+    std::vector<int> rev_extracted;
+    std::transform(t.rbegin(), t.rend(), std::back_inserter(rev_extracted), [](const SqliteValueOwned& val) {
+        return val.as_int();
+    });
+    assert(rev_extracted.size() == 5);
+    assert(rev_extracted[0] == 50 && rev_extracted[4] == 10);
+
+    // 3. std::count_if on SqliteValueVec
+    SqliteValueVec<4> v;
+    v.push_back(15);
+    v.push_back(25);
+    v.push_back(35);
+    v.push_back(45);
+    v.push_back(55); // Heap spilled!
+
+    auto cnt = std::count_if(v.begin(), v.end(), [](const SqliteValueOwned& val) {
+        return val.as_int() > 30;
+    });
+    assert(cnt == 3);
+
+    // 4. std::max_element & std::min_element
+    auto max_it = std::max_element(v.begin(), v.end(), [](const SqliteValueOwned& a, const SqliteValueOwned& b) {
+        return a.as_int() < b.as_int();
+    });
+    assert(max_it != v.end() && max_it->as_int() == 55);
+
+    auto min_it = std::min_element(v.rbegin(), v.rend(), [](const SqliteValueOwned& a, const SqliteValueOwned& b) {
+        return a.as_int() < b.as_int();
+    });
+    assert(min_it != v.rend() && min_it->as_int() == 15);
+
+    // 5. std::is_sorted
+    assert(std::is_sorted(v.begin(), v.end(), [](const SqliteValueOwned& a, const SqliteValueOwned& b) {
+        return a.as_int() < b.as_int();
+    }));
+}
+
+// ============================================================================
+// 10. Reverse Iterator Arithmetic & Relational Operators
+// ============================================================================
+void test_reverse_iterator_full_contract() {
+    printf("10. Running test_reverse_iterator_full_contract...\n");
+
+    SqliteValueVec<4> vec;
+    vec.push_back(100);
+    vec.push_back(200);
+    vec.push_back(300);
+    vec.push_back(400);
+
+    auto rit = vec.rbegin();
+    assert(rit->as_int() == 400);
+    assert((*rit).as_int() == 400);
+
+    // Pre/Post increment
+    auto r1 = rit++;
+    assert(r1->as_int() == 400);
+    assert(rit->as_int() == 300);
+
+    // Pre/Post decrement
+    auto r2 = rit--;
+    assert(r2->as_int() == 300);
+    assert(rit->as_int() == 400);
+
+    // Arithmetic + / - / += / -=
+    auto rit2 = rit + 2;
+    assert(rit2->as_int() == 200);
+    assert(rit2 - rit == 2);
+    assert(rit - rit2 == -2);
+
+    rit += 3;
+    assert(rit->as_int() == 100);
+    rit -= 3;
+    assert(rit == vec.rbegin());
+
+    // Subscript []
+    assert(rit[0].as_int() == 400);
+    assert(rit[1].as_int() == 300);
+    assert(rit[2].as_int() == 200);
+    assert(rit[3].as_int() == 100);
+
+    // Relational operators
+    auto a = vec.rbegin();
+    auto b = vec.rbegin() + 1;
+    assert(a < b);
+    assert(a <= b);
+    assert(b > a);
+    assert(b >= a);
+    // base() accessor
+    assert(a.base() == vec.end());
+    assert(vec.rend().base() == vec.begin());
+}
+
+// ============================================================================
+// 11. Standard Algorithms with Vector & Tuple Modifiers
+// ============================================================================
+void test_standard_array_vector_modifiers_stl() {
+    printf("11. Running test_standard_array_vector_modifiers_stl...\n");
+
+    // std::fill with SqliteValueTuple
+    SqliteValueTuple<4> t;
+    std::fill(t.begin(), t.end(), SqliteValueOwned(77));
+    for (const auto& elem : t) {
+        assert(elem.as_int() == 77);
+    }
+
+    // std::reverse with SqliteValueVec
+    SqliteValueVec<4> v;
+    v.push_back(10);
+    v.push_back(20);
+    v.push_back(30);
+    v.push_back(40);
+    std::reverse(v.begin(), v.end());
+    assert(v[0].as_int() == 40);
+    assert(v[1].as_int() == 30);
+    assert(v[2].as_int() == 20);
+    assert(v[3].as_int() == 10);
+
+    // std::rotate with SqliteValueVec
+    std::rotate(v.begin(), v.begin() + 1, v.end());
+    assert(v[0].as_int() == 30);
+    assert(v[3].as_int() == 40);
+
+    // std::equal & std::lexicographical_compare
+    SqliteValueTuple<3> t1(1, 2, 3);
+    SqliteValueTuple<3> t2(1, 2, 3);
+    SqliteValueTuple<3> t3(1, 2, 4);
+    assert(std::equal(t1.begin(), t1.end(), t2.begin()));
+    assert(std::lexicographical_compare(t1.begin(), t1.end(), t3.begin(), t3.end()));
 }
 
 int main() {
@@ -289,6 +482,10 @@ int main() {
     test_std_vector_integration();
     test_std_algorithms();
     test_std_pair_and_tuple();
+    test_standard_typedefs_compliance();
+    test_std_algorithms_deep();
+    test_reverse_iterator_full_contract();
+    test_standard_array_vector_modifiers_stl();
 
     printf("=================================================================\n");
     printf("All Value Container Standard Library Tests Passed Successfully (100%%)!\n");

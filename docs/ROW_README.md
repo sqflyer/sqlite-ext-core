@@ -1,6 +1,6 @@
 # C++ Row Types & Tabular Abstractions (`sqlite3_row.hpp`)
 
-High-performance, zero-dependency, freestanding C++ RAII wrappers for SQLite multi-column tabular rows. Engineered specifically for SQLite extension authors to enable **zero-allocation row inspection (`SqliteRowView`)**, **stack-allocated row spans (`SqliteRowOwnedWrapper`)**, **transparent single-scalar & multi-column comparisons**, and **seamless statement/UDF argument multiplexing**.
+High-performance, zero-dependency, freestanding C++ RAII wrappers for SQLite multi-column tabular rows. Engineered specifically for SQLite extension authors to enable **zero-allocation row inspection (`SqliteRowView`)**, **stack-allocated row spans (`SqliteRowOwnedWrapper`)**, **standard `std::array` compliance**, **bidirectional & reverse iteration (`sqlite_reverse_iterator`)**, **transparent single-scalar & multi-column comparisons**, and **seamless statement/UDF argument multiplexing**.
 
 > **Architecture Reference**: For an in-depth systems analysis of the 64-bit alignment models, multi-source tagged union multiplexing, assembly-level execution characteristics, and freestanding memory guarantees, see [`docs/ROW_ARCHITECTURE.md`](ROW_ARCHITECTURE.md).  
 > **Value Containers Guide**: For owning multi-column primary key tuples and adaptive SBO vectors, see [`docs/VALUE_CONTAINERS_README.md`](VALUE_CONTAINERS_README.md).
@@ -11,8 +11,8 @@ High-performance, zero-dependency, freestanding C++ RAII wrappers for SQLite mul
 
 In SQLite extension and virtual table development, tabular row data manifests across distinct execution contexts:
 1. **Transient Statement Execution (Views)**: Stepping a prepared statement (`sqlite3_step`) exposes column values via `sqlite3_column_*` APIs. These values are owned by SQLite's VDBE engine and are transient. Reading them into dynamic heap containers causes massive allocation overhead.
-2. **UDF Parameter Vectors (Views)**: SQLite user-defined functions receive `(int argc, sqlite3_value** argv)` parameter vectors that must be inspected cleanly with bounds safety and zero allocations.
-3. **Owned Contiguous Buffers (Spans)**: Multi-column value tuples (`SqliteValueTuple<N>`) and vectors (`SqliteValueVec<N>`) need a uniform, non-owning 16-byte span (`SqliteRowOwnedWrapper`) for range-based iteration, slicing, and heterogeneous hashing.
+2. **UDF Parameter Vectors (Views)**: SQLite user-defined functions receive `(int argc, sqlite3_value** argv)` parameter vectors that must be inspected cleanly with bounds safety, standard `std::array` methods, and zero allocations.
+3. **Owned Contiguous Buffers (Spans)**: Multi-column value tuples (`SqliteValueTuple<N>`) and vectors (`SqliteValueVec<N>`) need a uniform, non-owning 16-byte span (`SqliteRowOwnedWrapper`) for standard array operations, range-based iteration, reverse traversal, slicing, and heterogeneous hashing.
 4. **Scope-Guarded Stack Dispatching**: `withSqliteRowOwned` instantiates exact compile-time stack tuples for sizes 1..8 with zero heap allocations.
 
 ```
@@ -23,6 +23,8 @@ In SQLite extension and virtual table development, tabular row data manifests ac
 │                            SqliteRowView                                    │
 │   Multiplexes: sqlite3_stmt* | sqlite3_value** argv | Value Views           │
 │   [24 Bytes: 16B Tagged Union + 4B Column Count + 1B Source Tag + 3B Pad]   │
+│   Standard std::array interface: front(), back(), at(), []                  │
+│   Iterators: begin(), end(), cbegin(), cend(), rbegin(), rend()             │
 └─────────────────────────────────────────────────────────────────────────────┘
                                      │
            Convert via .to_vec() OR Extract via direct typed accessors
@@ -36,6 +38,7 @@ In SQLite extension and virtual table development, tabular row data manifests ac
 │                                                                             │
 │                            SqliteRowOwnedWrapper                            │
 │   [16-Byte Non-Owning Span: SqliteValueOwned* data + int len (2 Registers)] │
+│   Standard std::array interface: front(), back(), at(), [], rbegin(), rend()│
 └─────────────────────────────────────────────────────────────────────────────┘
 ```
 
@@ -46,14 +49,14 @@ In SQLite extension and virtual table development, tabular row data manifests ac
 | Feature | `SqliteRowView` (`SqliteUdfArgs`) | `SqliteRowOwnedWrapper` | `SqliteValueTuple<N>` | `SqliteValueVec<N>` |
 | :--- | :---: | :---: | :---: | :---: |
 | **Size in Memory** | **24 Bytes** | **16 Bytes** (2 Registers) | **$N \times 16$ Bytes** | **$N \times 16$ Bytes** |
-| **Allocation Model** | Zero (Non-owning View) | Zero (Non-owning Span) | Stack ($N \le 8$) / Heap ($N \ge 9$) | Stack SBO ($N \le 8$) / Spill |
+| **Standard Alignment** | `std::array` | `std::array` | `std::array` | `std::vector` |
+| **Allocation Model** | Zero (Non-owning View) | Zero (Non-owning Span) | Stack ($N \in [1..8]$) / Heap ($N = 0$) | Stack SBO ($N \in [1..8]$) / Heap ($N = 0$) |
 | **Backing Sources** | Statement, Argv, View Array | Contiguous `SqliteValueOwned` | In-Situ Stack Array | In-Situ Stack / Heap Buffer |
 | **Column Count** | Dynamic ($0 \dots N$) | Dynamic ($0 \dots N$) | Fixed ($N$) | Adaptive ($0 \dots N$) |
+| **Element Access** | `front`, `back`, `at`, `[]`, `data` | `front`, `back`, `at`, `[]`, `data` | `front`, `back`, `at`, `[]`, `data` | `front`, `back`, `at`, `[]`, `data` |
 | **Direct Typed Access** | `.as_int64()`, `.as_text()`... | `.as_int64()`, `.as_text()`... | `.as_int64()`, `.as_text()`... | `.as_int64()`, `.as_text()`... |
-| **Subtype Inspection** | `.subtype(i)` | `.subtype(i)` | `.subtype(i)` | `.subtype(i)` |
-| **Schema Metadata** | `.column_name(i)`, `.decltype()`| N/A | N/A | N/A |
 | **Bounds Safety** | Returns fallback `SQLITE_NULL` | Returns fallback `SQLITE_NULL` | Returns fallback `SQLITE_NULL` | Returns fallback `SQLITE_NULL` |
-| **Range Iteration** | `for (SqliteValueView c : row)` | `for (const auto& c : row)` | `for (const auto& c : tuple)` | `for (const auto& c : vec)` |
+| **Iterators** | Forward + Reverse (`rbegin`/`rend`) | Forward + Reverse (`rbegin`/`rend`) | Forward + Reverse (`rbegin`/`rend`) | Forward + Reverse (`rbegin`/`rend`) |
 | **Swiss Table Hashing** | `SqliteRowHash` | `SqliteRowHash` | `SqliteRowHash` | `SqliteRowHash` |
 | **Transparent B-Tree** | `SqliteRowLess` | `SqliteRowLess` | `SqliteRowLess` | `SqliteRowLess` |
 
@@ -61,7 +64,7 @@ In SQLite extension and virtual table development, tabular row data manifests ac
 
 ## 3. `SqliteRowView` API Reference
 
-`SqliteRowView` (aliased as `SqliteUdfArgs`) is a lightweight, non-owning 24-byte universal view multiplexing prepared statements, UDF arguments, and in-memory value arrays with zero dynamic allocations.
+`SqliteRowView` (aliased as `SqliteUdfArgs`) is a lightweight, non-owning 24-byte universal view multiplexing prepared statements, UDF arguments, and in-memory value arrays with zero dynamic allocations and complete `std::array` compliance.
 
 ### Multi-Source Creation
 ```cpp
@@ -70,6 +73,8 @@ SqliteStatement stmt(db, "SELECT id, name, score FROM users;");
 if (stmt.step() == SQLITE_ROW) {
     SqliteRowView row = stmt.row(); // Or SqliteRowView(stmt.get());
     assert(row.size() == 3);
+    assert(row.front().as_int() == 1);
+    assert(row.back().as_double() > 0.0);
 }
 
 // 2. Wrap UDF / Virtual Table argument vectors
@@ -84,23 +89,18 @@ SqliteValueView view_arr[2] = { SqliteValueView::from_column(stmt.get(), 0), Sql
 SqliteRowView row(view_arr, 2);
 ```
 
-### Direct Column Extraction
+### Forward and Reverse Iteration
 ```cpp
-sqlite3_int64 id        = row.as_int64(0);
-SqliteStringView name   = row.as_text(1);
-double score            = row.as_double(2);
-uint8_t sub             = row.subtype(1);
-bool is_null            = row.is_null(2);
-int col_type            = row.type(0); // SQLITE_INTEGER
-```
-
-### Range-Based Iteration
-```cpp
-// Iterates over non-owning SqliteValueView elements:
+// 1. Forward range-based for loop
 for (SqliteValueView val : row) {
     if (val.type() == SQLITE_TEXT) {
-        printf("Text: %s\n", val.as_text().c_str());
+        printf("Text: %s\n", val.as_text().data());
     }
+}
+
+// 2. Standard reverse iteration using sqlite_reverse_iterator
+for (auto it = row.rbegin(); it != row.rend(); ++it) {
+    printf("Reverse col type: %d\n", it->type());
 }
 ```
 
@@ -120,7 +120,7 @@ if (row < other_row_view) { /* Lexicographical column ordering */ }
 
 ## 4. `SqliteRowOwnedWrapper` API Reference
 
-`SqliteRowOwnedWrapper` is a 16-byte non-owning span (`SqliteValueOwned* m_data` + `int m_len`) fitting perfectly in 2 CPU registers (`rax`, `rdx`).
+`SqliteRowOwnedWrapper` is a 16-byte non-owning span (`SqliteValueOwned* m_data` + `int m_len`) fitting in 2 CPU registers (`rax`, `rdx`), supporting complete `std::array` accessors and forward/reverse iterators.
 
 ```cpp
 SqliteValueOwned arr[3];
@@ -130,8 +130,15 @@ arr[2] = SqliteValueOwned(98.5);
 
 SqliteRowOwnedWrapper wrapper(arr, 3);
 assert(wrapper.size() == 3);
-assert(wrapper.as_int64(0) == 101);
-assert(wrapper.as_text(1) == "Alice");
+assert(wrapper.max_size() == 3);
+assert(wrapper.front().as_int64() == 101);
+assert(wrapper.back().as_double() == 98.5);
+assert(wrapper.at(1).as_text() == "Alice");
+
+// Reverse iteration
+for (auto it = wrapper.rbegin(); it != wrapper.rend(); ++it) {
+    printf("Col: %d\n", it->type());
+}
 ```
 
 ---

@@ -32,12 +32,12 @@
     #define SQLITE_FAST_MEMCPY(dst, src, size) __builtin_memcpy((dst), (src), (size))
 #elif defined(_MSC_VER)
     #include <intrin.h>
-    #define SQLITE_FAST_MEMCPY(dst, src, size) __movsb(static_cast<unsigned char*>(dst), static_cast<const unsigned char*>(src), (size))
+    #define SQLITE_FAST_MEMCPY(dst, src, size) __movsb(reinterpret_cast<unsigned char*>(dst), reinterpret_cast<const unsigned char*>(src), static_cast<size_t>(size))
 #else
     #define SQLITE_FAST_MEMCPY(dst, src, size) do { \
-        char* d = static_cast<char*>(dst); \
-        const char* s = static_cast<const char*>(src); \
-        for (int _i = 0; _i < (size); ++_i) d[_i] = s[_i]; \
+        char* d = reinterpret_cast<char*>(dst); \
+        const char* s = reinterpret_cast<const char*>(src); \
+        for (size_t _i = 0; _i < static_cast<size_t>(size); ++_i) d[_i] = s[_i]; \
     } while(0)
 #endif
 

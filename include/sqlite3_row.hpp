@@ -22,6 +22,283 @@ template <size_t N, typename Enable> class SqliteValueVec;
 typedef uint8_t SqliteRowSourceType;
 
 // ============================================================================
+// ============================================================================
+// Array, Hashing, Iterator & Standard Container Synthesis Macros
+// ============================================================================
+
+/**
+ * @struct sqlite_random_access_iterator_tag
+ * @brief Freestanding tag identifying random-access iterator category without requiring <iterator>.
+ */
+struct sqlite_random_access_iterator_tag {};
+
+/**
+ * @class sqlite_reverse_iterator
+ * @brief Standard-compliant bidirectional and random-access reverse iterator adapter over pointer or iterator types.
+ *
+ * Provides standard reverse iteration traversal semantics (`rbegin()`, `rend()`, `crbegin()`, `crend()`)
+ * across contiguous arrays, dynamic vectors, and non-owning row views.
+ *
+ * @tparam Iter Underlying forward iterator or raw pointer type.
+ */
+template <typename Iter>
+class sqlite_reverse_iterator {
+private:
+    Iter m_current;
+public:
+    typedef sqlite_random_access_iterator_tag                     iterator_category;
+    typedef Iter                                                  iterator_type;
+    typedef decltype(*sqlite_declval<Iter>())                    reference;
+    typedef typename sqlite_remove_reference<reference>::type   value_type;
+    typedef value_type*                                           pointer;
+    typedef const value_type*                                     const_pointer;
+    typedef ptrdiff_t                                             difference_type;
+
+    /**
+     * @class ArrowProxy
+     * @brief Proxy object supporting operator-> on both lvalue references and prvalue temporary views.
+     */
+    class ArrowProxy {
+    private:
+        value_type m_val;
+    public:
+        inline explicit ArrowProxy(const value_type& v) noexcept : m_val(v) {}
+        inline const_pointer operator->() const noexcept { return &m_val; }
+        inline pointer operator->() noexcept { return &m_val; }
+    };
+
+    /** @brief Default constructor initializing to null iterator. */
+    inline sqlite_reverse_iterator() : m_current(nullptr) {}
+
+    /** @brief Explicit constructor wrapping a base iterator. */
+    inline explicit sqlite_reverse_iterator(Iter it) : m_current(it) {}
+
+    /** @brief Converting copy constructor from compatible reverse iterator. */
+    template <typename OtherIter>
+    inline sqlite_reverse_iterator(const sqlite_reverse_iterator<OtherIter>& other) : m_current(other.base()) {}
+
+    /** @brief Returns the underlying base iterator. */
+    inline Iter base() const noexcept { return m_current; }
+
+    /** @brief Dereferences the reverse iterator, yielding the element preceding base(). */
+    inline reference operator*() const noexcept { Iter tmp = m_current; return *--tmp; }
+
+    /** @brief Member access operator via ArrowProxy. */
+    inline ArrowProxy operator->() const noexcept { return ArrowProxy(operator*()); }
+
+    /** @brief Pre-increment: steps backward in base iterator sequence. */
+    inline sqlite_reverse_iterator& operator++() noexcept { --m_current; return *this; }
+
+    /** @brief Post-increment: steps backward in base iterator sequence. */
+    inline sqlite_reverse_iterator operator++(int) noexcept { sqlite_reverse_iterator tmp = *this; --m_current; return tmp; }
+
+    /** @brief Pre-decrement: steps forward in base iterator sequence. */
+    inline sqlite_reverse_iterator& operator--() noexcept { ++m_current; return *this; }
+
+    /** @brief Post-decrement: steps forward in base iterator sequence. */
+    inline sqlite_reverse_iterator operator--(int) noexcept { sqlite_reverse_iterator tmp = *this; ++m_current; return tmp; }
+
+    /** @brief Offset addition. */
+    inline sqlite_reverse_iterator operator+(difference_type n) const noexcept { return sqlite_reverse_iterator(m_current - n); }
+
+    /** @brief Offset compound addition. */
+    inline sqlite_reverse_iterator& operator+=(difference_type n) noexcept { m_current -= n; return *this; }
+
+    /** @brief Offset subtraction. */
+    inline sqlite_reverse_iterator operator-(difference_type n) const noexcept { return sqlite_reverse_iterator(m_current + n); }
+
+    /** @brief Offset compound subtraction. */
+    inline sqlite_reverse_iterator& operator-=(difference_type n) noexcept { m_current += n; return *this; }
+
+    /** @brief Iterator distance calculation. */
+    inline difference_type operator-(const sqlite_reverse_iterator& o) const noexcept { return o.m_current - m_current; }
+
+    /** @brief Subscript element access. */
+    inline reference operator[](difference_type n) const noexcept { return *(*this + n); }
+
+    /** @brief Relational equality comparison. */
+    inline bool operator==(const sqlite_reverse_iterator& o) const noexcept { return m_current == o.m_current; }
+
+    /** @brief Relational inequality comparison. */
+    inline bool operator!=(const sqlite_reverse_iterator& o) const noexcept { return m_current != o.m_current; }
+
+    /** @brief Relational less-than comparison. */
+    inline bool operator<(const sqlite_reverse_iterator& o) const noexcept { return m_current > o.m_current; }
+
+    /** @brief Relational less-than-or-equal comparison. */
+    inline bool operator<=(const sqlite_reverse_iterator& o) const noexcept { return m_current >= o.m_current; }
+
+    /** @brief Relational greater-than comparison. */
+    inline bool operator>(const sqlite_reverse_iterator& o) const noexcept { return m_current < o.m_current; }
+
+    /** @brief Relational greater-than-or-equal comparison. */
+    inline bool operator>=(const sqlite_reverse_iterator& o) const noexcept { return m_current <= o.m_current; }
+};
+
+#ifndef SQLITE_DERIVE_ARRAY_HASH
+/**
+ * @brief Macro helper to synthesize uniform, zero-overhead MurmurHash2 composite hashing
+ *        across all array/tabular containers (SqliteValueTuple, SqliteValueVec, SqliteRowView, SqliteRowOwnedWrapper).
+ */
+#define SQLITE_DERIVE_ARRAY_HASH \
+    inline unsigned long long hash() const noexcept { \
+        int sz = this->size(); \
+        if (sz == 0) return SqliteHashUtil::DEFAULT_SEED; \
+        if (sz == 1) return (*this)[0].hash(); \
+        unsigned long long h = SqliteHashUtil::DEFAULT_SEED; \
+        for (int i = 0; i < sz; ++i) { \
+            h = SqliteHashUtil::combine(h, (*this)[i].hash()); \
+        } \
+        return h; \
+    }
+#endif
+
+#ifndef SQLITE_DERIVE_ARRAY_ACCESSORS
+/**
+ * @brief Macro helper to synthesize uniform, zero-overhead indexed typed extraction accessors
+ *        (as_int64, as_int, as_double, as_text, as_blob, as_bool, is_null, type, subtype)
+ *        across all array/tabular containers.
+ */
+#define SQLITE_DERIVE_ARRAY_ACCESSORS \
+    inline sqlite3_int64    as_int64(int index = 0) const noexcept { return (*this)[index].as_int64(); } \
+    inline int              as_int(int index = 0)   const noexcept { return (*this)[index].as_int(); } \
+    inline double           as_double(int index = 0) const noexcept { return (*this)[index].as_double(); } \
+    inline SqliteStringView as_text(int index = 0)   const noexcept { return (*this)[index].as_text(); } \
+    inline SqliteBlobView   as_blob(int index = 0)   const noexcept { return (*this)[index].as_blob(); } \
+    inline bool             as_bool(int index = 0)   const noexcept { return (*this)[index].as_bool(); } \
+    inline bool             is_null(int index = 0)   const noexcept { return (*this)[index].is_null(); } \
+    inline int              type(int index = 0)      const noexcept { return (*this)[index].type(); } \
+    inline uint8_t          subtype(int index = 0)   const noexcept { return (*this)[index].subtype(); }
+#endif
+
+#ifndef SQLITE_DERIVE_ARRAY_ITERATOR
+/**
+ * @brief Macro helper to synthesize standard C++11 bidirectional/random-access iterators and begin()/end()
+ *        enabling range-based for loops, reverse iteration, and STL algorithms across dynamic row views.
+ */
+#define SQLITE_DERIVE_ARRAY_ITERATOR(ContainerType, ElementType) \
+    class Iterator { \
+    private: \
+        const ContainerType* m_array; \
+        int                  m_idx; \
+    public: \
+        typedef sqlite_random_access_iterator_tag iterator_category; \
+        typedef ElementType         value_type; \
+        typedef ptrdiff_t           difference_type; \
+        typedef const ElementType*  pointer; \
+        typedef ElementType         reference; \
+        inline Iterator() noexcept : m_array(nullptr), m_idx(0) {} \
+        inline Iterator(const ContainerType* arr, int idx) noexcept : m_array(arr), m_idx(idx) {} \
+        inline ElementType operator*() const noexcept { return (*m_array)[m_idx]; } \
+        inline Iterator& operator++() noexcept { ++m_idx; return *this; } \
+        inline Iterator operator++(int) noexcept { Iterator tmp = *this; ++m_idx; return tmp; } \
+        inline Iterator& operator--() noexcept { --m_idx; return *this; } \
+        inline Iterator operator--(int) noexcept { Iterator tmp = *this; --m_idx; return tmp; } \
+        inline Iterator operator+(difference_type n) const noexcept { return Iterator(m_array, m_idx + static_cast<int>(n)); } \
+        inline Iterator& operator+=(difference_type n) noexcept { m_idx += static_cast<int>(n); return *this; } \
+        inline Iterator operator-(difference_type n) const noexcept { return Iterator(m_array, m_idx - static_cast<int>(n)); } \
+        inline Iterator& operator-=(difference_type n) noexcept { m_idx -= static_cast<int>(n); return *this; } \
+        inline difference_type operator-(const Iterator& o) const noexcept { return m_idx - o.m_idx; } \
+        inline ElementType operator[](difference_type n) const noexcept { return (*m_array)[m_idx + static_cast<int>(n)]; } \
+        inline bool operator==(const Iterator& o) const noexcept { return m_idx == o.m_idx && m_array == o.m_array; } \
+        inline bool operator!=(const Iterator& o) const noexcept { return !(*this == o); } \
+        inline bool operator<(const Iterator& o) const noexcept { return m_idx < o.m_idx; } \
+        inline bool operator<=(const Iterator& o) const noexcept { return m_idx <= o.m_idx; } \
+        inline bool operator>(const Iterator& o) const noexcept { return m_idx > o.m_idx; } \
+        inline bool operator>=(const Iterator& o) const noexcept { return m_idx >= o.m_idx; } \
+    }; \
+    typedef Iterator const_iterator; \
+    typedef Iterator iterator; \
+    typedef sqlite_reverse_iterator<const_iterator> const_reverse_iterator; \
+    typedef sqlite_reverse_iterator<iterator>       reverse_iterator; \
+    inline const_iterator begin() const noexcept { return const_iterator(this, 0); } \
+    inline const_iterator end() const noexcept { return const_iterator(this, this->size()); } \
+    inline const_iterator cbegin() const noexcept { return const_iterator(this, 0); } \
+    inline const_iterator cend() const noexcept { return const_iterator(this, this->size()); } \
+    inline const_reverse_iterator rbegin() const noexcept { return const_reverse_iterator(end()); } \
+    inline const_reverse_iterator rend() const noexcept { return const_reverse_iterator(begin()); } \
+    inline const_reverse_iterator crbegin() const noexcept { return const_reverse_iterator(cend()); } \
+    inline const_reverse_iterator crend() const noexcept { return const_reverse_iterator(cbegin()); }
+#endif
+
+#ifndef SQLITE_DERIVE_STANDARD_CONTAINER_TYPEDEFS
+/**
+ * @def SQLITE_DERIVE_STANDARD_CONTAINER_TYPEDEFS
+ * @brief Synthesizes standard C++ container member types (value_type, size_type, iterators, etc.).
+ */
+#define SQLITE_DERIVE_STANDARD_CONTAINER_TYPEDEFS(ValType, RefType, ConstRefType, PtrType, ConstPtrType, IterType, ConstIterType) \
+    typedef ValType                                                     value_type; \
+    typedef size_t                                                      size_type; \
+    typedef ptrdiff_t                                                   difference_type; \
+    typedef RefType                                                     reference; \
+    typedef ConstRefType                                                const_reference; \
+    typedef PtrType                                                     pointer; \
+    typedef ConstPtrType                                                const_pointer; \
+    typedef IterType                                                    iterator; \
+    typedef ConstIterType                                               const_iterator; \
+    typedef sqlite_reverse_iterator<iterator>                           reverse_iterator; \
+    typedef sqlite_reverse_iterator<const_iterator>                     const_reverse_iterator;
+#endif
+
+#ifndef SQLITE_DERIVE_ARRAY_ITERATORS
+/**
+ * @def SQLITE_DERIVE_ARRAY_ITERATORS
+ * @brief Synthesizes standard forward and reverse iterator accessors (begin, end, cbegin, cend, rbegin, rend, crbegin, crend).
+ * @param DataPtr Contiguous pointer to beginning of elements.
+ * @param SizeVal Number of elements currently stored.
+ */
+#define SQLITE_DERIVE_ARRAY_ITERATORS(DataPtr, SizeVal) \
+    inline iterator               begin() noexcept { return (DataPtr); } \
+    inline const_iterator         begin() const noexcept { return (DataPtr); } \
+    inline const_iterator         cbegin() const noexcept { return (DataPtr); } \
+    inline iterator               end() noexcept { return (DataPtr) + (SizeVal); } \
+    inline const_iterator         end() const noexcept { return (DataPtr) + (SizeVal); } \
+    inline const_iterator         cend() const noexcept { return (DataPtr) + (SizeVal); } \
+    inline reverse_iterator       rbegin() noexcept { return reverse_iterator(end()); } \
+    inline const_reverse_iterator rbegin() const noexcept { return const_reverse_iterator(end()); } \
+    inline const_reverse_iterator crbegin() const noexcept { return const_reverse_iterator(cend()); } \
+    inline reverse_iterator       rend() noexcept { return reverse_iterator(begin()); } \
+    inline const_reverse_iterator rend() const noexcept { return const_reverse_iterator(begin()); } \
+    inline const_reverse_iterator crend() const noexcept { return const_reverse_iterator(cbegin()); }
+#endif
+
+#ifndef SQLITE_DERIVE_ARRAY_ELEMENT_ACCESSORS
+/**
+ * @def SQLITE_DERIVE_ARRAY_ELEMENT_ACCESSORS
+ * @brief Synthesizes standard element accessors (front, back, at, operator[]) with boundary-checked fallback.
+ * @param DataPtr Contiguous pointer to beginning of elements.
+ * @param SizeVal Number of elements currently stored.
+ * @param FallbackNull Reference to canonical null instance used on out-of-bounds access.
+ */
+#define SQLITE_DERIVE_ARRAY_ELEMENT_ACCESSORS(DataPtr, SizeVal, FallbackNull) \
+    inline reference       front() noexcept { return (SizeVal) > 0 ? (DataPtr)[0] : (FallbackNull); } \
+    inline const_reference front() const noexcept { return (SizeVal) > 0 ? (DataPtr)[0] : (FallbackNull); } \
+    inline reference       back() noexcept { return (SizeVal) > 0 ? (DataPtr)[(SizeVal) - 1] : (FallbackNull); } \
+    inline const_reference back() const noexcept { return (SizeVal) > 0 ? (DataPtr)[(SizeVal) - 1] : (FallbackNull); } \
+    inline reference       at(size_type pos) noexcept { return (pos < static_cast<size_type>(SizeVal)) ? (DataPtr)[pos] : (FallbackNull); } \
+    inline const_reference at(size_type pos) const noexcept { return (pos < static_cast<size_type>(SizeVal)) ? (DataPtr)[pos] : (FallbackNull); } \
+    inline reference       operator[](int idx) noexcept { return (idx >= 0 && idx < static_cast<int>(SizeVal)) ? (DataPtr)[idx] : (FallbackNull); } \
+    inline const_reference operator[](int idx) const noexcept { return (idx >= 0 && idx < static_cast<int>(SizeVal)) ? (DataPtr)[idx] : (FallbackNull); } \
+    inline reference       operator[](size_type idx) noexcept { return (idx < static_cast<size_type>(SizeVal)) ? (DataPtr)[idx] : (FallbackNull); } \
+    inline const_reference operator[](size_type idx) const noexcept { return (idx < static_cast<size_type>(SizeVal)) ? (DataPtr)[idx] : (FallbackNull); }
+#endif
+
+#ifndef SQLITE_DERIVE_STD_ARRAY_METHODS
+/**
+ * @def SQLITE_DERIVE_STD_ARRAY_METHODS
+ * @brief Synthesizes complete std::array compliant interface including iterators, element accessors, and max_size().
+ * @param DataPtr Contiguous pointer to beginning of elements.
+ * @param SizeVal Number of elements currently stored.
+ * @param FallbackNull Reference to canonical null instance.
+ * @param MaxSizeVal Fixed maximum capacity value.
+ */
+#define SQLITE_DERIVE_STD_ARRAY_METHODS(DataPtr, SizeVal, FallbackNull, MaxSizeVal) \
+    SQLITE_DERIVE_ARRAY_ITERATORS(DataPtr, SizeVal) \
+    SQLITE_DERIVE_ARRAY_ELEMENT_ACCESSORS(DataPtr, SizeVal, FallbackNull) \
+    inline constexpr size_type max_size() const noexcept { return (MaxSizeVal); }
+#endif
+
+// ============================================================================
 // Macro Helpers for Complete Relational Operators
 // ============================================================================
 
@@ -275,16 +552,30 @@ public:
      */
     inline int argc() const noexcept { return m_col_count; }
 
-    /**
-     * @brief Checks if the row contains zero columns.
-     * 
-     * @return True if empty (count == 0), false otherwise.
-     */
+    // Standard C++ Container Type Definitions
+    typedef SqliteValueView                                             value_type;
+    typedef size_t                                                      size_type;
+    typedef ptrdiff_t                                                   difference_type;
+    typedef SqliteValueView                                             reference;
+    typedef SqliteValueView                                             const_reference;
+    typedef const SqliteValueView*                                      pointer;
+    typedef const SqliteValueView*                                      const_pointer;
+
+    /** @brief Checks if the row contains zero columns. */
     inline bool empty() const noexcept { return m_col_count == 0; }
+
+    /** @brief Maximum theoretical elements supported. */
+    inline constexpr size_type max_size() const noexcept { return static_cast<size_type>(-1) / sizeof(SqliteValueView); }
 
     // =========================================================================
     // Element Accessors & Class-Level Getter
     // =========================================================================
+
+    /** @brief Access first column value. */
+    inline SqliteValueView front() const noexcept { return m_col_count > 0 ? (*this)[0] : SqliteValueView(nullptr); }
+
+    /** @brief Access last column value. */
+    inline SqliteValueView back() const noexcept { return m_col_count > 0 ? (*this)[m_col_count - 1] : SqliteValueView(nullptr); }
 
     /**
      * @brief Safely accesses a column as a zero-allocation SqliteValueView.
@@ -306,9 +597,13 @@ public:
             default:                            return SqliteValueView(nullptr);
         }
     }
+    inline SqliteValueView operator[](size_type col) const noexcept {
+        return (*this)[static_cast<int>(col)];
+    }
 
     /** @brief Bounds-safe column accessor identical to operator[]. */
     inline SqliteValueView at(int col) const noexcept { return (*this)[col]; }
+    inline SqliteValueView at(size_type col) const noexcept { return (*this)[static_cast<int>(col)]; }
 
     /** @brief Extracts a column value as a zero-allocation SqliteValueView. */
     inline SqliteValueView get_column(int col) const noexcept { return (*this)[col]; }
@@ -499,6 +794,9 @@ public:
         return SqliteRowOwnedWrapper(vec.data(), vec.size());
     }
 
+    // Standard C++ Container Type Definitions
+    SQLITE_DERIVE_STANDARD_CONTAINER_TYPEDEFS(SqliteValueOwned, SqliteValueOwned&, const SqliteValueOwned&, SqliteValueOwned*, const SqliteValueOwned*, SqliteValueOwned*, const SqliteValueOwned*)
+
     // =========================================================================
     // Capacity & Element Accessors
     // =========================================================================
@@ -509,14 +807,28 @@ public:
     /** @brief Alias for size() returning the total column count. */
     inline int  count() const noexcept { return m_len; }
 
+    /** @brief Alias for size() returning the column count. */
+    inline int  column_count() const noexcept { return m_len; }
+
     /** @brief Checks if the wrapper spans zero columns or has a null data pointer. */
     inline bool empty() const noexcept { return m_len == 0 || m_data == nullptr; }
 
+    /** @brief Maximum theoretical elements supported. */
+    inline constexpr size_type max_size() const noexcept { return static_cast<size_type>(-1) / sizeof(SqliteValueOwned); }
+
     /** @brief Returns a mutable pointer to the underlying column array. */
-    inline SqliteValueOwned* data() noexcept { return m_data; }
+    inline pointer       data() noexcept { return m_data; }
 
     /** @brief Returns a read-only pointer to the underlying column array. */
-    inline const SqliteValueOwned* data() const noexcept { return m_data; }
+    inline const_pointer data() const noexcept { return m_data; }
+
+    /** @brief Access first element. */
+    inline reference       front() noexcept { return (m_data && m_len > 0) ? m_data[0] : mutable_fallback_null(); }
+    inline const_reference front() const noexcept { return (m_data && m_len > 0) ? m_data[0] : fallback_null(); }
+
+    /** @brief Access last element. */
+    inline reference       back() noexcept { return (m_data && m_len > 0) ? m_data[m_len - 1] : mutable_fallback_null(); }
+    inline const_reference back() const noexcept { return (m_data && m_len > 0) ? m_data[m_len - 1] : fallback_null(); }
 
     /**
      * @brief Mutable subscript operator with out-of-bounds safety.
@@ -524,8 +836,11 @@ public:
      * @param index 0-indexed column position.
      * @return Mutable reference to the element (or fallback static null if invalid).
      */
-    inline SqliteValueOwned& operator[](int index) noexcept {
+    inline reference operator[](int index) noexcept {
         return (m_data && index >= 0 && index < m_len) ? m_data[index] : mutable_fallback_null();
+    }
+    inline reference operator[](size_type index) noexcept {
+        return (m_data && index < static_cast<size_type>(m_len)) ? m_data[index] : mutable_fallback_null();
     }
 
     /**
@@ -534,24 +849,51 @@ public:
      * @param index 0-indexed column position.
      * @return Const reference to the element (or fallback static null if invalid).
      */
-    inline const SqliteValueOwned& operator[](int index) const noexcept {
+    inline const_reference operator[](int index) const noexcept {
         return (m_data && index >= 0 && index < m_len) ? m_data[index] : fallback_null();
+    }
+    inline const_reference operator[](size_type index) const noexcept {
+        return (m_data && index < static_cast<size_type>(m_len)) ? m_data[index] : fallback_null();
     }
 
     /** @brief Bounds-safe mutable element accessor identical to operator[]. */
-    inline SqliteValueOwned& at(int index) noexcept {
-        return (*this)[index];
-    }
+    inline reference at(int index) noexcept { return (*this)[index]; }
+    inline reference at(size_type index) noexcept { return (*this)[index]; }
 
     /** @brief Bounds-safe read-only element accessor identical to operator[]. */
-    inline const SqliteValueOwned& at(int index) const noexcept {
-        return (*this)[index];
+    inline const_reference at(int index) const noexcept { return (*this)[index]; }
+    inline const_reference at(size_type index) const noexcept { return (*this)[index]; }
+
+    /** @brief Forward and bidirectional iterators. */
+    inline iterator               begin() noexcept { return m_data; }
+    inline const_iterator         begin() const noexcept { return m_data; }
+    inline const_iterator         cbegin() const noexcept { return m_data; }
+    inline iterator               end() noexcept { return m_data + m_len; }
+    inline const_iterator         end() const noexcept { return m_data + m_len; }
+    inline const_iterator         cend() const noexcept { return m_data + m_len; }
+
+    /** @brief Reverse iterators. */
+    inline reverse_iterator       rbegin() noexcept { return reverse_iterator(end()); }
+    inline const_reverse_iterator rbegin() const noexcept { return const_reverse_iterator(end()); }
+    inline const_reverse_iterator crbegin() const noexcept { return const_reverse_iterator(cend()); }
+    inline reverse_iterator       rend() noexcept { return reverse_iterator(begin()); }
+    inline const_reverse_iterator rend() const noexcept { return const_reverse_iterator(begin()); }
+    inline const_reverse_iterator crend() const noexcept { return const_reverse_iterator(cbegin()); }
+
+    /** @brief Fills all elements with a clone of val. */
+    inline void fill(const SqliteValueOwned& val) {
+        for (int i = 0; i < m_len; ++i) m_data[i] = val.clone();
     }
 
-    // Typed Column Extraction Accessors, Composite Hashing & Iterator
+    /** @brief Fills all elements with a primitive value. */
+    template <typename TPrimitive, typename sqlite_enable_if<!sqlite_is_same<typename sqlite_remove_reference<TPrimitive>::type, SqliteValueOwned>::value, int>::type = 0>
+    inline void fill(const TPrimitive& val) {
+        for (int i = 0; i < m_len; ++i) m_data[i] = SqliteValueOwned(val);
+    }
+
+    // Typed Column Extraction Accessors, Composite Hashing & Legacy Iterator
     SQLITE_DERIVE_ARRAY_ACCESSORS
     SQLITE_DERIVE_ARRAY_HASH
-    SQLITE_DERIVE_ARRAY_ITERATOR(SqliteRowOwnedWrapper, const SqliteValueOwned&)
 
 public:
     // ========================================================================

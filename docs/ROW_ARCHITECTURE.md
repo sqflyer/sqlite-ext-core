@@ -1,6 +1,6 @@
 # C++ Row Types Architecture (`sqlite3_row.hpp`)
 
-This document provides an exhaustive systems-level architectural analysis of `sqlite3_row.hpp`, detailing its **multi-source tagged multiplexing engine**, **24-byte universal row view (`SqliteRowView`)**, **16-byte span representation (`SqliteRowOwnedWrapper`)**, **assembly-level execution characteristics**, and **freestanding memory guarantees**.
+This document provides an exhaustive systems-level architectural analysis of `sqlite3_row.hpp`, detailing its **multi-source tagged multiplexing engine**, **24-byte universal row view (`SqliteRowView`)**, **16-byte span representation (`SqliteRowOwnedWrapper`)**, **standard `std::array` compliance**, **`sqlite_reverse_iterator` proxy mechanics**, **assembly-level execution characteristics**, and **freestanding memory guarantees**.
 
 > **API & Usage Guide**: For practical usage tutorials, code examples, and the public API reference, see [`docs/ROW_README.md`](ROW_README.md).  
 > **Value Containers Architecture**: For owning multi-column primary key tuples and adaptive SBO vectors, see [`docs/VALUE_CONTAINERS_ARCHITECTURE.md`](VALUE_CONTAINERS_ARCHITECTURE.md).
@@ -12,10 +12,10 @@ This document provides an exhaustive systems-level architectural analysis of `sq
 SQLite extensions and virtual tables frequently interact with tabular records across three distinct lifecycles:
 
 1. **VDBE Evaluation Register Windows (`sqlite3_stmt*`)**: Prepared statement execution produces rows where column values are held in SQLite's internal `struct Mem` array. Extracting these columns using traditional wrappers often triggers unnecessary buffer copying and dynamic heap allocations.
-2. **UDF Argument Vectors (`sqlite3_value** argv`)**: Scalar functions, aggregate step routines, and virtual table filter/update methods receive transient pointer arrays that require unified bounds-checked inspection.
+2. **UDF Argument Vectors (`sqlite3_value** argv`)**: Scalar functions, aggregate step routines, and virtual table filter/update methods receive transient pointer arrays that require unified bounds-checked inspection, standard iterators, and zero allocations.
 3. **Owned Contiguous Buffers (Spans)**: High-throughput virtual table implementations (e.g. in-memory key-value stores, LRU caches, ring buffers) require structured row containers that store records with minimal memory bloat, zero fragmentation, and optimal cache locality.
 
-`sqlite3_row.hpp` organizes these responsibilities into **Zero-Allocation Multi-Source Views** and **16-Byte Spans**:
+`sqlite3_row.hpp` organizes these responsibilities into **Zero-Allocation Multi-Source Views** and **16-Byte Spans**, both conforming to standard `std::array` interfaces:
 
 ```
 ┌───────────────────────────────────────────────────────────────────────────────────────┐
@@ -25,6 +25,8 @@ SQLite extensions and virtual tables frequently interact with tabular records ac
 │       • Prepared Statements (sqlite3_stmt*)                                           │
 │       • UDF / Aggregate Argv (sqlite3_value**)                                        │
 │       • Transient View Arrays (const SqliteValueView*)                                │
+│   - Standard std::array interface: front(), back(), at(), operator[], max_size()     │
+│   - Bidirectional Iterators: begin(), end(), rbegin(), rend()                         │
 │   [24 Bytes: 16B Tagged Union + 4B Col Count + 1B Source Tag + 3B Pad]                │
 └───────────────────────────────────────────────────────────────────────────────────────┘
                                            ▲
@@ -33,6 +35,8 @@ SQLite extensions and virtual tables frequently interact with tabular records ac
 ┌───────────────────────────────────────────────────────────────────────────────────────┐
 │                        SqliteRowOwnedWrapper (Span)                                   │
 │   - 16-byte non-owning span over contiguous SqliteValueOwned arrays (2 CPU Registers) │
+│   - Standard std::array interface: front(), back(), at(), operator[], max_size()     │
+│   - Bidirectional Iterators: begin(), end(), rbegin(), rend()                         │
 │   - Wraps: SqliteValueTuple<N>, SqliteValueVec<N>, C-arrays, and single values        │
 └───────────────────────────────────────────────────────────────────────────────────────┘
 ```
@@ -60,7 +64,32 @@ Byte Offset:  0                       8                       16      20   21  2
 
 ---
 
-## 3. 16-Byte Span: `SqliteRowOwnedWrapper`
+## 3. Reverse Iterator & Arrow Proxy Mechanics (`sqlite_reverse_iterator`)
+
+Iterating over standard contiguous arrays produces lvalue references (`SqliteValueOwned&`), whereas iterating over `SqliteRowView` produces transient prvalue views (`SqliteValueView`).
+
+To support `it->method()` seamlessly on both reference types without dangling pointer bugs or temporary copy hazards, `sqlite_reverse_iterator` defines an inner `ArrowProxy`:
+
+```cpp
+template <typename Iter>
+class sqlite_reverse_iterator {
+    Iter m_current;
+public:
+    class ArrowProxy {
+    private:
+        value_type m_val;
+    public:
+        inline explicit ArrowProxy(const value_type& v) noexcept : m_val(v) {}
+        inline const_pointer operator->() const noexcept { return &m_val; }
+        inline pointer operator->() noexcept { return &m_val; }
+    };
+    inline ArrowProxy operator->() const noexcept { return ArrowProxy(operator*()); }
+};
+```
+
+---
+
+## 4. 16-Byte Span: `SqliteRowOwnedWrapper`
 
 `SqliteRowOwnedWrapper` encapsulates a non-owning span over contiguous `SqliteValueOwned` memory:
 
@@ -76,7 +105,7 @@ Because `sizeof(SqliteRowOwnedWrapper) == 16` bytes, modern x86-64 and ARM64 ABI
 
 ---
 
-## 4. Stack-Allocated Scope Dispatcher (`withSqliteRowOwned`)
+## 5. Stack-Allocated Scope Dispatcher (`withSqliteRowOwned`)
 
 When converting a dynamic runtime `SqliteRowView` into an owned stack container, `withSqliteRowOwned` executes compile-time dispatching across sizes 1..8:
 
@@ -93,12 +122,10 @@ void withSqliteRowOwned(const SqliteRowView& row, Fn&& fn) {
         case 7: { SqliteValueTuple<7> t(row); fn(t.view()); } break;
         case 8: { SqliteValueTuple<8> t(row); fn(t.view()); } break;
         default: {
-            SqliteValueVec<9> vec(row.size());
+            SqliteValueTuple<> tup(row.size());
             // Populate and dispatch...
-            fn(vec.view());
+            fn(tup.view());
         } break;
     }
 }
 ```
-
-This guarantees **zero heap allocations** for all queries and records with $\le 8$ columns.

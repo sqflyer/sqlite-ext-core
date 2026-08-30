@@ -85,29 +85,30 @@ Zero-dependency C++ RAII wrappers for SQLite core data types designed for zero-a
 - [Value Types Architecture](docs/VALUE_ARCHITECTURE.md)
 
 ### 4.5. C++ Row Views & Wrappers (`sqlite3_row.hpp`)
-Zero-dependency, `-nostdlib++` compliant wrappers for multi-column SQLite tabular row inspection, parameter reflection, and non-owning span wrappers.
+Zero-dependency, `-nostdlib++` compliant wrappers for multi-column SQLite tabular row inspection, parameter reflection, standard `std::array` compliance, and non-owning span wrappers.
 
 #### Key Features:
 - **Universal Non-Owning Row View**: `SqliteRowView` (24 Bytes) multiplexes all SQLite row sources — prepared statements (`sqlite3_stmt*`), UDF argument vectors (`sqlite3_value**`), and in-memory contiguous `SqliteValueOwned` / `SqliteValueView` arrays — behind a single uniform API (`typedef SqliteRowView SqliteUdfArgs;`).
+- **Standard `std::array` Interface**: Implements standard element accessors (`front()`, `back()`, `at()`, `operator[]`, `data()`, `max_size()`) with canonical `SQLITE_NULL` fallback on out-of-bounds access.
 - **Zero-Allocation Row Span Wrapper**: `SqliteRowOwnedWrapper` (16 Bytes) provides an ergonomic non-owning reference over any contiguous array of `SqliteValueOwned` objects (`SqliteValueOwned*` + `int len`).
 - **Comprehensive Relational Comparisons**: Complete set of relational operators (`==`, `!=`, `<`, `<=`, `>`, `>=`) allowing comparisons between row views, wrapper spans, and scalar values.
-- **Range-Based Loop Forward Iteration**: Synthesizes C++11 forward iterators enabling native `for (SqliteValueView col : row_view)` loops with zero runtime overhead.
+- **Bidirectional & Reverse Iteration**: Provides `begin()`, `end()`, `cbegin()`, `cend()`, `rbegin()`, `rend()`, `crbegin()`, `crend()` via `sqlite_reverse_iterator<Iter>` supporting both lvalue references and transient prvalue views.
 
 #### Documentation:
 - [Row Types README](docs/ROW_README.md)
 - [Row Types Architecture](docs/ROW_ARCHITECTURE.md)
 
 ### 4.6. C++ Value Containers & 8x8 Dispatch (`sqlite3_value_containers.hpp`, `sqlite3_dispatch_8x8.hpp`)
-Zero-dependency, footprint-optimized value containers (`SqliteValueTuple<N>` for fixed-arity compile-time keys and `SqliteValueVec<N>` for adaptive payload vectors) alongside generic $8 \times 8$ compile-time dispatchers for in-memory and virtual table engines.
+Zero-dependency, footprint-optimized value containers (`SqliteValueTuple<N>` for fixed-arity compile-time keys and `SqliteValueVec<N>` for adaptive payload vectors) conforming to standard `std::array` and `std::vector` interfaces alongside generic $8 \times 8$ compile-time dispatchers.
 
 #### Key Features:
-- **`SqliteValueTuple<N>` ($N \in [1..8]$)**: Exact $N \times 16\text{B}$ in-situ stack footprint (16B, 32B, 48B, 64B, 128B) with **0 heap allocations** and 0 capacity overhead. $N \ge 9$ compiles directly to `sqlite3_malloc64`.
-- **`SqliteValueVec<N>` ($N \in [1..8]$)**: 16-byte aligned in-situ Small Buffer Optimized (SBO) stack vector, dynamically spilling to heap when resized $> N$, and safely returning to stack when shrunk.
+- **`SqliteValueTuple<N = 0>` ($N \in [1..8]$ Stack, $N = 0$ Direct Heap)**: Exact $N \times 16\text{B}$ in-situ stack footprint (16B, 32B, 48B, 64B, 128B) for $N \in [1..8]$ with **0 heap allocations** and 0 capacity overhead. $N = 0$ (default `SqliteValueTuple<>`) provides an immutable-width direct heap tuple where size is passed as constructor argument. Features `front()`, `back()`, `at()`, `fill()`, `swap()`, and bidirectional forward/reverse iterators.
+- **`SqliteValueVec<N = 0>` ($N \in [1..8]$ SBO, $N = 0$ Direct Heap)**: Standard `std::vector` compliant container. Operates as a 16-byte aligned in-situ Small Buffer Optimized (SBO) stack vector for $N \in [1..8]$, spilling dynamically to heap when resized $> N$, or as an unbounded direct heap vector for $N = 0$ (default `SqliteValueVec<>`). Implements complete `std::vector` modifiers: `insert()`, `erase()`, `assign()`, `resize(count, val)`, `shrink_to_fit()`, `capacity()`, and `swap()`.
 - **Direct In-Situ Primitive Assignments**: `row[idx]` returns `SqliteValueOwned&`, allowing direct assignment of all primitive types (`row[0] = static_cast<sqlite3_int64>(i);`, `row[1] = 42;`, `row[2] = 3.14;`, `row[3] = "text";`, `row[4] = true;`) without intermediate wrapper allocations.
 - **Single-Burst SIMD Initialization**: Container constructors leverage a pre-populated static 128-byte array of 8 canonical `SQLITE_NULL` instances (`static_null_array()`), lowered by Clang/GCC/MSVC directly into 1–4 vector register operations (`vmovups`) executing in 1–2 CPU clock cycles (~0.3–0.6 ns).
 - **100% Stack Data Density & `0x20` Tag Threshold**: Eliminates external size integer overhead on stack by encoding datatypes in bits 5..7 (`type >= 1` $\rightarrow$ `tag >= 0x20`), enabling $O(1)$ backwards active tag scanning.
 - **Generic 8x8 Compile-Time Dispatch (`sqlite3_dispatch_8x8.hpp`)**: `SQLITE_DISPATCH_1D_8` and `SQLITE_DISPATCH_2D_8X8` dispatch runtime column counts to compile-time `constexpr` specializations for any storage container.
-- **Stack-Allocated Row Dispatcher (`withSqliteRowOwned`)**: Allocates exact `SqliteValueTuple<1..8>` on the stack for sizes 1..8 with zero heap allocations, falling back to `SqliteValueVec<1>` dynamic heap allocation for $N \ge 9$.
+- **Stack-Allocated Row Dispatcher (`withSqliteRowOwned`)**: Allocates exact `SqliteValueTuple<1..8>` on the stack for sizes 1..8 with zero heap allocations, falling back to `SqliteValueTuple<>` (default $N = 0$) direct dynamic heap allocation for sizes $> 8$.
 - **Transparent Heterogeneous Lookups & Range Iterators**: Range-based for loops, Swiss table hashing (`SqliteRowHash`, `SqliteRowEqual`), and transparent B-Tree comparisons (`SqliteRowLess`).
 
 #### Documentation:
@@ -117,12 +118,13 @@ Zero-dependency, footprint-optimized value containers (`SqliteValueTuple<N>` for
 - [Unified Macro Architecture](docs/MACROS.md)
 
 ### 4.7. Unified C++ Macro Synthesizer Architecture (`docs/MACROS.md`)
-A 4-tier macro synthesizer framework that eliminates boilerplate while guaranteeing standard library independence (`-nostdlib++`), zero runtime overhead, and strict SQLite type-rank collation semantics across the entire codebase.
+A 5-tier macro synthesizer framework that eliminates boilerplate while guaranteeing standard library independence (`-nostdlib++`), zero runtime overhead, and strict SQLite type-rank collation semantics across the entire codebase.
 
 #### Key Features:
+- **Standard Container Alignment & Iterators (`sqlite3_row.hpp`)**: `SQLITE_DERIVE_STANDARD_CONTAINER_TYPEDEFS`, `SQLITE_DERIVE_ARRAY_ITERATORS`, `SQLITE_DERIVE_ARRAY_ELEMENT_ACCESSORS`, and `SQLITE_DERIVE_STD_ARRAY_METHODS` synthesize complete `std::array` compliant interfaces and forward/reverse iterators.
+- **Container Modifiers (`sqlite3_value_containers.hpp`)**: `SQLITE_DERIVE_STD_TUPLE_MODIFIERS` (`fill()`) and `SQLITE_DERIVE_STD_VEC_METHODS` (`max_size()`, `resize()`, `insert()`, `erase()`, `assign()`, `swap()`) synthesize complete `std::vector` compliant operations.
 - **Array Extraction & Accessors**: `SQLITE_DERIVE_ARRAY_ACCESSORS` provides uniform, inlined `as_int64()`, `as_text()`, `as_blob()`, `type()`, and `subtype()` accessors with default `index = 0`.
 - **Composite MurmurHash2 Synthesis**: `SQLITE_DERIVE_ARRAY_HASH` synthesizes 64-bit composite hash computation with $O(1)$ scalar fast-paths and multi-column combiner loops.
-- **Range-Based Iteration Synthesis**: `SQLITE_DERIVE_ARRAY_ITERATOR(ContainerType, ElementType)` synthesizes C++11 forward iterators enabling native `for (auto val : container)` loops.
 - **Container & Scalar Relational Operators**: `SQLITE_DERIVE_CONTAINER_RELATIONAL_OPS`, `SQLITE_DERIVE_SCALAR_RELATIONAL_OPS`, and `SQLITE_DERIVE_ALL_REVERSE_RELATIONAL_OPS` generate complete sets of comparison operators (`==`, `!=`, `<`, `<=`, `>`, `>=`).
 - **C++20 Transparent Functors**: `SQLITE_DERIVE_TRANSPARENT_EQUAL` and `SQLITE_DERIVE_TRANSPARENT_LESS` synthesize `using is_transparent = void;` structs for zero-allocation STL / Swiss Table container queries.
 

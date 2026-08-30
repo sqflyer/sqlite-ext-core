@@ -53,8 +53,8 @@ static void test_cross_container_equality_matrix() {
     // Setup sample row representations with identical contents: (10, "alpha", 3.14)
     SqliteValueTuple<3> t3(10, "alpha", 3.14);
     SqliteValueVec<4>   v4(10, "alpha", 3.14);
-    SqliteValueTuple<9> t9_large(10, "alpha", 3.14, 40, "fifty", 60.0, 70, "eighty", 90.0);
-    SqliteValueVec<10>  v10_large(10, "alpha", 3.14, 40, "fifty", 60.0, 70, "eighty", 90.0);
+    SqliteValueTuple<>  t9_large(10, "alpha", 3.14, 40, "fifty", 60.0, 70, "eighty", 90.0);
+    SqliteValueVec<>    v10_large(10, "alpha", 3.14, 40, "fifty", 60.0, 70, "eighty", 90.0);
 
     SqliteRowOwnedWrapper wrap_t3 = t3.view();
     SqliteRowOwnedWrapper wrap_v4 = v4.view();

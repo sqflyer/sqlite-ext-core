@@ -8,7 +8,7 @@ An exhaustive test suite verifying the **dual value container templates** (`Sqli
 
 | Test Source | Standard | Features Tested | Zero-Dependency (`-nostdlib++`) |
 | :--- | :---: | :--- | :---: |
-| **`test_value_containers.cpp`** | **C++11** | In-situ stack tuples ($N=1..8$), heap fallback ($N \ge 9$), SBO adaptive vector growth/shrink, direct heap vectors, `withSqliteRowOwned`, SQL binding reflection, SIMD null initializers, and Generic 8x8 matrix dispatch. | **Yes** |
+| **`test_value_containers.cpp`** | **C++11** | In-situ stack tuples ($N=1..8$), direct heap tuples ($N = 0$), SBO adaptive vector growth/shrink, direct heap vectors ($N = 0$), `withSqliteRowOwned`, SQL binding reflection, SIMD null initializers, and Generic 8x8 matrix dispatch. | **Yes** |
 | **`test_value_containers_comparisons.cpp`** | **C++11** | Full cross-container relational comparisons ($A \equiv B, A < B$), length/arity prefix semantics, SQLite type-rank collations, and single-column scalar operators across all fundamental types. | **Yes** |
 | **`test_value_containers_std.cpp`** | **C++14 / C++20** | STL integration: Transparent Swiss Tables (`std::unordered_map` / `std::unordered_set`), Transparent B-Trees (`std::map` / `std::set`), `std::vector`, STL algorithms (`std::sort`, `std::binary_search`, `std::lower_bound`), `std::pair`, and `std::tuple`. | No (STL Verification) |
 
@@ -20,15 +20,15 @@ An exhaustive test suite verifying the **dual value container templates** (`Sqli
 1. **`SqliteValueTuple<N>` In-Situ Static Footprint ($N \in [1..8]$)**:
    - Verifies exact $N \times 16\text{B}$ stack array without dynamic heap allocations.
    - Tests bounds safety, direct extraction accessors, in-place element mutation, and MurmurHash2 composite hashing.
-2. **`SqliteValueTuple<N>` Dynamic Heap Fallback ($N \ge 9$)**:
-   - Verifies dynamic heap allocation via `sqlite3_malloc64` and automatic cleanup.
+2. **`SqliteValueTuple<N>` Direct Heap Tuple ($N = 0$, default `SqliteValueTuple<>`)**:
+   - Verifies dynamic heap allocation via `sqlite3_malloc64` and runtime sizing via constructor argument.
 3. **`SqliteValueVec<N>` Adaptive Stack SBO & Reversible Heap Spilling ($N \in [1..8]$)**:
    - Tests in-situ stack operation for sizes $\le N$.
    - Tests dynamic heap spilling when resized $> N$.
    - Tests safe return to stack when shrunk back $\le N$.
    - Tests 100% stack data density via backwards active tag scanning (`is_active()`, `0x20` threshold).
-4. **`SqliteValueVec<N>` Direct Heap Vector ($N \ge 9$)**:
-   - Tests large variable-column payload vectors.
+4. **`SqliteValueVec<N>` Direct Heap Vector ($N = 0$, default `SqliteValueVec<>`)**:
+   - Tests unbounded variable-column payload vectors with 0 stack SBO overhead.
 5. **Scope-Guarded Stack Dispatcher (`withSqliteRowOwned`)**:
    - Verifies complete branch coverage (negative sizes, 0..8 stack branches, 9..64 heap allocations) and return forwarding.
 6. **SQLite SQL Binding & Row Reflection**:

@@ -23,6 +23,7 @@ Because we cannot rely on `std::string_view` or `std::unique_ptr` in a `-nostdli
 - **`View` Classes**: (e.g., `SqliteValueView`, `SqliteDatabaseView`, `SqliteStringView`, `SqliteBlobView`, `SqliteRowView`)
   - Hold a raw pointer or a tagged union of pointers.
   - Never allocate memory, and never free it.
+  - `SqliteRowView` provides a 24-byte multi-source union over statements, UDF argv, and view arrays, adhering to standard `std::array` accessors and bidirectional iteration (`sqlite_reverse_iterator`).
   - Used when SQLite hands you data (e.g., in a UDF callback) and you just want C++ convenience methods.
 
 - **`Owned` Classes**: (e.g., `SqliteValueOwned`, `SqliteDatabaseOwned`, `SqliteStringOwned`, `SqliteBlobOwned`)
@@ -33,9 +34,9 @@ Because we cannot rely on `std::string_view` or `std::unique_ptr` in a `-nostdli
   - By inheriting from `View`, they support **object slicing**. You can pass an `Owned` object by value into any function expecting a `View`, which compiles down to a raw 8-byte pointer copy with zero overhead!
 
 - **Value Container Classes**: (e.g., `SqliteValueTuple<N>`, `SqliteValueVec<N>`, `sqlite3_value_containers.hpp`)
-  - `SqliteValueTuple<N>`: Exact $N \times 16\text{B}$ in-situ stack array for compile-time fixed-arity primary and composite keys ($N \in [1..8]$), falling back to dynamic `sqlite3_malloc64` for $N \ge 9$.
-  - `SqliteValueVec<N>`: Adaptive Small Buffer Optimized (SBO) dynamic vector living on stack for sizes $\le N$ and seamlessly spilling to heap when expanded $> N$.
-  - `SqliteRowOwnedWrapper`: 16-byte zero-allocation span wrapper (`SqliteValueOwned*` + `int len`) enabling uniform view interoperability across all containers.
+  - `SqliteValueTuple<N = 0>`: Exact $N \times 16\text{B}$ in-situ stack array for compile-time fixed-arity primary and composite keys ($N \in [1..8]$), conforming to standard `std::array` (`front()`, `back()`, `at()`, `fill()`, `swap()`, `rbegin()`, `rend()`). $N = 0$ (default `SqliteValueTuple<>`) provides an immutable-width direct heap tuple where size is passed as constructor argument.
+  - `SqliteValueVec<N = 0>`: Adaptive Small Buffer Optimized (SBO) dynamic vector living on stack for sizes $\le N$ ($N \in [1..8]$) and seamlessly spilling to heap when expanded $> N$, or direct heap vector for $N = 0$ (default `SqliteValueVec<>`). Conforms to standard `std::vector` (`insert()`, `erase()`, `assign()`, `resize(count, val)`, `shrink_to_fit()`, `capacity()`, `swap()`, `rbegin()`, `rend()`).
+  - `SqliteRowOwnedWrapper`: 16-byte zero-allocation span wrapper (`SqliteValueOwned*` + `int len`) enabling uniform view and standard array operations across all containers.
   - **In-Situ Primitive Assignment (`operator=`)**: `SqliteValueOwned` directly overloads assignment for all C++ primitives (`int`, `sqlite3_int64`, `long`, `unsigned int`, `unsigned long`, `unsigned long long`, `double`, `float`, `bool`, `const char*`, `SqliteStringView`, `SqliteBlobView`), enabling direct syntax such as `row[0] = static_cast<sqlite3_int64>(i);` or `row[1] = "alpha";` with zero intermediate heap allocations.
 
 ## 3. Strict RAII (Resource Acquisition Is Initialization)
@@ -53,7 +54,7 @@ Writing SQLite Virtual Tables (VTAB) or Table-Valued Functions (TVF) requires bu
 
 Instead of forcing developers to write C-style `xConnect` / `xBestIndex` callbacks or repetitive nested switch statements, we use **Template Metaprogramming and Generic Dispatchers**:
 - **Zero VTable Overhead**: We deliberately avoid virtual functions (`virtual void init() = 0`) to prevent vtable lookup overhead and dependency on a global `operator delete`.
-- **Scope-Guarded Stack Dispatcher (`withSqliteRowOwned`)**: Dynamically dispatches runtime row sizes $0 \le N \le 8$ to inline stack tuples `SqliteValueTuple<N>` (16–128 bytes) and seamlessly falls back to `SqliteValueVec<1>` dynamic heap allocation for $N \ge 9$, invoking user lambdas with a uniform `SqliteRowOwnedWrapper`.
+- **Scope-Guarded Stack Dispatcher (`withSqliteRowOwned`)**: Dynamically dispatches runtime row sizes $0 \le N \le 8$ to inline stack tuples `SqliteValueTuple<N>` (16–128 bytes) and seamlessly falls back to `SqliteValueTuple<>` (default $N = 0$) direct dynamic heap allocation for sizes $> 8$, invoking user lambdas with a uniform `SqliteRowOwnedWrapper`.
 - **Generic 8x8 Compile-Time Matrix Dispatch (`sqlite3_dispatch_8x8.hpp`)**: `SQLITE_DISPATCH_1D_8` and `SQLITE_DISPATCH_2D_8X8` expand runtime column/key configurations into compile-time `constexpr` specializations for any storage template in 1 line.
 - **Auto-Routing Arguments**: Hidden columns in virtual tables are safely packaged into bounds-checked objects like `SqliteUdfArgs` (`SqliteRowView`) and injected seamlessly into your C++ methods.
 
@@ -105,7 +106,7 @@ For a deeper dive into the specific mechanics and C++ paradigms used in individu
 ### Key Indexing, Macro Synthesis & Reference Matrix
 - [**Small Buffer Optimization (SBO) Architecture (`SBO_OPTIMIZATIONS.md`)**](SBO_OPTIMIZATIONS.md): 16-byte scalar SBO, 100% stack data density, $O(1)$ active tag scanning (`0x20`), 64-byte L1 cache line calculations, and 2-register spans.
 - [**Value Containers & 8x8 Dispatch (`sqlite3_value_containers.hpp`, `sqlite3_dispatch_8x8.hpp`)**](docs/VALUE_CONTAINERS_ARCHITECTURE.md): Zero-dependency value containers (`SqliteValueTuple<N>`, `SqliteValueVec<N>`), scope-guarded stack allocator (`withSqliteRowOwned`), and generic compile-time 2D matrix dispatchers.
-- [**Unified Macro Architecture (`docs/MACROS.md`)**](docs/MACROS.md): 4-tier macro synthesizer suite for zero-overhead array accessors, composite hashing, range-based iterators, scalar & container relational operators, and C++20 transparent functors.
+- [**Unified Macro Architecture (`docs/MACROS.md`)**](docs/MACROS.md): 5-tier macro synthesizer suite for standard container alignment, array accessors & iterators, vector/tuple modifiers, composite hashing, scalar & container relational operators, and C++20 transparent functors.
 - [**C++ Type & Container Comparison Matrix (`docs/COMPARISON_MATRIX.md`)**](docs/COMPARISON_MATRIX.md): Comprehensive comparative reference across all value types, containers, row views, macros, and transparent STL functors.
 
 ## 6. Dual Build System & Compiler Parity
