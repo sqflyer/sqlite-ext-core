@@ -31,7 +31,7 @@ TARGET_DIR = bin
 $(TARGET_DIR):
 	mkdir -p $(TARGET_DIR)
 
-all: $(TARGET_DIR)/test_vtab $(TARGET_DIR)/test_vtab_state
+all: $(TARGET_DIR)/test_vtab $(TARGET_DIR)/test_vtab_state $(TARGET_DIR)/test_vtab_arg
 
 # Compile the C++ stateless test
 $(TARGET_DIR)/test_vtab: test_vtab.cpp | $(TARGET_DIR)
@@ -41,10 +41,15 @@ $(TARGET_DIR)/test_vtab: test_vtab.cpp | $(TARGET_DIR)
 $(TARGET_DIR)/test_vtab_state: test_vtab_state.cpp | $(TARGET_DIR)
 	$(CXX) $(CXXFLAGS) -o $@ $< $(LDFLAGS)
 
+# Compile the C++ virtual table argument parser test
+$(TARGET_DIR)/test_vtab_arg: test_vtab_arg.cpp | $(TARGET_DIR)
+	$(CXX) $(CXXFLAGS) -o $@ $< $(LDFLAGS)
+
 # Run the test
 test: all
 	./$(TARGET_DIR)/test_vtab
 	./$(TARGET_DIR)/test_vtab_state
+	./$(TARGET_DIR)/test_vtab_arg
 
 clean:
 	rm -rf $(TARGET_DIR)

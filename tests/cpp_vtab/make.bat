@@ -20,10 +20,16 @@ if %ERRORLEVEL% neq 0 exit /b %ERRORLEVEL%
 cl /nologo /O2 /W4 /Zi /fsanitize=address /MD /I"../../include" /I"%SQLITE_INC%" /std:c++14 /Fe:bin\test_vtab_state.exe test_vtab_state.cpp "%SQLITE_LIB%"
 if %ERRORLEVEL% neq 0 exit /b %ERRORLEVEL%
 
+cl /nologo /O2 /W4 /Zi /fsanitize=address /MD /I"../../include" /I"%SQLITE_INC%" /std:c++14 /Fe:bin\test_vtab_arg.exe test_vtab_arg.cpp "%SQLITE_LIB%"
+if %ERRORLEVEL% neq 0 exit /b %ERRORLEVEL%
+
 bin\test_vtab.exe
 if %ERRORLEVEL% neq 0 exit /b %ERRORLEVEL%
 
 bin\test_vtab_state.exe
+if %ERRORLEVEL% neq 0 exit /b %ERRORLEVEL%
+
+bin\test_vtab_arg.exe
 if %ERRORLEVEL% neq 0 exit /b %ERRORLEVEL%
 
 goto end

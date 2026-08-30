@@ -491,6 +491,15 @@ public:
     }
 
     /**
+     * @brief Sets a UTF-8 text string result from a SqliteStringView.
+     * @param str The SqliteStringView to set as result.
+     * @param free_func Memory ownership tag (defaults to SQLITE_TRANSIENT).
+     */
+    inline void result_text(SqliteStringView str, void (*free_func)(void*) = SQLITE_TRANSIENT) {
+        sqlite3_result_text(m_ctx, str.data(), str.length(), free_func);
+    }
+
+    /**
      * @brief Sets a binary BLOB result on the SQLite context.
      * @param z Pointer to the binary payload data buffer.
      * @param n Number of bytes in the blob buffer.

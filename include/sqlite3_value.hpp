@@ -6,6 +6,7 @@
 #include <stdint.h>
 #include <stdarg.h>
 #include <string.h>
+#include <stdio.h>
 
 // ============================================================================
 // 1. Native SQLite Affinity Constants (sqliteInt.h)
@@ -1618,6 +1619,97 @@ public:
     /** @brief Constructs a Compressed binary blob with SQLITE_SUBTYPE_COMPRESSED ('Z'). */
     static SqliteValueOwned from_compressed(const void* compressed_data, int byte_len) {
         return from_blob(compressed_data, byte_len, SQLITE_SUBTYPE_COMPRESSED);
+    }
+
+    /**
+     * @brief Parses an unquoted or quoted string literal with automatic SQL type inference.
+     *
+     * Inferred types and conversions:
+     *   - "null" / ""                         → SQLITE_NULL
+     *   - "true", "false", "yes", "no", "on"  → SQLITE_INTEGER (tagged with SQLITE_SUBTYPE_BOOL)
+     *   - Quoted strings ('text' or "text")    → SQLITE_TEXT (quotes stripped)
+     *   - Integer numbers ("1024", "-42")     → SQLITE_INTEGER (as 64-bit int)
+     *   - Floating-point ("3.1415", "1e-4")   → SQLITE_FLOAT (as double)
+     *   - Other unquoted text ("strict", "k") → SQLITE_TEXT
+     *
+     * @param str The SqliteStringView representing the literal string token.
+     * @return SqliteValueOwned initialized with the inferred SQL type.
+     */
+    static inline SqliteValueOwned from_literal(SqliteStringView str) {
+        if (str.empty()) return SqliteValueOwned();
+
+        const char* p = str.data();
+        int len = str.length();
+
+        // 1. Check for NULL
+        if (len == 4 && sqlite3_strnicmp(p, "null", 4) == 0) {
+            return SqliteValueOwned();
+        }
+
+        // 2. Check for Booleans
+        if ((len == 4 && sqlite3_strnicmp(p, "true", 4) == 0) ||
+            (len == 3 && sqlite3_strnicmp(p, "yes", 3) == 0)  ||
+            (len == 2 && sqlite3_strnicmp(p, "on", 2) == 0)) {
+            return SqliteValueOwned::from_bool(true);
+        }
+        if ((len == 5 && sqlite3_strnicmp(p, "false", 5) == 0) ||
+            (len == 2 && sqlite3_strnicmp(p, "no", 2) == 0)    ||
+            (len == 3 && sqlite3_strnicmp(p, "off", 3) == 0)) {
+            return SqliteValueOwned::from_bool(false);
+        }
+
+        // 3. Check for Quoted String Literal ('text' or "text")
+        if (len >= 2 && ((p[0] == '\'' && p[len - 1] == '\'') || (p[0] == '"' && p[len - 1] == '"'))) {
+            return SqliteValueOwned::from_text(p + 1, len - 2);
+        }
+
+        // 4. Try parsing as Integer or Float
+        bool has_dot = false;
+        bool has_e = false;
+        bool is_num = (len > 0 && (p[0] == '-' || p[0] == '+' || (p[0] >= '0' && p[0] <= '9')));
+        if (is_num) {
+            for (int i = 1; i < len; ++i) {
+                if (p[i] == '.') {
+                    has_dot = true;
+                } else if (p[i] == 'e' || p[i] == 'E') {
+                    has_e = true;
+                } else if ((p[i] == '-' || p[i] == '+') && (p[i - 1] == 'e' || p[i - 1] == 'E')) {
+                    // Valid exponent sign
+                } else if (p[i] < '0' || p[i] > '9') {
+                    is_num = false;
+                    break;
+                }
+            }
+        }
+
+        if (is_num && !has_dot && !has_e) {
+            long long i_val = 0;
+            if (sscanf(p, "%lld", &i_val) == 1) {
+                return SqliteValueOwned(i_val);
+            }
+        }
+
+        if (is_num && (has_dot || has_e)) {
+            double d_val = 0.0;
+            if (sscanf(p, "%lf", &d_val) == 1) {
+                return SqliteValueOwned(d_val);
+            }
+        }
+
+        // 5. Default to Text
+        return SqliteValueOwned::from_text(p, len);
+    }
+
+    /**
+     * @brief Parses a null-terminated or sized C-string literal with automatic SQL type inference.
+     * @param str Pointer to UTF-8 C-string.
+     * @param len Number of bytes (or -1 to auto-calculate length).
+     * @return SqliteValueOwned initialized with the inferred SQL type.
+     */
+    static inline SqliteValueOwned from_literal(const char* str, int len = -1) {
+        if (!str) return SqliteValueOwned();
+        int l = (len < 0) ? SqliteStringUtil::sqlite_strlen(str) : len;
+        return from_literal(SqliteStringView(str, l));
     }
     
     /** 

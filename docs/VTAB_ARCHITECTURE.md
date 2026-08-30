@@ -139,3 +139,57 @@ static constexpr sqlite3_module module_def = {
 - **`xBestIndex`**: Wrapped by `SqliteIndexInfo` with type-safe `constraint(i)`, `usage(i)`, `set_estimated_cost()`.
 - **`xFindFunction`**: Overloaded via `SqliteFunctionDef` without raw pointer allocations.
 - **`xUpdate`**: Dispatched with `SqliteUdfArgs` for safe parameter indexing during `INSERT`, `UPDATE`, and `DELETE`.
+
+---
+
+## 6. Zero Overhead Guarantees
+- **No Extra Allocations**: Only the two necessary wrapper structs (`TableWrapper` and `CursorWrapper`) are allocated using `sqlite_new` which transparently routes to `sqlite3_malloc64`.
+- **Zero VTable Overhead for Invariant Paths**: Option checks (`is_writable`, `is_findable`, etc.) are computed via `constexpr` template logic, allowing the compiler optimizer to completely dead-code strip unused callbacks at compile time.
+
+---
+
+## 7. Virtual Table Argument & Composite Primary Key Parsing (`sqlite3_vtab_arg.hpp`)
+
+When SQLite creates or connects to a virtual table (`CREATE VIRTUAL TABLE tab USING module(...)`), it passes user arguments in `argv[3..argc-1]`.
+
+`sqlite3_vtab_arg.hpp` provides zero-allocation typed parsing for all argument formats:
+
+### Argument Categorization
+1. **Engine Parameters (`SqliteVTabParam`)**:
+   - `key=value` format (e.g. `capacity=1024`, `ttl=60`, `mode=strict`, `strict=true`).
+   - Typed accessors: `as_int()`, `as_long()`, `as_double()`, `as_size()`, `as_bool()`, `as_str()`.
+2. **Column Declarations (`SqliteVTabColumn`)**:
+   - Column declarations (e.g. `id INTEGER PRIMARY KEY`, `score REAL NOT NULL`, `tag HIDDEN`).
+   - Schema properties: `name()`, `definition()`, `affinity()` (Integer, Text, Blob, Real, Numeric), `flags()` (`NotNull`, `PrimaryKey`, `Unique`, `AutoIncr`, `Hidden`).
+3. **Table-Level Constraints (`SqliteVTabConstraint`)**:
+   - Multi-column / Composite Primary Keys: `PRIMARY KEY (user_id, device_id, version)`
+   - Named constraints: `CONSTRAINT pk_custom PRIMARY KEY (tenant_id, org_id)`
+   - Table-level unique, check, and foreign key constraints: `UNIQUE(a, b)`, `CHECK(expr)`, `FOREIGN KEY(a) REFERENCES t(b)`.
+   - Iteration: `for_each_column_name(fn)` parses comma-separated column names.
+
+### Unified Primary Key & Index Accessors (`SqliteVTabArgs`)
+`SqliteVTabArgs` provides zero-allocation index resolution and primary key aggregation:
+- `column_count()`: Total number of declared schema columns (excluding parameters & constraints).
+- `param_count()`: Total number of `key=value` engine parameters.
+- `constraint_count()`: Total number of table-level constraints.
+- `column_index(col_name)`: Returns 0-based column index (e.g. `"payload"` $\rightarrow 2$), or `-1` if not found.
+- `column_at(idx)`: Returns the $i$-th declared `SqliteVTabColumn`.
+- `for_each_column_indexed(fn)`: Iterates columns passing `(col, col_index)` for direct mapping to `xColumn(i)` or `aConstraint[j].iColumn`.
+- `for_each_primary_key(fn)`: Iterates all PK column names regardless of whether defined inline (`id INT PRIMARY KEY`) or via table constraint (`PRIMARY KEY (a, b)`).
+- `primary_key_count()`: Total number of primary key columns.
+- `is_composite_primary_key()`: Returns `true` if $\ge 2$ primary key columns exist.
+- `is_primary_key_column(col_name)`: Checks if a given column name is part of the primary key.
+
+### Declarative Schema Binding (`SqliteVTabParamSchema`)
+Pre-declares expected parameters with fluent type binding and case-insensitive enum validation:
+```cpp
+static const char* kModes[] = { "normal", "strict", "fast" };
+size_t capacity = 1024;
+int mode_idx = 0;
+
+SqliteVTabParamSchema schema;
+schema.bind_size("capacity", &capacity)
+      .bind_enum("mode", kModes, 3, &mode_idx);
+schema.parse(vargs);
+```
+

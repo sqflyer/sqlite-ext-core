@@ -839,6 +839,78 @@ void test_all_subtype_factories(sqlite3* db) {
     sqlite3_finalize(stmt);
 }
 
+void test_from_literal() {
+    // 1. NULL literals
+    SqliteValueOwned n1 = SqliteValueOwned::from_literal("");
+    assert(n1.is_null());
+    assert(n1.type() == SQLITE_NULL);
+
+    SqliteValueOwned n2 = SqliteValueOwned::from_literal("null");
+    assert(n2.is_null());
+
+    SqliteValueOwned n3 = SqliteValueOwned::from_literal("NULL");
+    assert(n3.is_null());
+
+    SqliteValueOwned n4 = SqliteValueOwned::from_literal((const char*)nullptr);
+    assert(n4.is_null());
+
+    // 2. Boolean literals
+    SqliteValueOwned b1 = SqliteValueOwned::from_literal("true");
+    assert(b1.is_bool() && b1.as_bool() == true && b1.type() == SQLITE_INTEGER);
+
+    SqliteValueOwned b2 = SqliteValueOwned::from_literal("TRUE");
+    assert(b2.is_bool() && b2.as_bool() == true);
+
+    SqliteValueOwned b3 = SqliteValueOwned::from_literal("yes");
+    assert(b3.is_bool() && b3.as_bool() == true);
+
+    SqliteValueOwned b4 = SqliteValueOwned::from_literal("on");
+    assert(b4.is_bool() && b4.as_bool() == true);
+
+    SqliteValueOwned b5 = SqliteValueOwned::from_literal("false");
+    assert(b5.is_bool() && b5.as_bool() == false);
+
+    SqliteValueOwned b6 = SqliteValueOwned::from_literal("no");
+    assert(b6.is_bool() && b6.as_bool() == false);
+
+    SqliteValueOwned b7 = SqliteValueOwned::from_literal("off");
+    assert(b7.is_bool() && b7.as_bool() == false);
+
+    // 3. Integer literals
+    SqliteValueOwned i1 = SqliteValueOwned::from_literal("0");
+    assert(i1.is_integer() && i1.as_int64() == 0);
+
+    SqliteValueOwned i2 = SqliteValueOwned::from_literal("1048576");
+    assert(i2.is_integer() && i2.as_int64() == 1048576);
+
+    SqliteValueOwned i3 = SqliteValueOwned::from_literal("-9876543210");
+    assert(i3.is_integer() && i3.as_int64() == -9876543210LL);
+
+    // 4. Floating-point literals
+    SqliteValueOwned f1 = SqliteValueOwned::from_literal("3.14159265");
+    assert(f1.is_float() && f1.as_double() > 3.14 && f1.as_double() < 3.15);
+
+    SqliteValueOwned f2 = SqliteValueOwned::from_literal("-0.005");
+    assert(f2.is_float() && f2.as_double() == -0.005);
+
+    SqliteValueOwned f3 = SqliteValueOwned::from_literal("1.5e-3");
+    assert(f3.is_float());
+
+    // 5. Quoted string literals (strips outer quotes)
+    SqliteValueOwned sq1 = SqliteValueOwned::from_literal("'hello world'");
+    assert(sq1.is_text() && sq1.as_text() == SqliteStringView("hello world"));
+
+    SqliteValueOwned sq2 = SqliteValueOwned::from_literal("\"database_name\"");
+    assert(sq2.is_text() && sq2.as_text() == SqliteStringView("database_name"));
+
+    // 6. Unquoted text / identifiers
+    SqliteValueOwned t1 = SqliteValueOwned::from_literal("strict");
+    assert(t1.is_text() && t1.as_text() == SqliteStringView("strict"));
+
+    SqliteValueOwned t2 = SqliteValueOwned::from_literal("fast_mode_v2");
+    assert(t2.is_text() && t2.as_text() == SqliteStringView("fast_mode_v2"));
+}
+
 void test_sbo_boundary_and_heap_transitions() {
     // String SBO exact boundary (13 chars vs 14 chars)
     const char* str13 = "1234567890123";
@@ -1147,6 +1219,9 @@ int main() {
 
     printf("Testing All Subtype Factories & Roundtrips...\n");
     test_all_subtype_factories(db);
+
+    printf("Testing SqliteValueOwned::from_literal (SQL Literal Inferred Parsing)...\n");
+    test_from_literal();
 
     printf("Testing SBO Boundary Exact Transitions (13 vs 14 chars, 14 vs 15 bytes)...\n");
     test_sbo_boundary_and_heap_transitions();

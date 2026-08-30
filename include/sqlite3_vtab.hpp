@@ -6,6 +6,7 @@
 #include "sqlite3_db.hpp"
 #include "sqlite3_allocator.hpp"
 #include "sqlite3_ext_state.hpp"
+#include "sqlite3_vtab_arg.hpp"
 
 /**
  * @brief Bitmask options for Virtual Table capabilities.
@@ -111,6 +112,7 @@ public:
 
     inline int size() const { return m_argc; }
     inline const char* operator[](int i) const { return m_argv[i]; }
+    inline const char* const* argv() const { return m_argv; }
 
     /**
      * @brief Retrieve extension shared state directly from connect args.
