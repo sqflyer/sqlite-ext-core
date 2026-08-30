@@ -29,22 +29,22 @@ struct CoroSeriesTvf {
 };
 
 // ============================================================================
-// TVF 2: Multi-Column Static Row Generator (SqliteRowStatic<3>)
+// TVF 2: Multi-Column Static Row Generator (SqliteValueTuple<3>)
 // ============================================================================
 struct CoroMultiColTvf {
     static constexpr const char* schema() {
         return "CREATE TABLE x(id INT, square INT, cube INT, max_n HIDDEN)";
     }
 
-    static SqliteFiberGenerator<SqliteRowStatic<3>> generate(SqliteUdfArgs args) {
+    static SqliteFiberGenerator<SqliteValueTuple<3>> generate(SqliteUdfArgs args) {
         int max_n = (args.size() > 0 && !args[0].is_null()) ? static_cast<int>(args[0].as_int64()) : 3;
 
-        return SqliteFiberGenerator<SqliteRowStatic<3>>([=](const SqliteFiberGenerator<SqliteRowStatic<3>>::YieldHandle& yield) {
+        return SqliteFiberGenerator<SqliteValueTuple<3>>([=](const SqliteFiberGenerator<SqliteValueTuple<3>>::YieldHandle& yield) {
             for (int i = 1; i <= max_n; ++i) {
-                SqliteRowStatic<3> row;
-                row[0] = static_cast<sqlite3_int64>(i);
-                row[1] = static_cast<sqlite3_int64>(i * i);
-                row[2] = static_cast<sqlite3_int64>(i * i * i);
+                SqliteValueTuple<3> row;
+                row[0] = SqliteValueOwned(static_cast<sqlite3_int64>(i));
+                row[1] = SqliteValueOwned(static_cast<sqlite3_int64>(i * i));
+                row[2] = SqliteValueOwned(static_cast<sqlite3_int64>(i * i * i));
                 yield(row);
             }
         });
@@ -52,18 +52,18 @@ struct CoroMultiColTvf {
 };
 
 // ============================================================================
-// TVF 3: Dynamic Row String Splitter (SqliteRowDynamic)
+// TVF 3: Dynamic Row String Splitter (SqliteValueVec<2>)
 // ============================================================================
 struct CoroStringSplitTvf {
     static constexpr const char* schema() {
         return "CREATE TABLE x(idx INT, token TEXT, input_text HIDDEN, delim HIDDEN)";
     }
 
-    static SqliteFiberGenerator<SqliteRowDynamic> generate(SqliteUdfArgs args) {
+    static SqliteFiberGenerator<SqliteValueVec<2>> generate(SqliteUdfArgs args) {
         SqliteStringView text = (args.size() > 0 && !args[0].is_null()) ? args[0].as_text() : SqliteStringView("");
         char delim = (args.size() > 1 && !args[1].is_null() && args[1].as_text().length() > 0) ? args[1].as_text().data()[0] : ',';
 
-        return SqliteFiberGenerator<SqliteRowDynamic>([=](const SqliteFiberGenerator<SqliteRowDynamic>::YieldHandle& yield) {
+        return SqliteFiberGenerator<SqliteValueVec<2>>([=](const SqliteFiberGenerator<SqliteValueVec<2>>::YieldHandle& yield) {
             const char* start = text.data();
             const char* p = start;
             int total_len = text.length();
@@ -71,16 +71,16 @@ struct CoroStringSplitTvf {
 
             for (int i = 0; i < total_len; ++i) {
                 if (start[i] == delim) {
-                    SqliteRowDynamic row(2);
-                    row[0] = static_cast<sqlite3_int64>(idx++);
+                    SqliteValueVec<2> row(2);
+                    row[0] = SqliteValueOwned(static_cast<sqlite3_int64>(idx++));
                     row[1] = SqliteValueOwned::from_text(p, static_cast<int>((start + i) - p));
                     yield(row);
                     p = start + i + 1;
                 }
             }
             if ((start + total_len) >= p) {
-                SqliteRowDynamic row(2);
-                row[0] = static_cast<sqlite3_int64>(idx);
+                SqliteValueVec<2> row(2);
+                row[0] = SqliteValueOwned(static_cast<sqlite3_int64>(idx));
                 row[1] = SqliteValueOwned::from_text(p, static_cast<int>((start + total_len) - p));
                 yield(row);
             }

@@ -188,10 +188,17 @@ struct SqliteOwnedValueTag {
     inline int  type()        const noexcept { return static_cast<int>(raw >> 5); }
     inline bool is_heap()     const noexcept { return (raw & 0x10) != 0; }
     inline uint8_t len()      const noexcept { return static_cast<uint8_t>(raw & 0x0F); }
-    inline bool is_row_key()  const noexcept { return raw == 0; }
-    inline void set_as_row_key() noexcept    { raw = 0; }
+    inline void clear()       noexcept       { raw = 0; }
+    inline bool is_active()   const noexcept { return raw >= 0x20; }
 };
 ```
+
+#### The `0x20` Active Threshold
+Because valid SQLite datatypes have codes $1 \dots 5$ (`INTEGER=1`, `FLOAT=2`, `TEXT=3`, `BLOB=4`, `NULL=5`), shifting them by 5 bits (`type << 5`) ensures that any initialized SQLite value has a tag value $\ge \text{0x20}$ (`0b001_00000 = 0x20`). An empty slot or container marker has `raw == 0x00 < 0x20`.
+
+| Method | C++ Expression | Generated x86-64 Assembly | Latency |
+| :--- | :--- | :--- | :--- |
+| `tag.is_active()` | `return raw >= 0x20;` | `cmp byte ptr [rdi + 15], 32`<br>`setae al` | **1 cycle** |
 
 ---
 
@@ -254,73 +261,20 @@ auto type_rank = [](int t) -> int {
 
 ---
 
-## 9. Owned Value Array Architecture (`SqliteValueOwnedStaticArray` / `SqliteValueOwnedDynamicArray`)
+## 9. Value Containers Architecture (`SqliteValueTuple<N>` / `SqliteValueVec<N>`)
 
-These classes extend the single-element `SqliteValueOwned` into RAII-managed **contiguous multi-element arrays**, forming the common base from which the Row classes in `sqlite3_row.hpp` are derived.
+Multi-column composite keys and rows are modeled as contiguous RAII-managed arrays of `SqliteValueOwned` elements with 100% stack data density:
+- **`SqliteValueTuple<N>` ($N \in [1..8]$)**: Exact stack array ($N \times 16\text{B}$, 0 mallocs). $N \ge 9$ falls back to `sqlite3_malloc64`.
+- **`SqliteValueVec<N>` ($N \in [1..8]$)**: Adaptive Small Buffer Optimized (SBO) vector living in-situ on stack when size $\le N$ and spilling dynamically to heap when resized $> N$.
 
-### Memory Layout
-
-**`SqliteValueOwnedStaticArray<N>`** (Stack / In-Situ):
-```
-Byte 0                   16             32            N*16
-┌────────────────────────┬──────────────┬───...─────────┐
-│ m_values[0]            │ m_values[1]  │ m_values[N-1] │
-│ [SqliteValueOwned 16B] ...                            │
-└────────────────────────┴──────────────┴───...─────────┘
-```
-- Lives entirely on the stack or inline in a parent struct. **0 allocations**.
-
-**`SqliteValueOwnedDynamicArray`** (Heap Handle):
-```
-Stack:  [ m_values* (8B) | m_len (4B) | pad (4B) ]  ← 16 Bytes
-                │
-                └─► sqlite3_malloc64(N * 16)
-Heap:   [ SqliteValueOwned[0] | ... | SqliteValueOwned[N-1] ]
-```
-
-### `resize()` \u2014 `sqlite3_realloc64` In-Place Growth
-
-```cpp
-void resize(int new_count) noexcept {
-    // 1. Attempt in-place growth via sqlite3_realloc64 (avoids copy when allocator
-    //    can extend the current page in-place)
-    void* p = sqlite3_realloc64(m_values, new_count * sizeof(SqliteValueOwned));
-    if (p) {
-        m_values = static_cast<SqliteValueOwned*>(p);
-        // Default-construct newly added tail elements
-        for (int i = m_len; i < new_count; ++i)
-            sqlite_construct_at(&m_values[i]);
-        m_len = new_count;
-    }
-    // On OOM: m_values is unchanged (sqlite3_realloc64 guarantee); no-op
-}
-```
-
-The use of `sqlite3_realloc64` instead of a fresh `malloc` + `memcpy` is safe because `SqliteValueOwned` elements are **trivially relocatable** (their internal 8-byte payload is a raw value/pointer; there are no internal self-referential pointers).
-
-### Inheritance Hierarchy
-
-```
-sqlite3_value.hpp
-  SqliteValueOwnedStaticArray<N>  ───────────────────────────┐
-  SqliteValueOwnedDynamicArray    ──────────────────────┐    │
-                                                        │    │
-sqlite3_row.hpp (inherits, adds view()/column_count())  │    │
-  SqliteRowDynamic  ◄───────────────────────────────────┘    │
-  SqliteRowStatic<N> ◄───────────────────────────────────────┘
-```
-
-`SqliteRowStatic<N>` and `SqliteRowDynamic` add **only** three row-domain methods:
-- `view()` → `SqliteRowView`
-- `column_count()` → `int` (alias for `size()`)
-- `operator SqliteRowView()` → implicit conversion
+> For complete architectural details, binary diagrams, and 8x8 matrix dispatching, see [`docs/VALUE_CONTAINERS_ARCHITECTURE.md`](VALUE_CONTAINERS_ARCHITECTURE.md).
 
 ### Macro Synthesized Array Accessors & Hashing (`SQLITE_DERIVE_ARRAY_ACCESSORS`, `SQLITE_DERIVE_ARRAY_HASH`)
 
-To prevent code bloat and maintain a unified API across all array and tabular types, the array classes utilize `SQLITE_DERIVE_ARRAY_ACCESSORS` and `SQLITE_DERIVE_ARRAY_HASH`:
+To prevent code bloat and maintain a unified API across all container and tabular types, all containers utilize `SQLITE_DERIVE_ARRAY_ACCESSORS` and `SQLITE_DERIVE_ARRAY_HASH`:
 - **Direct Typed Extraction**: Provides inlined `as_int64(i = 0)`, `as_int(i = 0)`, `as_double(i = 0)`, `as_text(i = 0)`, `as_blob(i = 0)`, `as_bool(i = 0)`, `is_null(i = 0)`, `type(i = 0)`, and `subtype(i = 0)`.
 - **Unified MurmurHash2 Digest**: Generates inlined `hash()` computing multi-column composite MurmurHash2 digests combining each element sequentially.
-- **Shared Identically Across All 5 Containers**: `SqliteValueOwnedStaticArray<N>`, `SqliteValueOwnedDynamicArray`, `SqliteRowView`, `SqliteRowOwnedWrapper`, and `SqliteRowKeyOwned`.
+- **Shared Identically Across All Containers**: `SqliteValueTuple<N>`, `SqliteValueVec<N>`, `SqliteRowView`, and `SqliteRowOwnedWrapper`.
 
 ---
 
@@ -330,6 +284,6 @@ All classes strictly adhere to freestanding `-nostdlib++` requirements:
 - Memory for `SqliteStringOwned` is managed via `sqlite3_str_new` / `sqlite3_free`.
 - Memory for `SqliteBlobOwned` is managed via `sqlite3_malloc` / `sqlite3_free`.
 - Dynamic values in `SqliteValueOwned` duplicate via `sqlite3_value_dup` and free via `sqlite3_value_free`.
-- `SqliteValueOwnedDynamicArray` uses `sqlite3_malloc64` / `sqlite3_realloc64` / `sqlite3_free` exclusively.
+- Dynamic heap vectors use `sqlite3_malloc64` / `sqlite3_free` via placement new/destroy utilities from `sqlite3_allocator.hpp`.
 - Move operations utilize `sqlite_move` from `sqlite3_allocator.hpp` with zero dependency on `<utility>`.
 - Exceptions are disabled (`-fno-exceptions`); memory failures produce safe deterministic null states verified via `.is_valid()` and `explicit operator bool()`.

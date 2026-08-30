@@ -162,9 +162,9 @@ public:
 1. **`SqliteValueOwned` & `SqliteValueView` (`sqlite3_value.hpp`)**:
    - Implements `.hash()` across integer, real, text, blob, and subtype fields.
    - Powers `SqliteValueHash` transparent functor for STL and Swiss Tables.
-2. **`SqliteRowKeyOwned` (`sqlite3_row_key.hpp`)**:
-   - In-situ 16-byte single-column key hashing ($N=1$) and composite row hashing ($N \ge 2$).
-   - Powers transparent `SqliteRowKeyHash`.
+2. **`SqliteValueTuple<N>` & `SqliteValueVec<N>` (`sqlite3_value_containers.hpp`)**:
+   - In-situ 16-byte fixed tuple hashing ($N=1..8$) and adaptive vector hashing ($N \ge 1$).
+   - Powers transparent `SqliteRowHash` and `SqliteRowEqual`.
 3. **`SqliteRowOwnedWrapper` (`sqlite3_row.hpp`)**:
    - Zero-allocation slice hashing across transient stack-allocated tuples and statement buffers.
 

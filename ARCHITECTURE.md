@@ -32,10 +32,11 @@ Because we cannot rely on `std::string_view` or `std::unique_ptr` in a `-nostdli
   - Their destructors safely clean up the resource (e.g., `sqlite3_close_v2` or `sqlite3_value_free`).
   - By inheriting from `View`, they support **object slicing**. You can pass an `Owned` object by value into any function expecting a `View`, which compiles down to a raw 8-byte pointer copy with zero overhead!
 
-- **`OwnedArray` Classes**: (e.g., `SqliteValueOwnedStaticArray<N>`, `SqliteValueOwnedDynamicArray`, `SqliteValueOwnedArray<N>`)
-  - Manage contiguous RAII arrays of `SqliteValueOwned` elements.
-  - Static variant lives entirely on the stack (0 mallocs); dynamic variant uses `sqlite3_realloc64` for in-place growth.
-  - Act as the **foundational base classes** for `SqliteRowStatic<N>` and `SqliteRowDynamic` in `sqlite3_row.hpp`, which inherit from them and add row-domain APIs (`.view()`, `.column_count()`, `operator SqliteRowView()`).
+- **Value Container Classes**: (e.g., `SqliteValueTuple<N>`, `SqliteValueVec<N>`, `sqlite3_value_containers.hpp`)
+  - `SqliteValueTuple<N>`: Exact $N \times 16\text{B}$ in-situ stack array for compile-time fixed-arity primary and composite keys ($N \in [1..8]$), falling back to dynamic `sqlite3_malloc64` for $N \ge 9$.
+  - `SqliteValueVec<N>`: Adaptive Small Buffer Optimized (SBO) dynamic vector living on stack for sizes $\le N$ and seamlessly spilling to heap when expanded $> N$.
+  - `SqliteRowOwnedWrapper`: 16-byte zero-allocation span wrapper (`SqliteValueOwned*` + `int len`) enabling uniform view interoperability across all containers.
+  - **In-Situ Primitive Assignment (`operator=`)**: `SqliteValueOwned` directly overloads assignment for all C++ primitives (`int`, `sqlite3_int64`, `long`, `unsigned int`, `unsigned long`, `unsigned long long`, `double`, `float`, `bool`, `const char*`, `SqliteStringView`, `SqliteBlobView`), enabling direct syntax such as `row[0] = static_cast<sqlite3_int64>(i);` or `row[1] = "alpha";` with zero intermediate heap allocations.
 
 ## 3. Strict RAII (Resource Acquisition Is Initialization)
 
@@ -46,23 +47,24 @@ Manual memory, resource, and lock management is the leading cause of bugs in SQL
 - **`SqliteBackup`**: Guarantees the source database read-lock is lifted via `sqlite3_backup_finish` in all scope-exit scenarios.
 - **`SqliteExtState` Lock Guards**: Scope-bound `ReadGuard` and `WriteGuard` mutex lifecycles.
 
-## 4. Template Metaprogramming
+## 4. Template Metaprogramming & Compile-Time Matrix Dispatch
 
 Writing SQLite Virtual Tables (VTAB) or Table-Valued Functions (TVF) requires building complex C-structs (`sqlite3_module`) filled with function pointers. 
 
-Instead of forcing developers to write C-style `xConnect` / `xBestIndex` callbacks, we use **Template Metaprogramming**. Classes like `SqliteTvfModule<T>` statically generate the C-struct at compile-time by binding the C-callbacks to your strongly-typed C++ class methods. 
-
-This provides:
+Instead of forcing developers to write C-style `xConnect` / `xBestIndex` callbacks or repetitive nested switch statements, we use **Template Metaprogramming and Generic Dispatchers**:
 - **Zero VTable Overhead**: We deliberately avoid virtual functions (`virtual void init() = 0`) to prevent vtable lookup overhead and dependency on a global `operator delete`.
-- **Auto-Routing Arguments**: Hidden columns in virtual tables are safely packaged into bounds-checked objects like `SqliteUdfArgs` and injected seamlessly into your C++ methods.
+- **Scope-Guarded Stack Dispatcher (`withSqliteRowOwned`)**: Dynamically dispatches runtime row sizes $0 \le N \le 8$ to inline stack tuples `SqliteValueTuple<N>` (16–128 bytes) and seamlessly falls back to `SqliteValueVec<1>` dynamic heap allocation for $N \ge 9$, invoking user lambdas with a uniform `SqliteRowOwnedWrapper`.
+- **Generic 8x8 Compile-Time Matrix Dispatch (`sqlite3_dispatch_8x8.hpp`)**: `SQLITE_DISPATCH_1D_8` and `SQLITE_DISPATCH_2D_8X8` expand runtime column/key configurations into compile-time `constexpr` specializations for any storage template in 1 line.
+- **Auto-Routing Arguments**: Hidden columns in virtual tables are safely packaged into bounds-checked objects like `SqliteUdfArgs` (`SqliteRowView`) and injected seamlessly into your C++ methods.
 
 ## 5. Subsystem Architecture Guides
 
 For a deeper dive into the specific mechanics and C++ paradigms used in individual components, refer to their dedicated architecture guides:
 
 ### Memory & State Management
-- [**Value System (`SqliteValue`)**](docs/VALUE_ARCHITECTURE.md): The core zero-cost `Owned`/`View` wrappers over `sqlite3_value`, heterogeneous lookups, and the `SqliteValueOwnedStaticArray<N>` / `SqliteValueOwnedDynamicArray` contiguous array classes that form the base of the Row system.
-- [**Row System (`SqliteRow`)**](docs/ROW_ARCHITECTURE.md): Two-tier hierarchy — `SqliteValueOwnedStaticArray<N>` / `SqliteValueOwnedDynamicArray` (value.hpp base) → `SqliteRowStatic<N>` / `SqliteRowDynamic` (row.hpp extension). Universal `SqliteRowView` (24B) multiplexes statements, argv vectors, and owned arrays. `SqliteRowUtil::copy_from_view` provides loop-optimized shared construction.
+- [**Value System (`SqliteValue`)**](docs/VALUE_ARCHITECTURE.md): The core zero-cost `Owned`/`View` wrappers over `sqlite3_value`, 16-byte Small Buffer Optimization, heterogeneous lookups, and SQLite subtype representations.
+- [**Value Containers & 8x8 Dispatch (`sqlite3_value_containers.hpp`, `sqlite3_dispatch_8x8.hpp`)**](docs/VALUE_CONTAINERS_ARCHITECTURE.md): Zero-dependency value containers (`SqliteValueTuple<N>`, `SqliteValueVec<N>`), scope-guarded stack allocator (`withSqliteRowOwned`), and generic compile-time 2D matrix dispatchers.
+- [**Row System (`SqliteRow`)**](docs/ROW_ARCHITECTURE.md): Universal `SqliteRowView` (24B) multiplexing prepared statement step rows, UDF argument vectors, and in-memory view arrays with zero heap allocation.
 - [**Dynamic Buffers (`SqliteBuffer`)**](docs/BUFFER_ARCHITECTURE.md): `-nostdlib++` replacements for `std::string` and `std::vector` using `sqlite3_realloc64` that natively hook into the Value System's FNV-1a hashing engine.
 - [**Blob Streams (`SqliteBlobStream`)**](docs/BLOB_STREAM_ARCHITECTURE.md): Zero-copy stream interfaces for handling large SQLite blobs without loading them entirely into memory.
 - [**Online Backup (`SqliteBackup`)**](docs/BACKUP_ARCHITECTURE.md): RAII wrappers for the SQLite Online Backup API to ensure safe resource disposal during long-running background tasks.
@@ -101,7 +103,8 @@ For a deeper dive into the specific mechanics and C++ paradigms used in individu
 - [**Pure C Extension Tutorial**](example-c/README.md): Turnkey Pure C (C99/C11) example demonstrating state management and UDF registration.
 
 ### Key Indexing, Macro Synthesis & Reference Matrix
-- [**Row Key & Hash Indexing (`SqliteRowKey`)**](docs/ROW_KEY_ARCHITECTURE.md): 16-byte Small Buffer Optimization (SBO), single-scalar vs composite key dispatching, 64-bit MurmurHash2 composite hashing, and zero-allocation transparent lookups for B-Trees and Swiss Tables.
+- [**Small Buffer Optimization (SBO) Architecture (`SBO_OPTIMIZATIONS.md`)**](SBO_OPTIMIZATIONS.md): 16-byte scalar SBO, 100% stack data density, $O(1)$ active tag scanning (`0x20`), 64-byte L1 cache line calculations, and 2-register spans.
+- [**Value Containers & 8x8 Dispatch (`sqlite3_value_containers.hpp`, `sqlite3_dispatch_8x8.hpp`)**](docs/VALUE_CONTAINERS_ARCHITECTURE.md): Zero-dependency value containers (`SqliteValueTuple<N>`, `SqliteValueVec<N>`), scope-guarded stack allocator (`withSqliteRowOwned`), and generic compile-time 2D matrix dispatchers.
 - [**Unified Macro Architecture (`docs/MACROS.md`)**](docs/MACROS.md): 4-tier macro synthesizer suite for zero-overhead array accessors, composite hashing, range-based iterators, scalar & container relational operators, and C++20 transparent functors.
 - [**C++ Type & Container Comparison Matrix (`docs/COMPARISON_MATRIX.md`)**](docs/COMPARISON_MATRIX.md): Comprehensive comparative reference across all value types, containers, row views, macros, and transparent STL functors.
 
@@ -129,8 +132,18 @@ Large SQLite extensions often span multiple `.cpp` files. `sqlite3_ext_state.hpp
 ## 8. Unified Macro Synthesizers & Transparent Functors
 
 To enforce complete standard library independence while providing modern C++ ergonomics, `sqlite-ext-core` employs a unified macro synthesizer architecture:
+- **Single-Burst SIMD Initialization (`SqliteValueOwned::static_null_array()`)**: Container constructors leverage a pre-populated static 128-byte array of 8 canonical `SQLITE_NULL` instances (`tag.raw = 0xA0`), lowered by Clang/GCC/MSVC directly into 1–4 vector register operations (`vmovups`) executing in 1–2 CPU clock cycles (~0.3–0.6 ns).
 - **Array Accessors & Hashing (`SQLITE_DERIVE_ARRAY_ACCESSORS`, `SQLITE_DERIVE_ARRAY_HASH`)**: Inlined typed extractions and 64-bit MurmurHash2 composite hashing with $O(1)$ scalar fast-paths and sequential mixer folding.
 - **Range-Based Iteration (`SQLITE_DERIVE_ARRAY_ITERATOR`)**: Standard C++11 forward `Iterator`, `begin()`, and `end()` for range-based for loops (`for (auto val : container)`) across all array, row, and key types.
 - **Relational Operators (`SQLITE_DERIVE_CONTAINER_RELATIONAL_OPS`, `SQLITE_DERIVE_ALL_SCALAR_RELATIONAL_OPS`)**: Full operator suites (`==`, `!=`, `<`, `<=`, `>`, `>=`) supporting multi-column lexicographical ordering and scalar comparisons honoring SQLite's type collation (`NULL < NUMERIC < TEXT < BLOB`).
 - **C++20 Transparent Functors (`SQLITE_DERIVE_TRANSPARENT_EQUAL`, `SQLITE_DERIVE_TRANSPARENT_LESS`)**: Synthesizes `using is_transparent = void;` functors enabling zero-allocation lookups in `std::unordered_map` (Swiss Tables) and `std::map` (B-Trees).
+
+## 9. Modular Test Suite Organization
+
+The test framework is strictly modularized by domain and isolation level:
+- **`tests/cpp_value/`**: Scalar and polymorphic value types (`SqliteValueOwned`, `SqliteValueView`, `SqliteStringView`, `SqliteBlobView`), SBO heap transitions, subtype tagging, and scalar operator overloads.
+- **`tests/cpp_row/`**: Universal row wrappers (`SqliteRowView`, `SqliteRowOwnedWrapper`), multi-column row relational comparisons, and scope-guarded stack execution (`withSqliteRowOwned`).
+- **`tests/cpp_value_containers/`**: Dedicated container verification split into core mechanics (`test_value_containers.cpp`), cross-container relational matrix (`test_value_containers_comparisons.cpp`), and C++14 STL container integration (`test_value_containers_std.cpp`).
+- **`tests/threads/`**: Threading primitives, condition variables, stackful fibers (`SqliteCoroutine`), streaming generators (`SqliteFiberGenerator`), M:N schedulers (`SqliteCoroScheduler`), and multi-database extension pools (`SqliteExtCoroPool`).
+
 

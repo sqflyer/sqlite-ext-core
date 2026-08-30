@@ -15,6 +15,7 @@
 
 #include <sqlite3.h>
 #include <stddef.h>
+#include <string.h>
 
 // ============================================================================
 // FAST MEMORY COPY MACRO
@@ -111,6 +112,20 @@ template <typename T>
 struct sqlite_is_trivially_copyable {
     static const bool value = __is_trivially_copyable(T);
 };
+
+/**
+ * @struct sqlite_is_same
+ * @brief Evaluates whether two types are identical, equivalent to `std::is_same`.
+ */
+template <typename T, typename U> struct sqlite_is_same       { static const bool value = false; };
+template <typename T>             struct sqlite_is_same<T, T> { static const bool value = true; };
+
+/**
+ * @struct sqlite_enable_if
+ * @brief SFINAE conditional type enabler, equivalent to `std::enable_if`.
+ */
+template <bool B, typename T = void> struct sqlite_enable_if {};
+template <typename T> struct sqlite_enable_if<true, T> { typedef T type; };
 
 // ============================================================================
 // MOVE SEMANTICS & PERFECT FORWARDING (NO <utility>)
@@ -211,6 +226,40 @@ inline T* sqlite_construct_at(T* p, Args&&... args) {
 }
 
 /**
+ * @brief Default-constructs `count` elements in a contiguous buffer in forward order.
+ *
+ * Equivalent to C++20 `std::uninitialized_default_construct_n`. Safe to call with `nullptr` or count 0 (no-op).
+ *
+ * @tparam T Element object type.
+ * @param first Pointer to the first element in the contiguous buffer.
+ * @param count Number of elements to construct.
+ */
+template <typename T>
+inline void sqlite_construct_n(T* first, size_t count) {
+    if (!first) return;
+    for (size_t i = 0; i < count; ++i) {
+        sqlite_construct_at(&first[i]);
+    }
+}
+
+/**
+ * @brief In-place constructs `count` elements in a contiguous buffer with forwarded arguments.
+ *
+ * @tparam T Element object type.
+ * @tparam Args Constructor argument types.
+ * @param first Pointer to the first element in the contiguous buffer.
+ * @param count Number of elements to construct.
+ * @param args Arguments forwarded to each element's constructor.
+ */
+template <typename T, typename... Args>
+inline void sqlite_construct_n(T* first, size_t count, Args&&... args) {
+    if (!first) return;
+    for (size_t i = 0; i < count; ++i) {
+        sqlite_construct_at(&first[i], sqlite_forward<Args>(args)...);
+    }
+}
+
+/**
  * @brief Allocates heap memory via `sqlite3_malloc` and constructs an object of type `T` in-place.
  *
  * Mimics standard C++ `new T(args...)`, but guarantees allocation tracking inside SQLite's
@@ -226,6 +275,57 @@ inline T* sqlite_new(Args&&... args) {
     void* mem = sqlite3_malloc(sizeof(T));
     if (!mem) return nullptr;
     return sqlite_construct_at(static_cast<T*>(mem), sqlite_forward<Args>(args)...);
+}
+
+/**
+ * @brief Allocates raw zero-initialized heap memory for an object of type `T` via `sqlite3_malloc` and `memset`.
+ *
+ * Note: Does NOT invoke constructors; memory is strictly zero-initialized raw bytes.
+ *
+ * @tparam T Object type to allocate and zero.
+ * @return Pointer to the zero-initialized memory buffer, or `nullptr` on allocation failure.
+ */
+template <typename T>
+inline T* sqlite_new_zeroed() {
+    void* mem = sqlite3_malloc(sizeof(T));
+    if (!mem) return nullptr;
+    memset(mem, 0, sizeof(T));
+    return static_cast<T*>(mem);
+}
+
+/**
+ * @brief Allocates raw zero-initialized byte buffer via `sqlite3_malloc64` and `memset`.
+ * 
+ * @param bytes Total number of bytes to allocate.
+ * @return Pointer to allocated zero-initialized memory, or `nullptr` on failure.
+ */
+inline void* sqlite_malloc_zeroed(size_t bytes) {
+    if (bytes == 0) return nullptr;
+    void* mem = sqlite3_malloc64(bytes);
+    if (mem) {
+        memset(mem, 0, bytes);
+    }
+    return mem;
+}
+
+/**
+ * @brief Reallocates raw byte buffer via `sqlite3_realloc64`, zero-initializing newly expanded bytes.
+ * 
+ * @param ptr Pointer to existing memory (or `nullptr`).
+ * @param old_bytes Previous byte capacity.
+ * @param new_bytes Target new byte capacity.
+ * @return Pointer to reallocated buffer, or `nullptr` on failure.
+ */
+inline void* sqlite_realloc_zeroed(void* ptr, size_t old_bytes, size_t new_bytes) {
+    if (new_bytes == 0) {
+        if (ptr) sqlite3_free(ptr);
+        return nullptr;
+    }
+    void* new_ptr = sqlite3_realloc64(ptr, new_bytes);
+    if (new_ptr && new_bytes > old_bytes) {
+        memset(static_cast<unsigned char*>(new_ptr) + old_bytes, 0, new_bytes - old_bytes);
+    }
+    return new_ptr;
 }
 
 /**
@@ -299,6 +399,31 @@ inline T* sqlite_new_array(size_t count) {
 }
 
 /**
+ * @brief Allocates raw zero-initialized memory for an array of `count` objects via `sqlite3_malloc64` and `memset`.
+ *
+ * Includes integer multiplication overflow protection (`count * sizeof(T)`).
+ * Note: Zeroes all allocated bytes, but does NOT invoke C++ constructors.
+ * 
+ * @tparam T Element type.
+ * @param count Number of elements to allocate space for.
+ * @return Pointer to the zero-initialized memory buffer, or `nullptr` on allocation failure / overflow.
+ */
+template <typename T>
+inline T* sqlite_new_array_zeroed(size_t count) {
+    if (count == 0) return nullptr;
+    // Check for size_t multiplication overflow:
+    if (count > static_cast<size_t>(-1) / sizeof(T)) {
+        return nullptr; // Out of memory / overflow prevented
+    }
+    size_t total_bytes = sizeof(T) * count;
+    void* mem = sqlite3_malloc64(total_bytes);
+    if (mem) {
+        memset(mem, 0, total_bytes);
+    }
+    return static_cast<T*>(mem);
+}
+
+/**
  * @brief Reallocates raw memory for an array of `new_count` objects via `sqlite3_realloc64`.
  *
  * Includes integer multiplication overflow protection (`new_count * sizeof(T)`).
@@ -328,7 +453,36 @@ inline T* sqlite_reallocate_array(T* arr, size_t new_count) {
 }
 
 /**
- * @brief Frees raw array memory previously allocated via `sqlite_new_array` or `sqlite_reallocate_array`.
+ * @brief Reallocates raw memory for an array of `new_count` objects via `sqlite3_realloc64`, zero-initializing new capacity.
+ *
+ * Includes integer multiplication overflow protection (`new_count * sizeof(T)`).
+ * If `new_count > old_count`, newly appended bytes from `old_count` to `new_count` are guaranteed zeroed via `memset`.
+ *
+ * @tparam T Element type.
+ * @param arr Pointer to the existing array memory buffer (or `nullptr`).
+ * @param old_count The previous number of elements allocated in `arr`.
+ * @param new_count The new number of elements to reallocate the memory buffer to.
+ * @return Pointer to the reallocated memory buffer, or `nullptr` on allocation failure / overflow / zero count.
+ */
+template <typename T>
+inline T* sqlite_reallocate_array_zeroed(T* arr, size_t old_count, size_t new_count) {
+    if (new_count == 0) {
+        if (arr) sqlite3_free(arr);
+        return nullptr;
+    }
+    // Check for size_t multiplication overflow:
+    if (new_count > static_cast<size_t>(-1) / sizeof(T)) {
+        return nullptr; // Out of memory / overflow prevented
+    }
+    T* new_arr = static_cast<T*>(sqlite3_realloc64(arr, sizeof(T) * new_count));
+    if (new_arr && new_count > old_count) {
+        memset(static_cast<void*>(new_arr + old_count), 0, (new_count - old_count) * sizeof(T));
+    }
+    return new_arr;
+}
+
+/**
+ * @brief Frees raw array memory previously allocated via `sqlite_new_array`, `sqlite_new_array_zeroed`, or `sqlite_reallocate_array`.
  *
  * Note: Does NOT invoke C++ destructors. Call `sqlite_destroy_n` prior to this if `T` is non-trivial.
  * Safe to call with `nullptr` (no-op).
@@ -384,6 +538,13 @@ public:
      */
     inline T* allocate(size_t n) {
         return sqlite_new_array<T>(n);
+    }
+
+    /**
+     * @brief Allocates raw zero-initialized memory for `n` elements of type `T` via sqlite3_malloc64 and memset.
+     */
+    inline T* allocate_zeroed(size_t n) {
+        return sqlite_new_array_zeroed<T>(n);
     }
 
     /**

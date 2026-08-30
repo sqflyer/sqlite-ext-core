@@ -12,7 +12,7 @@ A declarative, zero-boilerplate C++ framework for building **streaming SQLite Ta
 | :--- | :--- | :--- | :--- |
 | **API Complexity** | Requires 5 methods (`init`, `next`, `eof`, `column`, `rowid`) | **1 Single `generate()` function** | **90% less boilerplate** |
 | **Control Flow** | Inverted state machine (`switch (step)`) | **Sequential linear loops & recursion** | **Natural procedural code** |
-| **Multi-Column Rows**| Manual index checking in `column(ctx, idx)` | **Automatic via `SqliteRowStatic<N>` / `SqliteRowDynamic`** | **Zero manual index code** |
+| **Multi-Column Rows**| Manual index checking in `column(ctx, idx)` | **Automatic via `SqliteValueTuple<N>` / `SqliteValueVec<N>`** | **Zero manual index code** |
 | **Recursive Yielding**| Impossible without manual stack vectors | **Native via Stackful Fibers** | **Yield from deep helper functions** |
 | **C++20 `co_yield`** | Unsupported | **Native (`SqliteGenerator<T>`)** | **~48-byte compiler state machine** |
 | **Standard Library** | 0.0% (`-nostdlib++`) | **0.0% (`-nostdlib++`)** | **Freestanding portability** |
@@ -88,8 +88,8 @@ SELECT value FROM generate_series(1, 10, 2);
 
 ---
 
-### 2. Multi-Column Static Rows (`SqliteRowStatic<N>`)
-Emit multi-column rows using fixed-size, stack-allocated row arrays:
+### 2. Multi-Column Static Rows (`SqliteValueTuple<N>`)
+Emit multi-column rows using fixed-size, stack-allocated row tuples:
 
 ```cpp
 struct MultiColTvf {
@@ -97,12 +97,12 @@ struct MultiColTvf {
         return "CREATE TABLE x(id INT, square INT, cube INT, max_n HIDDEN)";
     }
 
-    static SqliteFiberGenerator<SqliteRowStatic<3>> generate(SqliteUdfArgs args) {
+    static SqliteFiberGenerator<SqliteValueTuple<3>> generate(SqliteUdfArgs args) {
         int max_n = (!args.empty() && !args[0].is_null()) ? static_cast<int>(args[0].as_int64()) : 5;
 
-        return SqliteFiberGenerator<SqliteRowStatic<3>>([=](const auto& yield) {
+        return SqliteFiberGenerator<SqliteValueTuple<3>>([=](const auto& yield) {
             for (int i = 1; i <= max_n; ++i) {
-                SqliteRowStatic<3> row;
+                SqliteValueTuple<3> row;
                 row[0] = static_cast<sqlite3_int64>(i);
                 row[1] = static_cast<sqlite3_int64>(i * i);
                 row[2] = static_cast<sqlite3_int64>(i * i * i);
@@ -124,7 +124,7 @@ SELECT id, square, cube FROM multi_col(4);
 
 ---
 
-### 3. Dynamic Rows & String Tokenizer (`SqliteRowDynamic`)
+### 3. Dynamic Rows & String Tokenizer (`SqliteValueVec<N>`)
 Split a string by delimiter and stream numbered tokens:
 
 ```cpp
@@ -133,11 +133,11 @@ struct StringSplitTvf {
         return "CREATE TABLE x(idx INT, token TEXT, input_text HIDDEN, delim HIDDEN)";
     }
 
-    static SqliteFiberGenerator<SqliteRowDynamic> generate(SqliteUdfArgs args) {
+    static SqliteFiberGenerator<SqliteValueVec<2>> generate(SqliteUdfArgs args) {
         SqliteStringView text = (!args.empty() && !args[0].is_null()) ? args[0].as_text() : SqliteStringView("");
         char delim = (args.size() > 1 && !args[1].is_null() && args[1].as_text().length() > 0) ? args[1].as_text().data()[0] : ',';
 
-        return SqliteFiberGenerator<SqliteRowDynamic>([=](const auto& yield) {
+        return SqliteFiberGenerator<SqliteValueVec<2>>([=](const auto& yield) {
             const char* start = text.data();
             const char* p = start;
             int total_len = text.length();
@@ -145,7 +145,8 @@ struct StringSplitTvf {
 
             for (int i = 0; i < total_len; ++i) {
                 if (start[i] == delim) {
-                    SqliteRowDynamic row(2);
+                    SqliteValueVec<2> row;
+                    row.resize(2);
                     row[0] = static_cast<sqlite3_int64>(idx++);
                     row[1] = SqliteValueOwned::from_text(p, static_cast<int>((start + i) - p));
                     yield(row);
@@ -153,7 +154,8 @@ struct StringSplitTvf {
                 }
             }
             if ((start + total_len) >= p) {
-                SqliteRowDynamic row(2);
+                SqliteValueVec<2> row;
+                row.resize(2);
                 row[0] = static_cast<sqlite3_int64>(idx);
                 row[1] = SqliteValueOwned::from_text(p, static_cast<int>((start + total_len) - p));
                 yield(row);
@@ -184,11 +186,11 @@ struct Node {
     Node* right;
 };
 
-void traverse(Node* node, const SqliteFiberGenerator<SqliteRowDynamic>::YieldHandle& yield) {
+void traverse(Node* node, const SqliteFiberGenerator<SqliteValueTuple<2>>::YieldHandle& yield) {
     if (!node) return;
     traverse(node->left, yield);
 
-    SqliteRowDynamic row(2);
+    SqliteValueTuple<2> row;
     row[0] = static_cast<sqlite3_int64>(node->id);
     row[1] = SqliteValueOwned::from_text(node->name);
     yield(row); // Yields from deep inside recursion!
@@ -199,9 +201,9 @@ void traverse(Node* node, const SqliteFiberGenerator<SqliteRowDynamic>::YieldHan
 struct TreeTvf {
     static constexpr const char* schema() { return "CREATE TABLE x(id INT, name TEXT, root_ptr HIDDEN)"; }
 
-    static SqliteFiberGenerator<SqliteRowDynamic> generate(SqliteUdfArgs args) {
+    static SqliteFiberGenerator<SqliteValueTuple<2>> generate(SqliteUdfArgs args) {
         Node* root = reinterpret_cast<Node*>(args[0].as_pointer());
-        return SqliteFiberGenerator<SqliteRowDynamic>([root](const auto& yield) {
+        return SqliteFiberGenerator<SqliteValueTuple<2>>([root](const auto& yield) {
             traverse(root, yield);
         });
     }
@@ -245,10 +247,10 @@ struct MetricsTvf {
         return "CREATE TABLE x(metric TEXT, value INT)";
     }
 
-    static SqliteFiberGenerator<SqliteRowDynamic> generate(SqliteUdfArgs) {
-        return SqliteFiberGenerator<SqliteRowDynamic>([](const auto& yield) {
+    static SqliteFiberGenerator<SqliteValueTuple<2>> generate(SqliteUdfArgs) {
+        return SqliteFiberGenerator<SqliteValueTuple<2>>([](const auto& yield) {
             // Note: raw_state is automatically injected into SqliteContext during xColumn
-            SqliteRowDynamic r1(2);
+            SqliteValueTuple<2> r1;
             r1[0] = SqliteValueOwned::from_text("active_sessions");
             r1[1] = static_cast<sqlite3_int64>(10);
             yield(r1);

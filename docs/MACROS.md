@@ -6,26 +6,25 @@ This document provides a comprehensive technical reference for the macro synthes
 
 ## Architecture Overview
 
-The macro suite is organized into 4 cohesive tiers:
+The macro suite is organized into 4 cohesive functional tiers:
 
 ```
 ┌───────────────────────────────────────────────────────────────────────────┐
-│                           4. TRANSPARENT FUNCTORS                         │
+│               4. 8x8 COMPILE-TIME MATRIX DISPATCH SUITE                   │
+│  SQLITE_DISPATCH_1D_8                  SQLITE_DISPATCH_2D_8X8             │
+│  SQLITE_MAKE_STORAGE_8X8               SQLITE_MAKE_DEFAULT_STORAGE_8X8    │
+├───────────────────────────────────────────────────────────────────────────┤
+│                           3. TRANSPARENT FUNCTORS                         │
 │  SQLITE_DERIVE_TRANSPARENT_EQUAL       SQLITE_DERIVE_TRANSPARENT_LESS     │
 │  SQLITE_DERIVE_TRANSPARENT_SCALAR_HASH SQLITE_DERIVE_TRANSPARENT_ROW_HASH │
 ├───────────────────────────────────────────────────────────────────────────┤
-│                     3. ROW & CONTAINER RELATIONAL OPS                     │
+│                     2. ROW & CONTAINER RELATIONAL OPS                     │
 │  SQLITE_DERIVE_CONTAINER_RELATIONAL_OPS   SQLITE_DERIVE_SCALAR_RELOPS     │
 │  SQLITE_DERIVE_ALL_SCALAR_RELATIONAL_OPS  SQLITE_DERIVE_ALL_REVERSE_OPS   │
 ├───────────────────────────────────────────────────────────────────────────┤
-│                   2. ARRAY ACCESSORS, HASHING & ITERATORS                 │
+│                   1. ARRAY ACCESSORS, HASHING & ITERATORS                 │
 │  SQLITE_DERIVE_ARRAY_ACCESSORS         SQLITE_DERIVE_ARRAY_HASH           │
 │  SQLITE_DERIVE_ARRAY_ITERATOR(ContainerType, ElementType)                 │
-├───────────────────────────────────────────────────────────────────────────┤
-│                   1. SCALAR HETEROGENEOUS OPERATORS                       │
-│  SQLITE_DEF_VAL_PRIM_OPS               SQLITE_DEF_STR_OPS                 │
-│  SQLITE_DEF_VAL_STR_OPS                SQLITE_DEF_BLOB_OPS                │
-│  SQLITE_DEF_VAL_BLOB_OPS               SQLITE_DEF_VAL_VAL_OPS             │
 └───────────────────────────────────────────────────────────────────────────┘
 ```
 
@@ -103,6 +102,39 @@ for (SqliteValueView col : row) {
 }
 ```
 
+### 1.4 `SQLITE_DERIVE_TUPLE_CONSTRUCTORS` & `SQLITE_DERIVE_VEC_CONSTRUCTORS`
+
+Synthesizes universal constructor overloads for `SqliteValueTuple` and `SqliteValueVec`:
+- **Single-Element Primitives**: `(int)`, `(int64_t)`, `(double)`, `(float)`, `(const char*)`, `(SqliteStringView)`, `(SqliteValueOwned)`, `(SqliteValueView)`.
+- **Variadic Heterogeneous Constructor**: `template <typename T0, typename T1, typename... TRest> explicit Container(T0&&, T1&&, TRest&&...)` accepting 2+ arguments with distinct types (e.g. `int`, `const char*`, `double`).
+- **Generic Array (`arr[M]`)**: `template <typename T, size_t M> explicit Container(const T (&arr)[M])`.
+- **Generic Pointer + Count**: `template <typename T> Container(const T* arr, int count)`.
+- **Generic Initializer List**: `template <typename T> Container(std::initializer_list<T> list)`.
+
+#### Usage Examples:
+```cpp
+// 1. Variadic Heterogeneous Arguments (arbitrary different types!)
+SqliteValueTuple<3> t_hetero(1001, "US-WEST-2", 99.75);
+SqliteValueVec<4>   v_hetero(42, "sensor_payload", 3.14159);
+SqliteValueTuple<9> t9_hetero(1, "two", 3.0, 4, "five", 6.0, 7, "eight", 9.0);
+
+// 2. Primitive initializer lists
+SqliteValueTuple<3> t_ints    = { 10, 20, 30 };
+SqliteValueTuple<3> t_doubles = { 1.1, 2.2, 3.3 };
+SqliteValueTuple<3> t_strs    = { "alpha", "beta", "gamma" };
+SqliteValueVec<4>   v_ints    = { 100, 200, 300 };
+
+// 3. Native C-arrays of any type
+int    raw_ints[2] = { 1, 2 };
+double raw_dbls[3] = { 3.1, 4.1, 5.9 };
+SqliteValueTuple<4> t_arr(raw_ints); // Auto-infers size M=2, trailing slots initialized to SQLITE_NULL
+SqliteValueVec<4>   v_arr(raw_dbls); // Resizes vector to size = 3
+
+// 4. Single-element primitive constructors
+SqliteValueTuple<1> t_int(42);
+SqliteValueTuple<1> t_str("device_token");
+```
+
 ---
 
 ## 2. Container Relational Operators (`include/sqlite3_row.hpp`)
@@ -141,7 +173,7 @@ Synthesizes lexicographical relational comparisons against any other container o
 
 ### 2.2 `SQLITE_DERIVE_SCALAR_RELATIONAL_OPS(ScalarType)`
 
-Enables single-column containers (e.g. `SqliteRowView`, `SqliteRowKeyOwned`, `SqliteRowOwnedWrapper`) to compare directly against scalar values without constructing a temporary container:
+Enables single-column containers (e.g. `SqliteRowView`, `SqliteValueTuple<1>`, `SqliteValueVec<N>`, `SqliteRowOwnedWrapper`) to compare directly against scalar values without constructing a temporary container:
 
 ```cpp
 #define SQLITE_DERIVE_SCALAR_RELATIONAL_OPS(ScalarType) \
@@ -233,16 +265,78 @@ Synthesizes zero-allocation row hash overloads for all row spans and containers:
 #define SQLITE_DERIVE_TRANSPARENT_ROW_HASH_OVERLOADS \
     inline size_t operator()(const SqliteRowOwnedWrapper& k) const noexcept { return static_cast<size_t>(k.hash()); } \
     inline size_t operator()(const SqliteRowView& r) const noexcept         { return static_cast<size_t>(r.hash()); } \
-    inline size_t operator()(const SqliteValueViewArray& v) const noexcept  { return static_cast<size_t>(v.hash()); } \
-    inline size_t operator()(const SqliteRowDynamic& r) const noexcept      { return static_cast<size_t>(SqliteRowOwnedWrapper(r).hash()); } \
-    template <size_t N> \
-    inline size_t operator()(const SqliteRowStatic<N>& r) const noexcept    { return static_cast<size_t>(SqliteRowOwnedWrapper(r).hash()); } \
+    template <size_t N, typename Enable> \
+    inline size_t operator()(const SqliteValueTuple<N, Enable>& r) const noexcept { return static_cast<size_t>(r.hash()); } \
+    template <size_t N, typename Enable> \
+    inline size_t operator()(const SqliteValueVec<N, Enable>& r) const noexcept   { return static_cast<size_t>(r.hash()); } \
     SQLITE_DERIVE_TRANSPARENT_SCALAR_HASH_OVERLOADS
 ```
 
 ---
 
-## 4. Class Adoption Matrix
+## 4. Generic $8 \times 8$ Compile-Time Matrix Dispatch Suite (`include/sqlite3_dispatch_8x8.hpp`)
+
+These macros decouple storage containers from runtime branching by mapping dynamic runtime column counts to compile-time `constexpr size_t` template parameters:
+
+### 4.1 `SQLITE_DISPATCH_1D_8(N, runtime_count, ...)`
+
+Dispatches a runtime column count ($1 \dots 8$) to a compile-time `constexpr size_t N` (with $N=9$ fallback for heap):
+
+```cpp
+#define SQLITE_DISPATCH_1D_8(N, runtime_count, ...) \
+    switch ((runtime_count) <= 0 ? 1 : (runtime_count)) { \
+        case 1:  { constexpr size_t N = 1; __VA_ARGS__; } break; \
+        case 2:  { constexpr size_t N = 2; __VA_ARGS__; } break; \
+        case 3:  { constexpr size_t N = 3; __VA_ARGS__; } break; \
+        case 4:  { constexpr size_t N = 4; __VA_ARGS__; } break; \
+        case 5:  { constexpr size_t N = 5; __VA_ARGS__; } break; \
+        case 6:  { constexpr size_t N = 6; __VA_ARGS__; } break; \
+        case 7:  { constexpr size_t N = 7; __VA_ARGS__; } break; \
+        case 8:  { constexpr size_t N = 8; __VA_ARGS__; } break; \
+        default: { constexpr size_t N = 9; __VA_ARGS__; } break; \
+    }
+```
+
+### 4.2 `SQLITE_DISPATCH_2D_8X8(KeyN, ValN, pk_count, val_count, ...)`
+
+Expands all $8 \times 8 = 64$ compile-time template combinations for key and value container pairs:
+
+```cpp
+#define SQLITE_DISPATCH_2D_8X8(KeyN, ValN, pk_count, val_count, ...) \
+    switch ((pk_count) <= 0 ? 1 : (pk_count)) { \
+        case 1:  { constexpr size_t KeyN = 1; SQLITE_DISPATCH_1D_8(ValN, val_count, __VA_ARGS__) } break; \
+        case 2:  { constexpr size_t KeyN = 2; SQLITE_DISPATCH_1D_8(ValN, val_count, __VA_ARGS__) } break; \
+        ... \
+        case 8:  { constexpr size_t KeyN = 8; SQLITE_DISPATCH_1D_8(ValN, val_count, __VA_ARGS__) } break; \
+        default: { constexpr size_t KeyN = 9; SQLITE_DISPATCH_1D_8(ValN, val_count, __VA_ARGS__) } break; \
+    }
+```
+
+### 4.3 `SQLITE_MAKE_STORAGE_8X8` & `SQLITE_MAKE_DEFAULT_STORAGE_8X8`
+
+1-line factory macros instantiating heap containers via `sqlite_new`:
+
+```cpp
+#define SQLITE_MAKE_STORAGE_8X8(ContainerT, KeyT, ValT, pk_count, val_count, ...) \
+    SQLITE_DISPATCH_2D_8X8(_K_N, _V_N, pk_count, val_count, { \
+        return sqlite_new<ContainerT<KeyT<_K_N>, ValT<_V_N>>>(__VA_ARGS__); \
+    })
+
+#define SQLITE_MAKE_DEFAULT_STORAGE_8X8(ContainerT, pk_count, val_count, ...) \
+    SQLITE_MAKE_STORAGE_8X8(ContainerT, SqliteValueTuple, SqliteValueVec, pk_count, val_count, __VA_ARGS__)
+```
+
+#### Example Usage:
+```cpp
+ITableStorage* create_storage(int total_cols, int pk_count, const int* pk_indices) {
+    int val_count = total_cols - pk_count;
+    SQLITE_MAKE_DEFAULT_STORAGE_8X8(MapTableImpl, pk_count, val_count, total_cols, pk_count, pk_indices);
+}
+```
+
+---
+
+## 5. Class Adoption Matrix
 
 The table below summarizes how each class in the codebase implements the macro suite:
 
@@ -250,16 +344,14 @@ The table below summarizes how each class in the codebase implements the macro s
 | :--- | :---: | :---: | :---: | :---: | :---: | :---: |
 | **`SqliteValueOwned`** | N/A | Member | N/A | `SQLITE_DEF_VAL_*_OPS` | Inline | `SqliteValueHash`, `SqliteValueEqual`, `SqliteValueLess` |
 | **`SqliteValueView`** | N/A | Member | N/A | `SQLITE_DEF_VAL_*_OPS` | Inline | `SqliteValueHash`, `SqliteValueEqual`, `SqliteValueLess` |
-| **`SqliteValueViewArray`** | Yes | Yes | Yes | `SQLITE_DERIVE_CONTAINER_RELATIONAL_OPS` | Via Rows | Overloaded in `SqliteRowHash` |
-| **`SqliteValueOwnedStaticArray<N>`** | Yes | Yes | Yes | Container | Via Wrapper | Overloaded in `SqliteRowHash` |
-| **`SqliteValueOwnedDynamicArray`** | Yes | Yes | Yes | Container | Via Wrapper | Overloaded in `SqliteRowHash` |
 | **`SqliteRowView`** | Yes | Yes | Yes | Container + All Scalar | `SQLITE_DERIVE_ALL_REVERSE_RELATIONAL_OPS` | Overloaded in `SqliteRowHash` |
 | **`SqliteRowOwnedWrapper`** | Yes | Yes | Yes | Container + All Scalar | `SQLITE_DERIVE_ALL_REVERSE_RELATIONAL_OPS` | Overloaded in `SqliteRowHash` |
-| **`SqliteRowKeyOwned`** | Yes | Yes | Yes | Container + All Scalar | `SQLITE_DERIVE_ALL_REVERSE_RELATIONAL_OPS` | `SqliteRowKeyHash`, `SqliteRowKeyEqual`, `SqliteRowKeyLess` |
+| **`SqliteValueTuple<N>`** | Yes | Yes | Yes | Container + All Scalar | `SQLITE_DERIVE_ALL_REVERSE_RELATIONAL_OPS` | `SqliteRowHash`, `SqliteRowEqual`, `SqliteRowLess` |
+| **`SqliteValueVec<N>`** | Yes | Yes | Yes | Container + All Scalar | `SQLITE_DERIVE_ALL_REVERSE_RELATIONAL_OPS` | `SqliteRowHash`, `SqliteRowEqual`, `SqliteRowLess` |
 
 ---
 
-## 5. Performance & Safety Guarantees
+## 6. Performance & Safety Guarantees
 
 1. **Zero Allocation Overhead**: All operators and iterators are `inline noexcept` and perform purely register/stack based comparisons without `malloc`, `new`, or heap allocations.
 2. **Strict SQLite Type-Rank Collation**:
@@ -267,3 +359,4 @@ The table below summarizes how each class in the codebase implements the macro s
    Heterogeneous comparisons between scalars strictly honor SQLite's type hierarchy.
 3. **Out-of-Bounds Immunity**: Accessing indices $\ge \text{size}()$ returns static fallback `SQLITE_NULL` instances rather than causing memory faults.
 4. **Transparent Swiss Table Lookups**: Calling `map.find("key")` or `btree.find(42)` compiles to direct scalar-to-column register comparisons with zero temporary object construction.
+5. **Zero-Branch Inner Loops via 8x8 Dispatch**: In-memory tables resolve container template specializations at instantiation time, allowing inner query loops to operate at compile-time fixed offsets with 0 runtime branching.

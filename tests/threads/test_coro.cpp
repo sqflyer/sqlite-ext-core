@@ -4,7 +4,7 @@
  *
  * Verifies RAII C++11 stackful coroutine wrappers (`SqliteCoroutine`), type-erased closure execution,
  * pointer value channeling across yields, range-based `for` loop iteration via `SqliteFiberGenerator<T>`,
- * move semantics, polymorphic `SqliteValueOwned` streaming, fixed-schema row iteration (`SqliteRowStatic`),
+ * move semantics, polymorphic `SqliteValueOwned` streaming, fixed-schema row iteration (`SqliteValueTuple`),
  * and dynamic array expansion across fiber yield points.
  */
 
@@ -15,6 +15,7 @@
 #include "sqlite3_coro.hpp"
 #include "sqlite3_value.hpp"
 #include "sqlite3_row.hpp"
+#include "sqlite3_value_containers.hpp"
 #include "sqlite3_allocator.hpp"
 
 // ----------------------------------------------------------------------------
@@ -309,18 +310,18 @@ void test_polymorphic_value_generator() {
 }
 
 // ----------------------------------------------------------------------------
-// Test 9: Multi-Column Static Rows Streaming (SqliteRowStatic<4>)
+// Test 9: Multi-Column Static Rows Streaming (SqliteValueTuple<4>)
 // ----------------------------------------------------------------------------
 void test_static_rows_streaming() {
-    printf("9. Testing multi-column SqliteRowStatic<4> streaming...\n");
+    printf("9. Testing multi-column SqliteValueTuple<4> streaming...\n");
 
-    SqliteFiberGenerator<SqliteRowStatic<4>> gen([](const SqliteFiberGenerator<SqliteRowStatic<4>>::YieldHandle& yield) {
+    SqliteFiberGenerator<SqliteValueTuple<4>> gen([](const SqliteFiberGenerator<SqliteValueTuple<4>>::YieldHandle& yield) {
         for (int i = 1; i <= 3; ++i) {
-            SqliteRowStatic<4> row;
+            SqliteValueTuple<4> row;
             row[0] = static_cast<sqlite3_int64>(i);
             row[1] = static_cast<sqlite3_int64>(i * i);
             row[2] = static_cast<double>(i) * 1.5;
-            row[3] = SqliteValueOwned::from_text("ROW_ITEM");
+            row[3] = "ROW_ITEM";
             yield(row);
         }
     });

@@ -969,7 +969,6 @@ namespace SqliteValueUtil {
 }
 
 class SqliteValueOwned;
-class SqliteValueViewArray;
 
 /**
  * @brief Zero-cost, non-owning C++ wrapper for `sqlite3_value`.
@@ -1215,14 +1214,60 @@ struct SqliteOwnedValueTag {
         return static_cast<uint8_t>(raw & 0x0F);
     }
 
-    /** @brief Checks if the tag indicates a multi-element row key container (raw == 0). */
-    inline bool is_row_key() const noexcept {
-        return raw == 0;
+    /** @brief Resets/clears the tag byte to 0x00 (uninitialized / empty). */
+    inline void clear() noexcept {
+        raw = 0;
     }
 
-    /** @brief Sets the tag to represent a multi-element row key container (raw = 0). */
-    inline void set_as_row_key() noexcept {
-        raw = 0;
+    /**
+     * @brief Checks if the tag represents an active, initialized SQLite value (raw >= 0x20).
+     * 
+     * ### Bitfield Encoding & 0x20 Threshold Mechanics:
+     * SQLite data types (SQLITE_INTEGER=1, SQLITE_FLOAT=2, SQLITE_TEXT=3, SQLITE_BLOB=4, SQLITE_NULL=5)
+     * are encoded in the high 3 bits (bits 5..7) via `type << 5`:
+     * - `SQLITE_INTEGER` (1): `0b001_00000 = 0x20` (32)
+     * - `SQLITE_FLOAT`   (2): `0b010_00000 = 0x40` (64)
+     * - `SQLITE_TEXT`    (3): `0b011_00000 = 0x60` (96)
+     * - `SQLITE_BLOB`    (4): `0b100_00000 = 0x80` (128)
+     * - `SQLITE_NULL`    (5): `0b101_00000 = 0xA0` (160)
+     * 
+     * Every valid, initialized SQLite value has a type in [1..5], guaranteeing its tag is `raw >= 0x20`.
+     * Uninitialized slots, cleared elements, and row container markers have `type == 0` (`raw == 0x00 < 0x20`).
+     * 
+     * @return True if tag represents an active SQLite value (type != 0).
+     */
+    inline bool is_active() const noexcept {
+        return raw >= 0x20;
+    }
+
+    /**
+     * @brief Checks if raw tag byte represents an active, initialized SQLite value (tag_byte >= 0x20).
+     * @param tag_byte Raw 8-bit tag byte.
+     * @return True if tag_byte >= 0x20.
+     */
+    static inline bool is_active(uint8_t tag_byte) noexcept {
+        return tag_byte >= 0x20;
+    }
+
+    /**
+     * @brief Checks if the tag indicates a heap-allocated container buffer (raw == 0x00 && ptr != nullptr).
+     * @param ptr The container's heap pointer.
+     * @return True if tag is 0x00 (empty/discriminator) and ptr is non-null.
+     */
+    inline bool is_heap_container(const void* ptr) const noexcept {
+        return (raw == 0) & (ptr != nullptr);
+    }
+
+    /**
+     * @brief Checks if a container at the given base pointer is in heap mode (byte 15 == 0x00 && heap_ptr != nullptr).
+     * @param container_this Pointer to the container (e.g. SqliteValueVec).
+     * @param heap_ptr The container's heap buffer pointer.
+     * @return True if byte 15 is 0x00 and heap_ptr != nullptr.
+     */
+    static inline bool is_container_heap(const void* container_this, const void* heap_ptr) noexcept {
+        if (!container_this || !heap_ptr) return false;
+        const uint8_t* raw_bytes = static_cast<const uint8_t*>(container_this);
+        return raw_bytes[15] == 0x00;
     }
 };
 static_assert(sizeof(SqliteOwnedValueTag) == 1, "SqliteOwnedValueTag must be exactly 1 byte!");
@@ -1532,9 +1577,29 @@ public:
     explicit SqliteValueOwned(sqlite3_int64 val, uint8_t subtype = SQLITE_SUBTYPE_NONE, char aff = SQLITE_AFF_INTEGER) noexcept {
         init_integer(val, subtype, aff);
     }
+
+    /** @brief Zero-allocation constructor for storing a standard long integer. */
+    explicit SqliteValueOwned(long val, uint8_t subtype = SQLITE_SUBTYPE_NONE, char aff = SQLITE_AFF_INTEGER) noexcept {
+        init_integer(static_cast<sqlite3_int64>(val), subtype, aff);
+    }
     
     /** @brief Zero-allocation constructor for storing a standard int. */
     explicit SqliteValueOwned(int val, uint8_t subtype = SQLITE_SUBTYPE_NONE, char aff = SQLITE_AFF_INTEGER) noexcept {
+        init_integer(static_cast<sqlite3_int64>(val), subtype, aff);
+    }
+
+    /** @brief Zero-allocation constructor for storing an unsigned int. */
+    explicit SqliteValueOwned(unsigned int val, uint8_t subtype = SQLITE_SUBTYPE_NONE, char aff = SQLITE_AFF_INTEGER) noexcept {
+        init_integer(static_cast<sqlite3_int64>(val), subtype, aff);
+    }
+
+    /** @brief Zero-allocation constructor for storing an unsigned long. */
+    explicit SqliteValueOwned(unsigned long val, uint8_t subtype = SQLITE_SUBTYPE_NONE, char aff = SQLITE_AFF_INTEGER) noexcept {
+        init_integer(static_cast<sqlite3_int64>(val), subtype, aff);
+    }
+
+    /** @brief Zero-allocation constructor for storing an unsigned long long. */
+    explicit SqliteValueOwned(unsigned long long val, uint8_t subtype = SQLITE_SUBTYPE_NONE, char aff = SQLITE_AFF_INTEGER) noexcept {
         init_integer(static_cast<sqlite3_int64>(val), subtype, aff);
     }
     
@@ -1551,6 +1616,16 @@ public:
     /** @brief Constructs an owned string value from a null-terminated C-string. */
     explicit SqliteValueOwned(const char* text, uint8_t subtype = SQLITE_SUBTYPE_NONE) {
         init_text(text, -1, subtype);
+    }
+
+    /** @brief Constructs an owned string value from a SqliteStringView. */
+    explicit SqliteValueOwned(const SqliteStringView& text, uint8_t subtype = SQLITE_SUBTYPE_NONE) {
+        init_text(text.data(), text.size(), subtype);
+    }
+
+    /** @brief Constructs an owned blob value from a SqliteBlobView. */
+    explicit SqliteValueOwned(const SqliteBlobView& blob, uint8_t subtype = SQLITE_SUBTYPE_NONE) {
+        init_blob(blob.data(), blob.size(), subtype);
     }
 
     // ========================================================================
@@ -1721,6 +1796,62 @@ public:
         }
     }
 
+    /**
+     * @brief Returns a canonical static SQLITE_NULL instance (16 bytes, tag = 0xA0).
+     * 
+     * ### 16-Byte Canonical SQL NULL Layout:
+     * - Offset 0..7:   `pValue = nullptr` (64-bit zeroed pointer)
+     * - Offset 8..11:  `heap_len = 0` (32-bit zeroed length)
+     * - Offset 12:     `affinity = SQLITE_AFF_NONE`
+     * - Offset 13:     `reserved = 0`
+     * - Offset 14:     `subtype = SQLITE_SUBTYPE_NONE` (0x00)
+     * - Offset 15:     `tag = 0xA0` (type = SQLITE_NULL = 5, heap = false, len = 0)
+     * 
+     * Because `tag.raw == 0xA0 >= 0x20`, this instance is recognized as an active SQLite value
+     * (`is_active() == true` and `is_null() == true`), distinguishing it from empty/uninitialized
+     * memory slots (`tag.raw == 0x00 < 0x20`).
+     * 
+     * @return Const reference to process-wide static SQLITE_NULL instance.
+     */
+    static inline const SqliteValueOwned& static_null() noexcept {
+        static const SqliteValueOwned kNullInstance;
+        return kNullInstance;
+    }
+
+    /**
+     * @brief Returns a pointer to a canonical static array of 8 SQLITE_NULL instances (128 bytes).
+     * 
+     * ### SIMD Vectorized Initialization (`null_array`):
+     * Container initializers and constructors use `static_null_array()` as a pre-populated template
+     * source for single-burst `memcpy` operations:
+     * - `SqliteValueTuple<N>` copies `N * 16` bytes from this array directly into stack storage.
+     * - GCC/Clang/MSVC lower compile-time constant `memcpy(..., static_null_array(), N * 16)`
+     *   directly to 1–4 vector register instructions (`movups` / `vmovups`), executing in 1–2 CPU clock cycles (~0.3–0.6 ns).
+     * 
+     * @return Const pointer to contiguous array of 8 canonical SQLITE_NULL values.
+     */
+    static inline const SqliteValueOwned* static_null_array() noexcept {
+        static const SqliteValueOwned kNullArray[8] = {
+            SqliteValueOwned(), SqliteValueOwned(), SqliteValueOwned(), SqliteValueOwned(),
+            SqliteValueOwned(), SqliteValueOwned(), SqliteValueOwned(), SqliteValueOwned()
+        };
+        return kNullArray;
+    }
+
+    /**
+     * @brief Resets this value to SQLITE_NULL, releasing heap memory if owned.
+     * 
+     * Safely frees any dynamic `sqlite3_value*` pointer if this instance previously held
+     * a heap-allocated text/blob payload, then performs a 16-byte single-burst SIMD copy
+     * from `static_null()`.
+     */
+    inline void set_null() noexcept {
+        if (is_heap_allocated() && m_sqlite.payload.pValue) {
+            sqlite3_value_free(m_sqlite.payload.pValue);
+        }
+        memcpy(static_cast<void*>(this), static_cast<const void*>(&static_null()), sizeof(SqliteValueOwned));
+    }
+
     // Copy constructor (safe deep clone for heap values, 0-allocation memcpy for SBO)
     SqliteValueOwned(const SqliteValueOwned& other) {
         if (!other.is_heap_allocated()) {
@@ -1798,9 +1929,34 @@ public:
         return *this;
     }
 
-    /** @brief Replaces current value with an integer using init_integer. */
+    /** @brief Replaces current value with a signed int using init_integer. */
     SqliteValueOwned& operator=(int i) noexcept {
         return *this = static_cast<sqlite3_int64>(i);
+    }
+
+    /** @brief Replaces current value with a signed long using init_integer. */
+    SqliteValueOwned& operator=(long l) noexcept {
+        return *this = static_cast<sqlite3_int64>(l);
+    }
+
+    /** @brief Replaces current value with an unsigned int using init_integer. */
+    SqliteValueOwned& operator=(unsigned int u) noexcept {
+        return *this = static_cast<sqlite3_int64>(u);
+    }
+
+    /** @brief Replaces current value with an unsigned long using init_integer. */
+    SqliteValueOwned& operator=(unsigned long u) noexcept {
+        return *this = static_cast<sqlite3_int64>(u);
+    }
+
+    /** @brief Replaces current value with an unsigned long long using init_integer. */
+    SqliteValueOwned& operator=(unsigned long long u) noexcept {
+        return *this = static_cast<sqlite3_int64>(u);
+    }
+
+    /** @brief Replaces current value with a boolean (INTEGER 0 or 1). */
+    SqliteValueOwned& operator=(bool b) noexcept {
+        return *this = static_cast<sqlite3_int64>(b ? 1 : 0);
     }
 
     /** @brief Replaces current value with a double-precision float using init_float. */
@@ -1810,6 +1966,30 @@ public:
         }
         init_float(d);
         return *this;
+    }
+
+    /** @brief Replaces current value with a single-precision float. */
+    SqliteValueOwned& operator=(float f) noexcept {
+        return *this = static_cast<double>(f);
+    }
+
+    /** @brief Replaces current value with a text view / string. */
+    SqliteValueOwned& operator=(const SqliteStringView& str) {
+        return *this = SqliteValueOwned::from_text(str.data(), static_cast<int>(str.length()));
+    }
+
+    /** @brief Replaces current value with a null-terminated C-string. */
+    SqliteValueOwned& operator=(const char* str) {
+        if (!str) {
+            set_null();
+            return *this;
+        }
+        return *this = SqliteValueOwned::from_text(str, SqliteStringUtil::sqlite_strlen(str));
+    }
+
+    /** @brief Replaces current value with a binary blob view. */
+    SqliteValueOwned& operator=(const SqliteBlobView& blob) {
+        return *this = SqliteValueOwned::from_blob(blob.data(), static_cast<int>(blob.size()));
     }
 
     /** @brief Creates an owned duplicate/clone of this value. */
@@ -1850,6 +2030,11 @@ public:
     /** @brief Returns the underlying 1-byte control tag. */
     inline SqliteOwnedValueTag tag() const noexcept {
         return m_sqlite.tag;
+    }
+
+    /** @brief Checks if this value is an active, initialized SQLite value. */
+    inline bool is_active() const noexcept {
+        return m_sqlite.tag.is_active();
     }
 
     /** @brief Returns the 8-bit SQLite subtype (zero-branch shared offset 14). */
@@ -2191,8 +2376,11 @@ inline bool SqliteValueView::operator<(const SqliteValueOwned& other) const {
         return t1 < t2;
     }
 
-    if (t1 == SQLITE_TEXT || t1 == SQLITE_BLOB) {
-        return SqliteValueUtil::less(get(), other.heap_value());
+    if (t1 == SQLITE_TEXT) {
+        return as_text() < other.as_text();
+    }
+    if (t1 == SQLITE_BLOB) {
+        return as_blob() < other.as_blob();
     }
     return false;
 }
@@ -2334,6 +2522,54 @@ SQLITE_DEF_VAL_BLOB_OPS(SqliteValueView, SqliteBlobOwned, data, size)
     inline bool operator<=(int num, const VAL_TYPE& val) { return static_cast<sqlite3_int64>(num) <= val; } \
     inline bool operator>=(const VAL_TYPE& val, int num) { return val >= static_cast<sqlite3_int64>(num); } \
     inline bool operator>=(int num, const VAL_TYPE& val) { return static_cast<sqlite3_int64>(num) >= val; } \
+    inline bool operator==(const VAL_TYPE& val, long num) { return val == static_cast<sqlite3_int64>(num); } \
+    inline bool operator==(long num, const VAL_TYPE& val) { return val == static_cast<sqlite3_int64>(num); } \
+    inline bool operator!=(const VAL_TYPE& val, long num) { return val != static_cast<sqlite3_int64>(num); } \
+    inline bool operator!=(long num, const VAL_TYPE& val) { return val != static_cast<sqlite3_int64>(num); } \
+    inline bool operator<(const VAL_TYPE& val, long num) { return val < static_cast<sqlite3_int64>(num); } \
+    inline bool operator<(long num, const VAL_TYPE& val) { return static_cast<sqlite3_int64>(num) < val; } \
+    inline bool operator>(const VAL_TYPE& val, long num) { return val > static_cast<sqlite3_int64>(num); } \
+    inline bool operator>(long num, const VAL_TYPE& val) { return static_cast<sqlite3_int64>(num) > val; } \
+    inline bool operator<=(const VAL_TYPE& val, long num) { return val <= static_cast<sqlite3_int64>(num); } \
+    inline bool operator<=(long num, const VAL_TYPE& val) { return static_cast<sqlite3_int64>(num) <= val; } \
+    inline bool operator>=(const VAL_TYPE& val, long num) { return val >= static_cast<sqlite3_int64>(num); } \
+    inline bool operator>=(long num, const VAL_TYPE& val) { return static_cast<sqlite3_int64>(num) >= val; } \
+    inline bool operator==(const VAL_TYPE& val, unsigned int num) { return val == static_cast<sqlite3_int64>(num); } \
+    inline bool operator==(unsigned int num, const VAL_TYPE& val) { return val == static_cast<sqlite3_int64>(num); } \
+    inline bool operator!=(const VAL_TYPE& val, unsigned int num) { return val != static_cast<sqlite3_int64>(num); } \
+    inline bool operator!=(unsigned int num, const VAL_TYPE& val) { return val != static_cast<sqlite3_int64>(num); } \
+    inline bool operator<(const VAL_TYPE& val, unsigned int num) { return val < static_cast<sqlite3_int64>(num); } \
+    inline bool operator<(unsigned int num, const VAL_TYPE& val) { return static_cast<sqlite3_int64>(num) < val; } \
+    inline bool operator>(const VAL_TYPE& val, unsigned int num) { return val > static_cast<sqlite3_int64>(num); } \
+    inline bool operator>(unsigned int num, const VAL_TYPE& val) { return static_cast<sqlite3_int64>(num) > val; } \
+    inline bool operator<=(const VAL_TYPE& val, unsigned int num) { return val <= static_cast<sqlite3_int64>(num); } \
+    inline bool operator<=(unsigned int num, const VAL_TYPE& val) { return static_cast<sqlite3_int64>(num) <= val; } \
+    inline bool operator>=(const VAL_TYPE& val, unsigned int num) { return val >= static_cast<sqlite3_int64>(num); } \
+    inline bool operator>=(unsigned int num, const VAL_TYPE& val) { return static_cast<sqlite3_int64>(num) >= val; } \
+    inline bool operator==(const VAL_TYPE& val, unsigned long num) { return val == static_cast<sqlite3_int64>(num); } \
+    inline bool operator==(unsigned long num, const VAL_TYPE& val) { return val == static_cast<sqlite3_int64>(num); } \
+    inline bool operator!=(const VAL_TYPE& val, unsigned long num) { return val != static_cast<sqlite3_int64>(num); } \
+    inline bool operator!=(unsigned long num, const VAL_TYPE& val) { return val != static_cast<sqlite3_int64>(num); } \
+    inline bool operator<(const VAL_TYPE& val, unsigned long num) { return val < static_cast<sqlite3_int64>(num); } \
+    inline bool operator<(unsigned long num, const VAL_TYPE& val) { return static_cast<sqlite3_int64>(num) < val; } \
+    inline bool operator>(const VAL_TYPE& val, unsigned long num) { return val > static_cast<sqlite3_int64>(num); } \
+    inline bool operator>(unsigned long num, const VAL_TYPE& val) { return static_cast<sqlite3_int64>(num) > val; } \
+    inline bool operator<=(const VAL_TYPE& val, unsigned long num) { return val <= static_cast<sqlite3_int64>(num); } \
+    inline bool operator<=(unsigned long num, const VAL_TYPE& val) { return static_cast<sqlite3_int64>(num) <= val; } \
+    inline bool operator>=(const VAL_TYPE& val, unsigned long num) { return val >= static_cast<sqlite3_int64>(num); } \
+    inline bool operator>=(unsigned long num, const VAL_TYPE& val) { return static_cast<sqlite3_int64>(num) >= val; } \
+    inline bool operator==(const VAL_TYPE& val, unsigned long long num) { return val == static_cast<sqlite3_int64>(num); } \
+    inline bool operator==(unsigned long long num, const VAL_TYPE& val) { return val == static_cast<sqlite3_int64>(num); } \
+    inline bool operator!=(const VAL_TYPE& val, unsigned long long num) { return val != static_cast<sqlite3_int64>(num); } \
+    inline bool operator!=(unsigned long long num, const VAL_TYPE& val) { return val != static_cast<sqlite3_int64>(num); } \
+    inline bool operator<(const VAL_TYPE& val, unsigned long long num) { return val < static_cast<sqlite3_int64>(num); } \
+    inline bool operator<(unsigned long long num, const VAL_TYPE& val) { return static_cast<sqlite3_int64>(num) < val; } \
+    inline bool operator>(const VAL_TYPE& val, unsigned long long num) { return val > static_cast<sqlite3_int64>(num); } \
+    inline bool operator>(unsigned long long num, const VAL_TYPE& val) { return static_cast<sqlite3_int64>(num) > val; } \
+    inline bool operator<=(const VAL_TYPE& val, unsigned long long num) { return val <= static_cast<sqlite3_int64>(num); } \
+    inline bool operator<=(unsigned long long num, const VAL_TYPE& val) { return static_cast<sqlite3_int64>(num) <= val; } \
+    inline bool operator>=(const VAL_TYPE& val, unsigned long long num) { return val >= static_cast<sqlite3_int64>(num); } \
+    inline bool operator>=(unsigned long long num, const VAL_TYPE& val) { return static_cast<sqlite3_int64>(num) >= val; } \
     /* Exact type and value match for FLOAT */ \
     inline bool operator==(const VAL_TYPE& val, double num) { \
         if (val.type() != SQLITE_FLOAT) return false; \
@@ -2468,8 +2704,7 @@ SQLITE_DERIVE_TRANSPARENT_LESS(SqliteValueLess)
 #ifndef SQLITE_DERIVE_ARRAY_HASH
 /**
  * @brief Macro helper to synthesize uniform, zero-overhead MurmurHash2 composite hashing
- *        across all array/tabular containers (SqliteValueViewArray, SqliteValueOwnedStaticArray,
- *        SqliteValueOwnedDynamicArray, SqliteRowView, SqliteRowOwnedWrapper, SqliteRowKeyOwned).
+ *        across all array/tabular containers (SqliteValueTuple, SqliteValueVec, SqliteRowView, SqliteRowOwnedWrapper).
  */
 #define SQLITE_DERIVE_ARRAY_HASH \
     inline unsigned long long hash() const noexcept { \
@@ -2523,520 +2758,5 @@ SQLITE_DERIVE_TRANSPARENT_LESS(SqliteValueLess)
     inline Iterator begin() const noexcept { return Iterator(this, 0); } \
     inline Iterator end() const noexcept { return Iterator(this, this->size()); }
 #endif
-
-#ifndef SQLITE3_VALUE_VIEW_ARRAY_DEFINED
-#define SQLITE3_VALUE_VIEW_ARRAY_DEFINED
-
-/**
- * @brief Universal, zero-allocation C++ view wrapper over an array of SQLite values (`sqlite3_value**`).
- * 
- * `SqliteValueViewArray` wraps the raw `(int argc, sqlite3_value** argv)` parameter vectors
- * supplied by SQLite into user-defined scalar functions (UDFs), aggregate step callbacks,
- * window function steps, and virtual table filter/update methods.
- * 
- * Key architectural features:
- * - **Zero Overhead & Zero Heap Allocations**: Pure stack wrapper around raw pointers.
- * - **Complete Bounds Safety**: Indexing past `argc` returns a `SQLITE_NULL` view rather than crashing.
- * - **Direct Typed Extractions**: Fast accessors (`as_int64()`, `as_double()`, `as_text()`, `as_blob()`, `as_bool()`).
- * - **Full Subtype Support**: Direct inspection of 8-bit SQLite subtypes (JSON, UUID, Vector, etc.).
- * - **Range-Based For Loops**: Standard C++ iteration (`for (SqliteValueView val : args)`).
- * - **Backwards Compatibility**: Serves as the modern drop-in implementation for `SqliteUdfArgs`.
- */
-class SqliteValueViewArray {
-private:
-    int             len;  /**< Number of arguments / columns available in the array. */
-    sqlite3_value** raw;  /**< Raw SQLite array of pointer handles (sqlite3_value*). */
-
-public:
-    /**
-     * @brief Constructs an empty, zero-element value array view.
-     */
-    inline SqliteValueViewArray() noexcept : len(0), raw(nullptr) {}
-
-    /**
-     * @brief Constructs a view wrapping a raw argument vector with an explicit count.
-     * 
-     * @param argc Number of elements available in the array.
-     * @param argv Pointer to the array of `sqlite3_value*` handles.
-     */
-    inline SqliteValueViewArray(int argc, sqlite3_value** argv) noexcept
-        : len(argc >= 0 ? argc : 0), raw(argv) {}
-
-    /**
-     * @brief Constructs a view wrapping a raw argument vector with an optional count.
-     * 
-     * @param argv Pointer to the array of `sqlite3_value*` handles.
-     * @param argc Number of elements available in the array (default 0).
-     */
-    inline explicit SqliteValueViewArray(sqlite3_value** argv, int argc = 0) noexcept
-        : len(argc >= 0 ? argc : 0), raw(argv) {}
-
-    // =========================================================================
-    // Size & Capacity Queries
-    // =========================================================================
-
-    /**
-     * @brief Returns the total number of arguments in the array.
-     * 
-     * @return Integer argument count.
-     */
-    inline int size() const noexcept { return len; }
-
-    /**
-     * @brief Alias for size() returning the total argument count.
-     * 
-     * @return Integer argument count.
-     */
-    inline int count() const noexcept { return len; }
-
-    /**
-     * @brief Returns the raw SQLite argc integer count.
-     * 
-     * @return Integer argument count.
-     */
-    inline int argc() const noexcept { return len; }
-
-    /**
-     * @brief Checks whether the array view contains zero arguments.
-     * 
-     * @return True if len == 0 or raw is null, false otherwise.
-     */
-    inline bool empty() const noexcept { return len == 0 || raw == nullptr; }
-
-    // =========================================================================
-    // Raw Handle Accessors
-    // =========================================================================
-
-    /**
-     * @brief Returns the underlying raw `sqlite3_value**` array handle.
-     * 
-     * @return Pointer to the first `sqlite3_value*` element.
-     */
-    inline sqlite3_value** argv() const noexcept { return raw; }
-
-    /**
-     * @brief Returns pointer to the contiguous array of SQLite value handles.
-     * 
-     * @return Pointer to `sqlite3_value*` handles.
-     */
-    inline sqlite3_value** data() const noexcept { return raw; }
-
-    // =========================================================================
-    // Bounds-Safe Element Accessors
-    // =========================================================================
-
-    /**
-     * @brief Safely accesses an argument as a zero-allocation `SqliteValueView`.
-     * 
-     * If the index is out of bounds (< 0 or >= size()), returns a SQLITE_NULL view
-     * to guarantee complete segfault immunity.
-     * 
-     * @param index 0-indexed argument position.
-     * @return Non-owning SqliteValueView wrapper.
-     */
-    inline SqliteValueView operator[](int index) const noexcept {
-        if (!raw || index < 0 || index >= len) {
-            return SqliteValueView(nullptr);
-        }
-        return SqliteValueView(raw[index]);
-    }
-
-    /**
-     * @brief Bounds-safe accessor identical to operator[].
-     * 
-     * @param index 0-indexed argument position.
-     * @return Non-owning SqliteValueView wrapper.
-     */
-    inline SqliteValueView at(int index) const noexcept { return (*this)[index]; }
-
-    // Typed Column Extraction Accessors, Composite Hashing & Iterator
-    SQLITE_DERIVE_ARRAY_ACCESSORS
-    SQLITE_DERIVE_ARRAY_HASH
-    SQLITE_DERIVE_ARRAY_ITERATOR(SqliteValueViewArray, SqliteValueView)
-};
-
-#ifndef SQLITE3_UDF_ARGS_DEFINED
-#define SQLITE3_UDF_ARGS_DEFINED
-/**
- * @brief Type alias providing backwards-compatible nomenclature for scalar UDF arguments.
- */
-typedef SqliteValueViewArray SqliteUdfArgs;
-#endif
-
-#endif // SQLITE3_VALUE_VIEW_ARRAY_DEFINED
-
-// ============================================================================
-// 10. SqliteValueOwnedStaticArray<size_t N>: Stack-Allocated Array of Owned Values
-// ============================================================================
-
-/**
- * @brief Fixed-size, compile-time stack-allocated array storing exactly N SqliteValueOwned elements.
- * 
- * Footprint: Exactly N * 16 Bytes on the stack or in-situ within custom structures.
- * Guaranteed 0 heap allocations for maximum cache locality and execution speed.
- * 
- * @tparam N Number of elements in the array (must be > 0).
- */
-template <size_t N>
-class SqliteValueOwnedStaticArray {
-protected:
-    SqliteValueOwned m_values[N > 0 ? N : 1];
-
-public:
-    /**
-     * @brief Initializes all N elements to SQLITE_NULL.
-     */
-    inline SqliteValueOwnedStaticArray() noexcept {}
-
-    /**
-     * @brief Copies and materializes up to N elements from a non-owning SqliteValueViewArray.
-     * 
-     * @param view The SqliteValueViewArray to snapshot.
-     */
-    inline explicit SqliteValueOwnedStaticArray(const SqliteValueViewArray& view) noexcept {
-        int limit = static_cast<int>(N);
-        if (view.size() < limit) limit = view.size();
-        for (int i = 0; i < limit; ++i) {
-            m_values[i] = view[i].to_owned();
-        }
-    }
-
-    /**
-     * @brief Returns the fixed compile-time element count N.
-     * 
-     * @return Integer element count.
-     */
-    inline int size() const noexcept { return static_cast<int>(N); }
-
-    /**
-     * @brief Alias for size() returning the compile-time element count.
-     * 
-     * @return Integer element count.
-     */
-    inline int count() const noexcept { return static_cast<int>(N); }
-
-    /**
-     * @brief Checks whether the static array contains zero elements.
-     * 
-     * @return True if N == 0, false otherwise.
-     */
-    inline bool empty() const noexcept { return N == 0; }
-
-    /**
-     * @brief Subscript operator providing mutable reference to an element.
-     * 
-     * @param index 0-indexed element position (clamped to valid range).
-     * @return Mutable reference to the SqliteValueOwned element.
-     */
-    inline SqliteValueOwned& operator[](int index) noexcept {
-        return m_values[index >= 0 && index < static_cast<int>(N) ? index : 0];
-    }
-
-    /**
-     * @brief Subscript operator providing const reference to an element.
-     * 
-     * @param index 0-indexed element position (clamped to valid range).
-     * @return Const reference to the SqliteValueOwned element.
-     */
-    inline const SqliteValueOwned& operator[](int index) const noexcept {
-        return m_values[index >= 0 && index < static_cast<int>(N) ? index : 0];
-    }
-
-    /**
-     * @brief Bounds-checked mutable element accessor.
-     * 
-     * @param index 0-indexed element position.
-     * @return Mutable reference to the SqliteValueOwned element.
-     */
-    inline SqliteValueOwned& at(int index) noexcept { return (*this)[index]; }
-
-    /**
-     * @brief Bounds-checked const element accessor.
-     * 
-     * @param index 0-indexed element position.
-     * @return Const reference to the SqliteValueOwned element.
-     */
-    inline const SqliteValueOwned& at(int index) const noexcept { return (*this)[index]; }
-
-    /**
-     * @brief Returns read-only pointer to the contiguous array of SqliteValueOwned elements.
-     * 
-     * @return Const pointer to the first element.
-     */
-    inline const SqliteValueOwned* data() const noexcept { return m_values; }
-
-    /**
-     * @brief Returns mutable pointer to the contiguous array of SqliteValueOwned elements.
-     * 
-     * @return Mutable pointer to the first element.
-     */
-    // Typed Column Extraction Accessors, Composite Hashing & Iterator
-    SQLITE_DERIVE_ARRAY_ACCESSORS
-    SQLITE_DERIVE_ARRAY_HASH
-    SQLITE_DERIVE_ARRAY_ITERATOR(SqliteValueOwnedStaticArray, const SqliteValueOwned&)
-};
-
-// ============================================================================
-// 11. SqliteValueOwnedDynamicArray: Runtime-Sized Heap Array (sqlite3_malloc64)
-// ============================================================================
-
-/**
- * @brief Dynamic heap-allocated array container for SQLite values.
- * 
- * Allocates a contiguous buffer of SqliteValueOwned using SQLite's native memory allocator
- * (sqlite3_malloc64 / sqlite3_free). Integrates zero-dependency move semantics and placement new/delete.
- */
-class SqliteValueOwnedDynamicArray {
-protected:
-    SqliteValueOwned* m_values;
-    int               m_len;
-
-public:
-    /**
-     * @brief Constructs an empty dynamic value array.
-     */
-    inline SqliteValueOwnedDynamicArray() noexcept : m_values(nullptr), m_len(0) {}
-
-    /**
-     * @brief Constructs a dynamic array with pre-allocated element count, initialized to SQLITE_NULL.
-     * 
-     * @param count Number of elements to allocate.
-     */
-    inline explicit SqliteValueOwnedDynamicArray(int count) : m_values(nullptr), m_len(0) {
-        resize(count);
-    }
-
-    /**
-     * @brief Constructs and materializes a dynamic array snapshot from a value view array.
-     * 
-     * @param view Non-owning SqliteValueViewArray to copy.
-     */
-    inline SqliteValueOwnedDynamicArray(const SqliteValueViewArray& view) : m_values(nullptr), m_len(0) {
-        int sz = view.size();
-        if (sz > 0) {
-            resize(sz);
-            for (int i = 0; i < m_len; ++i) {
-                m_values[i] = view[i].to_owned();
-            }
-        }
-    }
-
-    /**
-     * @brief Destructor that invokes element destructors and frees the contiguous array.
-     */
-    inline ~SqliteValueOwnedDynamicArray() {
-        clear();
-    }
-
-    /**
-     * @brief Copy constructor performing deep copies of all elements.
-     * 
-     * @param other The array to copy.
-     */
-    inline SqliteValueOwnedDynamicArray(const SqliteValueOwnedDynamicArray& other) : m_values(nullptr), m_len(0) {
-        if (other.m_len > 0) {
-            resize(other.m_len);
-            for (int i = 0; i < m_len; ++i) {
-                m_values[i] = other.m_values[i].clone();
-            }
-        }
-    }
-
-    /**
-     * @brief Copy assignment operator with deep copy semantics.
-     * 
-     * @param other The array to copy.
-     * @return Reference to this array.
-     */
-    inline SqliteValueOwnedDynamicArray& operator=(const SqliteValueOwnedDynamicArray& other) {
-        if (this != &other) {
-            if (other.m_len == 0) {
-                clear();
-            } else {
-                resize(other.m_len);
-                for (int i = 0; i < m_len; ++i) {
-                    m_values[i] = other.m_values[i].clone();
-                }
-            }
-        }
-        return *this;
-    }
-
-    /**
-     * @brief Move constructor transferring pointer ownership in 1 CPU cycle.
-     * 
-     * @param other Rvalue array to move from.
-     */
-    inline SqliteValueOwnedDynamicArray(SqliteValueOwnedDynamicArray&& other) noexcept
-        : m_values(other.m_values), m_len(other.m_len) {
-        other.m_values = nullptr;
-        other.m_len = 0;
-    }
-
-    /**
-     * @brief Move assignment operator adopting pointer ownership.
-     * 
-     * @param other Rvalue array to move from.
-     * @return Reference to this array.
-     */
-    inline SqliteValueOwnedDynamicArray& operator=(SqliteValueOwnedDynamicArray&& other) noexcept {
-        if (this != &other) {
-            clear();
-            m_values = other.m_values;
-            m_len = other.m_len;
-            other.m_values = nullptr;
-            other.m_len = 0;
-        }
-        return *this;
-    }
-
-    /**
-     * @brief Destructs all element objects and frees allocated heap memory.
-     */
-    inline void clear() noexcept {
-        if (m_values) {
-            sqlite_destroy_n(m_values, static_cast<size_t>(m_len));
-            sqlite_delete_array(m_values);
-            m_values = nullptr;
-        }
-        m_len = 0;
-    }
-
-    /**
-     * @brief Resizes the element array using in-place reallocation, initializing new slots to SQLITE_NULL and preserving existing data.
-     * 
-     * @param new_count The desired new element count.
-     */
-    inline void resize(int new_count) {
-        if (new_count < 0) new_count = 0;
-        if (new_count == m_len) return;
-
-        if (new_count == 0) {
-            clear();
-            return;
-        }
-
-        // Shrinking: destruct elements being discarded before realloc
-        if (new_count < m_len) {
-            sqlite_destroy_n(m_values + new_count, static_cast<size_t>(m_len - new_count));
-        }
-
-        // Reallocate contiguous memory block (0-copy if expanded in place)
-        SqliteValueOwned* new_vals = sqlite_reallocate_array(m_values, static_cast<size_t>(new_count));
-        if (!new_vals) {
-            return; // OOM safety: original buffer preserved
-        }
-
-        // Growing: placement default-construct (init to SQLITE_NULL) new slots
-        if (new_count > m_len) {
-            for (int i = m_len; i < new_count; ++i) {
-                sqlite_construct_at(&new_vals[i]);
-            }
-        }
-
-        m_values = new_vals;
-        m_len = new_count;
-    }
-
-    /**
-     * @brief Returns the total number of elements in the array.
-     * 
-     * @return Integer element count.
-     */
-    inline int size() const noexcept { return m_len; }
-
-    /**
-     * @brief Alias for size() returning the total element count.
-     * 
-     * @return Integer element count.
-     */
-    inline int count() const noexcept { return m_len; }
-
-    /**
-     * @brief Checks if the array has 0 elements.
-     * 
-     * @return True if length == 0, false otherwise.
-     */
-    inline bool empty() const noexcept { return m_len == 0; }
-
-    /**
-     * @brief Subscript operator providing mutable access to an element.
-     * 
-     * @param index 0-indexed element position.
-     * @return Mutable reference to the SqliteValueOwned element.
-     */
-    inline SqliteValueOwned& operator[](int index) noexcept {
-        return m_values[index >= 0 && index < m_len ? index : 0];
-    }
-
-    /**
-     * @brief Subscript operator providing const access to an element.
-     * 
-     * @param index 0-indexed element position.
-     * @return Const reference to the SqliteValueOwned element.
-     */
-    inline const SqliteValueOwned& operator[](int index) const noexcept {
-        return m_values[index >= 0 && index < m_len ? index : 0];
-    }
-
-    /**
-     * @brief Bounds-checked mutable element accessor.
-     * 
-     * @param index 0-indexed element position.
-     * @return Mutable reference to the SqliteValueOwned element.
-     */
-    inline SqliteValueOwned& at(int index) noexcept { return (*this)[index]; }
-
-    /**
-     * @brief Bounds-checked const element accessor.
-     * 
-     * @param index 0-indexed element position.
-     * @return Const reference to the SqliteValueOwned element.
-     */
-    inline const SqliteValueOwned& at(int index) const noexcept { return (*this)[index]; }
-
-    /**
-     * @brief Returns read-only pointer to the contiguous array of owned values.
-     * 
-     * @return Const pointer to the first element.
-     */
-    inline const SqliteValueOwned* data() const noexcept { return m_values; }
-
-    /**
-     * @brief Returns mutable pointer to the contiguous array of owned values.
-     * 
-     * @return Mutable pointer to the first element.
-     */
-    inline SqliteValueOwned* data() noexcept { return m_values; }
-
-    // Typed Column Extraction Accessors, Composite Hashing & Iterator
-    SQLITE_DERIVE_ARRAY_ACCESSORS
-    SQLITE_DERIVE_ARRAY_HASH
-    SQLITE_DERIVE_ARRAY_ITERATOR(SqliteValueOwnedDynamicArray, const SqliteValueOwned&)
-};
-
-// ============================================================================
-// 12. SqliteValueOwnedArray<size_t N>: Unified Owned Value Array Template
-// ============================================================================
-
-/**
- * @brief Unified Owned Value Array template alias.
- * - SqliteValueOwnedArray<N> (N > 0): Stack-allocated SqliteValueOwnedStaticArray<N> (0 heap allocations).
- * - SqliteValueOwnedArray<0>: Dynamic heap-allocated SqliteValueOwnedDynamicArray (runtime sizing).
- */
-template <size_t N = 0>
-class SqliteValueOwnedArray : public SqliteValueOwnedStaticArray<N> {
-public:
-    using SqliteValueOwnedStaticArray<N>::SqliteValueOwnedStaticArray;
-};
-
-/**
- * @brief Specialization of SqliteValueOwnedArray for N=0 mapping to SqliteValueOwnedDynamicArray.
- */
-template <>
-class SqliteValueOwnedArray<0> : public SqliteValueOwnedDynamicArray {
-public:
-    using SqliteValueOwnedDynamicArray::SqliteValueOwnedDynamicArray;
-};
 
 #endif // SQLITE3_VALUE_HPP

@@ -23,9 +23,9 @@ endif
 
 export PATH UNAME_S CXX CC SAN_FLAGS
 
-.PHONY: test test-asan test-ext-state test-cpp-value test-cpp-row test-cpp-row-key test-locks test-cpp-allocator test-cpp-smart-ptr test-cpp-udf test-cpp-aggregate test-cpp-statement test-cpp-tvf test-cpp-transaction test-cpp-db test-cpp-buffer test-cpp-blob-stream test-cpp-backup test-cpp-vtab test-cpp-extension test-threads test-time test-oom test-multi-tu example-cpp example-c example-coro-c example-coro-cpp leak-check-integration clean
+.PHONY: test test-asan test-ext-state test-cpp-value test-cpp-row test-cpp-value-containers test-locks test-cpp-allocator test-cpp-smart-ptr test-cpp-udf test-cpp-aggregate test-cpp-statement test-cpp-tvf test-cpp-transaction test-cpp-db test-cpp-buffer test-cpp-blob-stream test-cpp-backup test-cpp-vtab test-cpp-extension test-threads test-time test-oom test-multi-tu example-cpp example-c example-coro-c example-coro-cpp leak-check-integration clean
 
-test: test-ext-state test-cpp-value test-cpp-row test-cpp-row-key test-locks test-time test-oom test-multi-tu test-cpp-allocator test-cpp-smart-ptr test-cpp-udf test-cpp-aggregate test-cpp-statement test-cpp-tvf test-cpp-transaction test-cpp-db test-cpp-buffer test-cpp-blob-stream test-cpp-backup test-cpp-vtab test-cpp-extension test-threads
+test: test-ext-state test-cpp-value test-cpp-row test-cpp-value-containers test-locks test-time test-oom test-multi-tu test-cpp-allocator test-cpp-smart-ptr test-cpp-udf test-cpp-aggregate test-cpp-statement test-cpp-tvf test-cpp-transaction test-cpp-db test-cpp-buffer test-cpp-blob-stream test-cpp-backup test-cpp-vtab test-cpp-extension test-threads
 
 test-asan:
 	@echo "=== Running AddressSanitizer (ASan) Memory Verification ==="
@@ -50,8 +50,8 @@ test-cpp-value:
 test-cpp-row:
 	$(MAKE) -C tests/cpp_row test
 
-test-cpp-row-key:
-	$(MAKE) -C tests/cpp_row_key test
+test-cpp-value-containers:
+	$(MAKE) -C tests/cpp_value_containers test
 
 test-cpp-allocator:
 	$(MAKE) -C tests/allocator test
@@ -118,7 +118,7 @@ clean:
 	$(MAKE) -C tests/ext_state clean
 	$(MAKE) -C tests/cpp_value clean
 	$(MAKE) -C tests/cpp_row clean
-	$(MAKE) -C tests/cpp_row_key clean
+	$(MAKE) -C tests/cpp_value_containers clean
 	$(MAKE) -C tests/cpp_udf clean
 	$(MAKE) -C tests/cpp_aggregate clean
 	$(MAKE) -C tests/cpp_statement clean

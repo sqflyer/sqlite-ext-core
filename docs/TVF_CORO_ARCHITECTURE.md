@@ -16,7 +16,7 @@ Traditional SQLite Table-Valued Functions (TVFs) require implementing a 5-method
 `sqlite3_tvf_coro.hpp` solves all three issues:
 - **Natural Procedural Execution**: The developer writes a single sequential `generate(SqliteUdfArgs)` function.
 - **Unified Generator Support**: Supports both **Stackful Fibers (`SqliteFiberGenerator<T>`)** for recursive tree traversals and **Stackless C++20 Coroutines (`SqliteGenerator<T>`)** for flat loops in ~48-byte frames.
-- **Static Column Multiplexing**: Automatically dispatches scalar values, `SqliteValueOwned`, `SqliteRowStatic<N>`, and `SqliteRowDynamic` to the SQLite context without manual `switch (i)` boilerplate.
+- **Static Column Multiplexing**: Automatically dispatches scalar values, `SqliteValueOwned`, `SqliteValueTuple<N>`, and `SqliteValueVec<N>` to the SQLite context without manual `switch (i)` boilerplate.
 
 ---
 
@@ -31,7 +31,7 @@ Traditional SQLite Table-Valued Functions (TVFs) require implementing a 5-method
                ▼
    decltype(T::generate(SqliteUdfArgs(0, nullptr)))
                │
-               ├─────────────────────────► GeneratorType (e.g. SqliteFiberGenerator<SqliteRowStatic<3>>)
+               ├─────────────────────────► GeneratorType (e.g. SqliteFiberGenerator<SqliteValueTuple<3>>)
                │
                ▼
    sqlite_declval<GeneratorType>().value()
@@ -39,7 +39,7 @@ Traditional SQLite Table-Valued Functions (TVFs) require implementing a 5-method
                ▼
    sqlite_remove_cv<decltype(...)>::type
                │
-               └─────────────────────────► ValueType     (e.g. SqliteRowStatic<3>)
+               └─────────────────────────► ValueType     (e.g. SqliteValueTuple<3>)
 ```
 
 ### Implementation:
@@ -69,8 +69,8 @@ When SQLite invokes `xColumn(cur, ctx, col_idx)`, the engine requests the value 
                                         │
         ┌───────────────────────────────┼───────────────────────────────┐
         ▼                               ▼                               ▼
- [Scalar Types]                 [Static Rows]                   [Dynamic Rows]
- (int, int64, double, string)   (SqliteRowStatic<N>)            (SqliteRowDynamic)
+ [Scalar Types]                 [Static Tuples]                 [Dynamic Vectors]
+ (int, int64, double, string)   (SqliteValueTuple<N>)           (SqliteValueVec<N>)
         │                               │                               │
         ▼                               ▼                               ▼
  if (col_idx == 0)              if (col_idx < N)                if (col_idx < row.size())
@@ -81,8 +81,8 @@ When SQLite invokes `xColumn(cur, ctx, col_idx)`, the engine requests the value 
 1. **Primitives**: `sqlite3_int64`, `int`, `double`, `const char*`.
 2. **String Views**: `SqliteStringView` (direct sized pointer transfer without null-termination allocations).
 3. **Owned Polymorphic Values**: `SqliteValueOwned` (`val.result(ctx.get())`).
-4. **Fixed-Size Static Row Arrays**: `SqliteRowStatic<N>` (indexed `row[col_idx].result(ctx.get())` with bounds checking).
-5. **Dynamic Row Buffers**: `SqliteRowDynamic` (multi-column dynamic arrays).
+4. **Fixed-Size Static Row Tuples**: `SqliteValueTuple<N>` (indexed `row[col_idx].result(ctx.get())` with bounds checking).
+5. **Dynamic Row Vectors**: `SqliteValueVec<N>` (multi-column dynamic vectors).
 
 ---
 

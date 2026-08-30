@@ -1,6 +1,7 @@
 #include <sqlite3.h>
 #define SQLITE_CORE
 #include "../../include/sqlite3_value.hpp"
+#include "../../include/sqlite3_value_containers.hpp"
 #include <stdio.h>
 #include <assert.h>
 #include <string.h>
@@ -472,6 +473,66 @@ void test_cross_type_relational_operators(sqlite3* db) {
     assert(val_str < bv);
     assert(val_blob > str_owned);
     
+    sqlite3_finalize(stmt);
+}
+
+void test_exhaustive_value_relational_operators(sqlite3* db) {
+    // 1. Setup SQLite statement to produce SqliteValueView across all 5 datatypes
+    sqlite3_stmt* stmt = nullptr;
+    assert(sqlite3_prepare_v2(db, "SELECT NULL, 42, 3.14, 'alpha', X'01020304';", -1, &stmt, nullptr) == SQLITE_OK);
+    assert(sqlite3_step(stmt) == SQLITE_ROW);
+
+    SqliteValueView v_null(sqlite3_column_value(stmt, 0));
+    SqliteValueView v_int(sqlite3_column_value(stmt, 1));
+    SqliteValueView v_float(sqlite3_column_value(stmt, 2));
+    SqliteValueView v_text(sqlite3_column_value(stmt, 3));
+    SqliteValueView v_blob(sqlite3_column_value(stmt, 4));
+
+    // 2. Setup SqliteValueOwned counterparts
+    SqliteValueOwned o_null;
+    SqliteValueOwned o_int(42);
+    SqliteValueOwned o_float(3.14);
+    SqliteValueOwned o_text("alpha");
+    const uint8_t blob_bytes[] = { 0x01, 0x02, 0x03, 0x04 };
+    SqliteBlobView bv(blob_bytes, 4);
+    SqliteValueOwned o_blob(bv);
+
+    // Equality across identical representations
+    assert(o_null == o_null); assert(v_null == v_null); assert(o_null == v_null); assert(v_null == o_null);
+    assert(o_int == o_int);   assert(v_int == v_int);   assert(o_int == v_int);   assert(v_int == o_int);
+    assert(o_float == o_float); assert(v_float == v_float); assert(o_float == v_float); assert(v_float == o_float);
+    assert(o_text == o_text); assert(v_text == v_text); assert(o_text == v_text); assert(v_text == o_text);
+    assert(o_blob == o_blob); assert(v_blob == v_blob); assert(o_blob == v_blob); assert(v_blob == o_blob);
+
+    // Type Rank Collation Invariants: NULL (0) < NUMERIC (1) < TEXT (2) < BLOB (3)
+    assert(o_null < o_int);   assert(v_null < v_int);   assert(o_null < v_int);   assert(v_null < o_int);
+    assert(o_int < o_text);   assert(v_int < v_text);   assert(o_int < v_text);   assert(v_int < o_text);
+    assert(o_text < o_blob);  assert(v_text < v_blob);  assert(o_text < v_blob);  assert(v_text < o_blob);
+
+    // Scalar primitives comparison in both orientations
+    assert(o_int == 42); assert(42 == o_int);
+    assert(o_int == 42LL); assert(42LL == o_int);
+    assert(o_int == 42u); assert(42u == o_int);
+    assert(o_int == 42UL); assert(42UL == o_int);
+    assert(o_int == 42ULL); assert(42ULL == o_int);
+    assert(o_int < 50); assert(50 > o_int);
+
+    assert(v_int == 42); assert(42 == v_int);
+    assert(v_int == 42LL); assert(42LL == v_int);
+    assert(v_int == 42u); assert(42u == v_int);
+    assert(v_int < 50); assert(50 > v_int);
+
+    assert(o_float == 3.14); assert(3.14 == o_float);
+    assert(v_float == 3.14); assert(3.14 == v_float);
+
+    assert(o_text == "alpha"); assert("alpha" == o_text);
+    assert(o_text == SqliteStringView("alpha")); assert(SqliteStringView("alpha") == o_text);
+    assert(v_text == "alpha"); assert("alpha" == v_text);
+    assert(v_text == SqliteStringView("alpha")); assert(SqliteStringView("alpha") == v_text);
+
+    assert(o_blob == bv); assert(bv == o_blob);
+    assert(v_blob == bv); assert(bv == v_blob);
+
     sqlite3_finalize(stmt);
 }
 
@@ -982,171 +1043,128 @@ void test_owned_move_and_self_assign_safety(sqlite3* db) {
 }
 
 void test_owned_value_arrays() {
-    // 1. Static Array (Stack, 0 heap allocations)
-    static_assert(sizeof(SqliteValueOwnedStaticArray<3>) == 48, "SqliteValueOwnedStaticArray<3> must be exactly 48 bytes!");
-    static_assert(sizeof(SqliteValueOwnedStaticArray<4>) == 64, "SqliteValueOwnedStaticArray<4> must be exactly 64 bytes!");
+    // 1. Static Key Tuple (Stack, 0 heap allocations)
+    static_assert(sizeof(SqliteValueTuple<3>) == 48, "SqliteValueTuple<3> must be exactly 48 bytes!");
+    static_assert(sizeof(SqliteValueTuple<4>) == 64, "SqliteValueTuple<4> must be exactly 64 bytes!");
 
-    SqliteValueOwnedStaticArray<3> static_arr;
-    assert(static_arr.size() == 3);
-    assert(static_arr.count() == 3);
-    assert(!static_arr.empty());
-    assert(static_arr[0].is_null());
+    SqliteValueTuple<3> static_tuple;
+    assert(static_tuple.size() == 3);
+    assert(static_tuple.count() == 3);
+    assert(!static_tuple.empty());
+    assert(static_tuple[0].is_null());
 
-    static_arr[0] = 500LL;
-    static_arr[1] = SqliteValueOwned::from_text("static_test");
-    static_arr[2] = 3.14159;
+    static_tuple[0] = SqliteValueOwned(500LL);
+    static_tuple[1] = SqliteValueOwned::from_text("static_test");
+    static_tuple[2] = SqliteValueOwned(3.14159);
 
-    assert(static_arr.as_int64(0) == 500);
-    assert(static_arr.as_text(1) == "static_test");
-    assert(static_arr.as_double(2) == 3.14159);
-    assert(static_arr.type(0) == SQLITE_INTEGER);
-    assert(static_arr.type(1) == SQLITE_TEXT);
-    assert(static_arr.type(2) == SQLITE_FLOAT);
+    assert(static_tuple.as_int64(0) == 500);
+    assert(static_tuple.as_text(1) == "static_test");
+    assert(static_tuple.as_double(2) == 3.14159);
+    assert(static_tuple.type(0) == SQLITE_INTEGER);
+    assert(static_tuple.type(1) == SQLITE_TEXT);
+    assert(static_tuple.type(2) == SQLITE_FLOAT);
 
-    // 2. Dynamic Array (Heap, sqlite3_malloc64)
-    SqliteValueOwnedDynamicArray dyn_arr(3);
-    assert(dyn_arr.size() == 3);
-    assert(!dyn_arr.empty());
+    // 2. Adaptive Vector (SBO Stack + Heap Spill)
+    SqliteValueVec<4> dyn_vec;
+    dyn_vec.resize(3);
+    assert(dyn_vec.size() == 3);
+    assert(!dyn_vec.empty());
+    assert(dyn_vec.is_inline());
 
-    dyn_arr[0] = 100LL;
-    dyn_arr[1] = SqliteValueOwned::from_text("dyn_test");
-    dyn_arr[2] = 99.9;
+    dyn_vec[0] = SqliteValueOwned(100LL);
+    dyn_vec[1] = SqliteValueOwned::from_text("dyn_test");
+    dyn_vec[2] = SqliteValueOwned(99.9);
 
-    assert(dyn_arr.as_int64(0) == 100);
-    assert(dyn_arr.as_text(1) == "dyn_test");
-    assert(dyn_arr.as_double(2) == 99.9);
+    assert(dyn_vec.as_int64(0) == 100);
+    assert(dyn_vec.as_text(1) == "dyn_test");
+    assert(dyn_vec.as_double(2) == 99.9);
 
     // Copy Constructor
-    SqliteValueOwnedDynamicArray dyn_copy = dyn_arr;
+    SqliteValueVec<4> dyn_copy = dyn_vec;
     assert(dyn_copy.size() == 3);
     assert(dyn_copy.as_int64(0) == 100);
     assert(dyn_copy.as_text(1) == "dyn_test");
 
     // Move Constructor
-    SqliteValueOwnedDynamicArray dyn_moved = sqlite_move(dyn_arr);
+    SqliteValueVec<4> dyn_moved = sqlite_move(dyn_vec);
     assert(dyn_moved.size() == 3);
     assert(dyn_moved.as_int64(0) == 100);
-    assert(dyn_arr.empty());
-    assert(dyn_arr.size() == 0);
+    assert(dyn_vec.empty());
+    assert(dyn_vec.size() == 0);
 
-    // Dynamic Resize (Grow & Shrink)
+    // Dynamic Resize (Grow & Spilling to Heap)
     dyn_moved.resize(5);
     assert(dyn_moved.size() == 5);
+    assert(!dyn_moved.is_inline());
     assert(dyn_moved.as_int64(0) == 100);
     assert(dyn_moved.is_null(3));
     assert(dyn_moved.is_null(4));
 
-    // Dynamic Shrink
+    // Dynamic Shrink back to Stack
     dyn_moved.resize(2);
     assert(dyn_moved.size() == 2);
+    assert(dyn_moved.is_inline());
     assert(dyn_moved.as_int64(0) == 100);
     assert(dyn_moved.as_text(1) == "dyn_test");
 
-    // 3. Unified Template Alias SqliteValueOwnedArray
-    SqliteValueOwnedArray<2> unified_static;
-    unified_static[0] = 42LL;
-    unified_static[1] = 2.718;
-    assert(unified_static.size() == 2);
-    assert(unified_static.as_int64(0) == 42);
-
-    SqliteValueOwnedArray<0> unified_dyn(2);
-    unified_dyn[0] = 777LL;
-    unified_dyn[1] = SqliteValueOwned::from_text("unified");
-    assert(unified_dyn.size() == 2);
-    assert(unified_dyn.as_int64(0) == 777);
-    assert(unified_dyn.as_text(1) == "unified");
-
-    // 4. Test SQLITE_DERIVE_ARRAY_HASH across array containers
-    assert(static_arr.hash() != 0);
+    // 3. Test SQLITE_DERIVE_ARRAY_HASH across containers
+    assert(static_tuple.hash() != 0);
     assert(dyn_copy.hash() != 0);
-    assert(unified_static.hash() != 0);
-    assert(unified_dyn.hash() != 0);
 }
 
 void test_value_array_iterators(sqlite3* db) {
-    // 1. SqliteValueOwnedStaticArray<3> Iterator
-    SqliteValueOwnedStaticArray<3> s_arr;
-    s_arr[0] = 10LL;
-    s_arr[1] = 20LL;
-    s_arr[2] = 30LL;
+    // 1. SqliteValueTuple<3> Iterator
+    SqliteValueTuple<3> s_tuple;
+    s_tuple[0] = SqliteValueOwned(10LL);
+    s_tuple[1] = SqliteValueOwned(20LL);
+    s_tuple[2] = SqliteValueOwned(30LL);
 
     sqlite3_int64 s_sum = 0;
     int s_count = 0;
-    for (const SqliteValueOwned& val : s_arr) {
+    for (const SqliteValueOwned& val : s_tuple) {
         s_sum += val.as_int64();
         s_count++;
     }
     assert(s_count == 3);
     assert(s_sum == 60);
 
-    // 2. SqliteValueOwnedDynamicArray Iterator
-    SqliteValueOwnedDynamicArray d_arr(3);
-    d_arr[0] = SqliteValueOwned::from_text("alpha");
-    d_arr[1] = SqliteValueOwned::from_text("beta");
-    d_arr[2] = SqliteValueOwned::from_text("gamma");
+    // 2. SqliteValueVec<4> Iterator
+    SqliteValueVec<4> d_vec;
+    d_vec.resize(3);
+    d_vec[0] = SqliteValueOwned::from_text("alpha");
+    d_vec[1] = SqliteValueOwned::from_text("beta");
+    d_vec[2] = SqliteValueOwned::from_text("gamma");
 
     int d_count = 0;
-    for (const SqliteValueOwned& val : d_arr) {
+    for (const SqliteValueOwned& val : d_vec) {
         assert(val.type() == SQLITE_TEXT);
         d_count++;
     }
     assert(d_count == 3);
 
-    // 3. SqliteValueOwnedArray<N> Unified Alias Iterators
-    SqliteValueOwnedArray<2> u_static;
-    u_static[0] = 100LL;
-    u_static[1] = 200LL;
-    sqlite3_int64 u_sum = 0;
-    for (const SqliteValueOwned& val : u_static) {
-        u_sum += val.as_int64();
-    }
-    assert(u_sum == 300);
-
-    SqliteValueOwnedArray<0> u_dyn(2);
-    u_dyn[0] = 5.5;
-    u_dyn[1] = 4.5;
-    double d_sum = 0.0;
-    for (const SqliteValueOwned& val : u_dyn) {
-        d_sum += val.as_double();
-    }
-    assert(d_sum == 10.0);
-
-    // 4. SqliteValueViewArray Iterator (via UDF argument mock / statement)
+    // 3. SqliteRowView Iterator (via statement row)
     sqlite3_stmt* stmt = nullptr;
     assert(sqlite3_prepare_v2(db, "SELECT 111, 'text_val', 3.14;", -1, &stmt, nullptr) == SQLITE_OK);
     assert(sqlite3_step(stmt) == SQLITE_ROW);
 
-    sqlite3_value* vals[3];
-    vals[0] = sqlite3_column_value(stmt, 0);
-    vals[1] = sqlite3_column_value(stmt, 1);
-    vals[2] = sqlite3_column_value(stmt, 2);
-
-    SqliteValueViewArray v_arr(3, vals);
-    assert(v_arr.size() == 3);
+    SqliteRowView r_view(stmt);
+    assert(r_view.size() == 3);
     int v_count = 0;
-    for (SqliteValueView val : v_arr) {
+    for (SqliteValueView val : r_view) {
         assert(!val.is_null());
         v_count++;
     }
     assert(v_count == 3);
 
-    // 5. Empty Array Iterator
-    SqliteValueOwnedDynamicArray empty_dyn(0);
+    // 4. Empty Container Iterator
+    SqliteValueVec<4> empty_vec(0);
     int empty_count = 0;
-    for (const SqliteValueOwned& val : empty_dyn) {
+    for (const SqliteValueOwned& val : empty_vec) {
         (void)val;
         empty_count++;
     }
     assert(empty_count == 0);
-    assert(empty_dyn.begin() == empty_dyn.end());
-
-    SqliteValueViewArray empty_v_arr(0, nullptr);
-    for (SqliteValueView val : empty_v_arr) {
-        (void)val;
-        empty_count++;
-    }
-    assert(empty_count == 0);
-    assert(empty_v_arr.begin() == empty_v_arr.end());
+    assert(empty_vec.begin() == empty_vec.end());
 
     sqlite3_finalize(stmt);
 }
@@ -1189,6 +1207,8 @@ int main() {
     
     printf("Testing Relational Operators...\n");
     test_relational_operators(db);
+    test_cross_type_relational_operators(db);
+    test_exhaustive_value_relational_operators(db);
     
     printf("Testing Value Move Semantics...\n");
     test_value_move_semantics();

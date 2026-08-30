@@ -10,25 +10,23 @@ An exhaustive architectural reference and comparative matrix across all types, c
 | :--- | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :--- |
 | **`SqliteValueView`** | 8 Bytes | Non-Owning | Stack / Register (wraps `const sqlite3_value*`) | N/A | Zero-copy inspection | Derived from storage | `SqliteValueHash`<br>`SqliteValueEqual`<br>`SqliteValueLess` | Reading UDF arguments (`argv[i]`) and statement columns with 0 allocations. |
 | **`SqliteValueOwned`** | 16 Bytes | Owning (RAII) | In-Situ Dual Union / Heap (`sqlite3_value_dup`) | Strings $\le 13$B<br>Blobs $\le 14$B | Offset 14 (Zero-branch) | Native byte (Offset 12) | `SqliteValueHash`<br>`SqliteValueEqual`<br>`SqliteValueLess` | General-purpose SQLite value storage, map keys, accumulator state, and cache entries. |
-| **`SqliteStringView`** | 16 Bytes | Non-Owning | Pointer (`const char*`) + 4B length | N/A | N/A | Text (`'B'`) | `SqliteRowKeyHash`<br>`SqliteValueHash` | Transient text inspection and zero-allocation map lookups. |
-| **`SqliteStringOwned`** | 8 Bytes | Owning (RAII) | Heap dynamic string builder (`sqlite3_str*`) | Dynamic growth | N/A | Text (`'B'`) | `SqliteRowKeyHash`<br>`SqliteValueHash` | High-efficiency dynamic string concatenation and formatting for UDF results. |
-| **`SqliteBlobView`** | 16 Bytes | Non-Owning | Pointer (`const void*`) + 4B length | N/A | N/A | Blob (`'A'`) | `SqliteRowKeyHash`<br>`SqliteValueHash` | Non-owning binary data inspection (vectors, serialized structs, images). |
-| **`SqliteBlobOwned`** | 16 Bytes | Owning (RAII) | Dynamic heap buffer (`sqlite3_malloc64`) | Dynamic | N/A | Blob (`'A'`) | `SqliteRowKeyHash`<br>`SqliteValueHash` | Owned binary payload lifecycle management with explicit byte size tracking. |
+| **`SqliteStringView`** | 16 Bytes | Non-Owning | Pointer (`const char*`) + 4B length | N/A | N/A | Text (`'B'`) | `SqliteRowHash`<br>`SqliteValueHash` | Transient text inspection and zero-allocation map lookups. |
+| **`SqliteStringOwned`** | 8 Bytes | Owning (RAII) | Heap dynamic string builder (`sqlite3_str*`) | Dynamic growth | N/A | Text (`'B'`) | `SqliteRowHash`<br>`SqliteValueHash` | High-efficiency dynamic string concatenation and formatting for UDF results. |
+| **`SqliteBlobView`** | 16 Bytes | Non-Owning | Pointer (`const void*`) + 4B length | N/A | N/A | Blob (`'A'`) | `SqliteRowHash`<br>`SqliteValueHash` | Non-owning binary data inspection (vectors, serialized structs, images). |
+| **`SqliteBlobOwned`** | 16 Bytes | Owning (RAII) | Dynamic heap buffer (`sqlite3_malloc64`) | Dynamic | N/A | Blob (`'A'`) | `SqliteRowHash`<br>`SqliteValueHash` | Owned binary payload lifecycle management with explicit byte size tracking. |
 
 ---
 
-## 2. Row, Key & Array Container Matrix (`sqlite3_value.hpp`, `sqlite3_row.hpp`, `sqlite3_row_key.hpp`)
+## 2. Value Containers & Row Views Matrix (`sqlite3_value_containers.hpp`, `sqlite3_row.hpp`)
 
-| Container Type | Memory Size | Ownership | Storage Mechanism | SBO Capacity | Cache Density (64B Line) | Range-Based `for` Iterator | Transparent STL Functors |
-| :--- | :---: | :---: | :---: | :---: | :---: | :---: | :---: |
-| **`SqliteRowKeyOwned`** | **16 Bytes** | Owning (RAII) | In-situ Mode A ($N=1$) / Heap Mode B ($N \ge 2$) | 1 column in-situ (0 mallocs) | **4 keys / line** | `for (const auto& val : key)` | `SqliteRowKeyHash`<br>`SqliteRowKeyEqual`<br>`SqliteRowKeyLess` |
-| **`SqliteRowOwnedWrapper`** | **16 Bytes** | Non-Owning | 8B Pointer (`SqliteValueOwned*`) + 4B Length | N/A (Spans any buffer) | **4 spans / line** | `for (const auto& val : row)` | `SqliteRowHash`<br>`SqliteRowKeyHash` |
-| **`SqliteRowView`** | **24 Bytes** | Non-Owning | Tagged union (Stmt / Argv / Value Array / View Array) | N/A (Universal view) | 2 rows / line | `for (SqliteValueView col : row)` | `SqliteRowHash`<br>`SqliteRowKeyHash` |
-| **`SqliteRowStatic<N>`** | **$N \times 16$ Bytes** | Owning (RAII) | Contiguous Stack / In-Situ Array | Full stack storage ($N$ cols) | $4/N$ rows / line | `for (const auto& val : row)` | `SqliteRowHash`<br>`SqliteRowKeyHash` |
-| **`SqliteRowDynamic`** | **16 Bytes (Handle)** | Owning (RAII) | Single Heap Block (`sqlite3_malloc64`) | 0 (All columns on heap) | 4 handles / line | `for (const auto& val : row)` | `SqliteRowHash`<br>`SqliteRowKeyHash` |
-| **`SqliteValueViewArray`** | **16 Bytes** | Non-Owning | Pointer (`const sqlite3_value**`) + Length | N/A (Wraps UDF `argv`) | 4 spans / line | `for (SqliteValueView val : arr)` | `SqliteRowHash`<br>`SqliteRowKeyHash` |
-| **`SqliteValueOwnedStaticArray<N>`** | **$N \times 16$ Bytes** | Owning (RAII) | Stack Array of `SqliteValueOwned` | $N$ elements in-situ | $4/N$ arrays / line | `for (const auto& val : arr)` | `SqliteRowHash`<br>`SqliteRowKeyHash` |
-| **`SqliteValueOwnedDynamicArray`** | **16 Bytes (Handle)** | Owning (RAII) | Contiguous Heap Array (`sqlite3_malloc64`) | 0 (Dynamic allocation) | 4 handles / line | `for (const auto& val : arr)` | `SqliteRowHash`<br>`SqliteRowKeyHash` |
+| Container Type | Memory Size | Ownership | Storage Mechanism | SBO Capacity | Cache Density (64B Line) | Range-Based `for` Iterator | Transparent STL Functors | Primary Use Case |
+| :--- | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :--- |
+| **`SqliteValueTuple<N>`** ($N \le 8$) | **$N \times 16$ Bytes** | Owning (RAII) | Exact in-situ Stack Array | Full Stack ($N$ columns) | $4/N$ tuples / line | `for (const auto& v : tuple)` | `SqliteRowHash`<br>`SqliteRowEqual`<br>`SqliteRowLess` | Fixed-arity Primary Keys, Composite Index Keys, and Fixed-Schema Records ($0\text{ mallocs}$). |
+| **`SqliteValueTuple<N>`** ($N \ge 9$) | **16 Bytes** | Owning (RAII) | Heap Dynamic Buffer (`sqlite3_malloc64`) | 0 (All on heap) | 4 handles / line | `for (const auto& v : tuple)` | `SqliteRowHash`<br>`SqliteRowEqual`<br>`SqliteRowLess` | Large fixed-column records exceeding standard stack limits. |
+| **`SqliteValueVec<N>`** ($N \le 8$) | **$N \times 16$ Bytes** | Owning (RAII) | Adaptive In-Situ Stack SBO $\le N$, Spills to Heap if $> N$ | Up to $N$ columns in-situ | $4/N$ vectors / line | `for (const auto& v : vec)` | `SqliteRowHash`<br>`SqliteRowEqual`<br>`SqliteRowLess` | Dynamic payload rows, non-PK value columns, variable-length scratch vectors with reversible stack/heap lifecycle. |
+| **`SqliteValueVec<N>`** ($N \ge 9$) | **16 Bytes** | Owning (RAII) | Direct Heap Dynamic Vector (`sqlite3_malloc64`) | 0 (All on heap) | 4 handles / line | `for (const auto& v : vec)` | `SqliteRowHash`<br>`SqliteRowEqual`<br>`SqliteRowLess` | Large runtime variable-column payload records. |
+| **`SqliteRowOwnedWrapper`** | **16 Bytes** | Non-Owning | 8B Pointer (`SqliteValueOwned*`) + 4B Length | N/A (Spans any contiguous buffer) | **4 spans / line** | `for (const auto& v : span)` | `SqliteRowHash`<br>`SqliteRowEqual`<br>`SqliteRowLess` | Zero-allocation non-owning span parameter over any `SqliteValueOwned` contiguous sequence. |
+| **`SqliteRowView`** (`SqliteUdfArgs`) | **24 Bytes** | Non-Owning | Tagged union (`sqlite3_stmt*`, `sqlite3_value**`, `SqliteValueView*`) + Length | N/A (Universal view) | 2 rows / line | `for (SqliteValueView col : row)` | `SqliteRowHash`<br>`SqliteRowEqual`<br>`SqliteRowLess` | Zero-allocation inspection over prepared statement step rows, UDF `argv` arguments, and view arrays. |
 
 ---
 
@@ -38,16 +36,14 @@ All comparisons are macro-derived, symmetric, zero-allocation, and strictly conf
 
 $$\text{NULL} (0) < \text{NUMERIC} (1) < \text{TEXT} (2) < \text{BLOB} (3)$$
 
-| Left \ Right | `SqliteValueOwned` | `SqliteValueView` | `SqliteRowView` | `SqliteRowKeyOwned` | `SqliteRowOwnedWrapper` | `SqliteValueViewArray` | Primitives (`int`, `int64`, `double`, `bool`, `const char*`) |
+| Left \ Right | `SqliteValueOwned` | `SqliteValueView` | `SqliteRowView` | `SqliteValueTuple<N>` | `SqliteValueVec<N>` | `SqliteRowOwnedWrapper` | Primitives (`int`, `int64`, `double`, `bool`, `const char*`) |
 | :--- | :---: | :---: | :---: | :---: | :---: | :---: | :---: |
-| **`SqliteValueOwned`** | Full (Symmetric) | Full (Symmetric) | Full (1-Column) | Full (Mode A) | Full (1-Column) | Full (1-Column) | Full (Symmetric) |
-| **`SqliteValueView`** | Full (Symmetric) | Full (Symmetric) | Full (1-Column) | Full (Mode A) | Full (1-Column) | Full (1-Column) | Full (Symmetric) |
+| **`SqliteValueOwned`** | Full (Symmetric) | Full (Symmetric) | Full (1-Column) | Full (1-Column) | Full (1-Column) | Full (1-Column) | Full (Symmetric) |
+| **`SqliteValueView`** | Full (Symmetric) | Full (Symmetric) | Full (1-Column) | Full (1-Column) | Full (1-Column) | Full (1-Column) | Full (Symmetric) |
 | **`SqliteRowView`** | Full (1-Column) | Full (1-Column) | Full (Lexicographical) | Full (Symmetric) | Full (Symmetric) | Full (Symmetric) | Full (1-Column) |
-| **`SqliteRowKeyOwned`** | Full (Mode A) | Full (Mode A) | Full (Symmetric) | Full (Lexicographical) | Full (Symmetric) | Full (Symmetric) | Full (Mode A) |
-| **`SqliteRowOwnedWrapper`** | Full (1-Column) | Full (1-Column) | Full (Symmetric) | Full (Symmetric) | Full (Lexicographical) | Full (Symmetric) | Full (1-Column) |
-| **`SqliteValueViewArray`** | Full (1-Column) | Full (1-Column) | Full (Symmetric) | Full (Symmetric) | Full (Symmetric) | Full (Lexicographical) | Full (1-Column) |
-| **`SqliteRowStatic<N>`** | Via Wrapper | Via Wrapper | Full (Symmetric) | Full (Symmetric) | Full (Symmetric) | Full (Symmetric) | Via Wrapper |
-| **`SqliteRowDynamic`** | Via Wrapper | Via Wrapper | Full (Symmetric) | Full (Symmetric) | Full (Symmetric) | Full (Symmetric) | Via Wrapper |
+| **`SqliteValueTuple<N>`** | Full (1-Column) | Full (1-Column) | Full (Symmetric) | Full (Lexicographical) | Full (Symmetric) | Full (Symmetric) | Full (1-Column) |
+| **`SqliteValueVec<N>`** | Full (1-Column) | Full (1-Column) | Full (Symmetric) | Full (Symmetric) | Full (Lexicographical) | Full (Symmetric) | Full (1-Column) |
+| **`SqliteRowOwnedWrapper`** | Full (1-Column) | Full (1-Column) | Full (Symmetric) | Full (Symmetric) | Full (Symmetric) | Full (Lexicographical) | Full (1-Column) |
 
 ---
 
@@ -59,14 +55,10 @@ This matrix details which macro synthesizers are implemented by each class:
 | :--- | :---: | :---: | :---: | :---: | :---: | :---: | :---: |
 | **`SqliteValueOwned`** | N/A | Member | N/A | `SQLITE_DEF_VAL_*_OPS` | Inlined | Inlined | `SqliteValueHash`, `SqliteValueEqual`, `SqliteValueLess` |
 | **`SqliteValueView`** | N/A | Member | N/A | `SQLITE_DEF_VAL_*_OPS` | Inlined | Inlined | `SqliteValueHash`, `SqliteValueEqual`, `SqliteValueLess` |
-| **`SqliteValueViewArray`** | **Yes** | **Yes** | **Yes** | **Yes** | Via Rows | Via Rows | Overloaded in `SqliteRowHash` |
-| **`SqliteValueOwnedStaticArray<N>`** | **Yes** | **Yes** | **Yes** | Container | Via Wrapper | Via Wrapper | Overloaded in `SqliteRowHash` |
-| **`SqliteValueOwnedDynamicArray`** | **Yes** | **Yes** | **Yes** | Container | Via Wrapper | Via Wrapper | Overloaded in `SqliteRowHash` |
 | **`SqliteRowView`** | **Yes** | **Yes** | **Yes** | **Yes** | **Yes** | **Yes** | `SqliteRowHash`, `SqliteRowEqual`, `SqliteRowLess` |
 | **`SqliteRowOwnedWrapper`** | **Yes** | **Yes** | **Yes** | **Yes** | **Yes** | **Yes** | `SqliteRowHash`, `SqliteRowEqual`, `SqliteRowLess` |
-| **`SqliteRowKeyOwned`** | **Yes** | **Yes** | **Yes** | **Yes** | **Yes** | **Yes** | `SqliteRowKeyHash`, `SqliteRowKeyEqual`, `SqliteRowKeyLess` |
-| **`SqliteRowDynamic`** | Via Wrapper | Via Wrapper | Via Array | View Forwarding | Via Wrapper | Via Wrapper | Overloaded in `SqliteRowHash` |
-| **`SqliteRowStatic<N>`** | Via Wrapper | Via Wrapper | Via Array | View Forwarding | Via Wrapper | Via Wrapper | Overloaded in `SqliteRowHash` |
+| **`SqliteValueTuple<N>`** | **Yes** | **Yes** | **Yes** | **Yes** | **Yes** | **Yes** | `SqliteRowHash`, `SqliteRowEqual`, `SqliteRowLess` |
+| **`SqliteValueVec<N>`** | **Yes** | **Yes** | **Yes** | **Yes** | **Yes** | **Yes** | `SqliteRowHash`, `SqliteRowEqual`, `SqliteRowLess` |
 
 ---
 
@@ -113,7 +105,7 @@ This matrix details which macro synthesizers are implemented by each class:
 
 ---
 
-## 9. Extension Extensibility Matrix (`sqlite3_udf.hpp`, `sqlite3_tvf.hpp`, `sqlite3_vtab.hpp`)
+## 9. Extension Extensibility Matrix (`sqlite3_udf.hpp`, `sqlite3_tvf.hpp`, `sqlite3_vtab.hpp`, `sqlite3_vtab_arg.hpp`, `sqlite3_dispatch_8x8.hpp`)
 
 | Extensibility Mechanism | Component Class | State Binding | Lifecycle Management | Result Delivery | Use Case |
 | :--- | :--- | :--- | :--- | :--- | :--- |
@@ -122,6 +114,8 @@ This matrix details which macro synthesizers are implemented by each class:
 | **Table-Valued Function (TVF)** | `SqliteTvf` | In-memory row cursor | Row generator iteration | Column population | Dynamic row-generating functions. |
 | **Coroutine TVF (M:N)** | `SqliteTvfCoro` | Fiber / Coroutine State | Cooperative `co_yield` | Multi-threaded Worker Pool | Asynchronous I/O, heavy computation, streaming. |
 | **Virtual Table (Full)** | `SqliteVTable` | Module + VTable + Cursor | Full xCreate/xConnect/xFilter/xUpdate | Direct SQLite VDBE integration | Custom storage engines, indexes, external APIs. |
+| **VTab Argument Parser** | `SqliteVTabArgs` / `SqliteVTabArg` | Stateless Argument Reflection | Parser & Validator | `args.validate()`, `args.pk_count()` | Structured parsing of `argv` parameters, column schemas, and multi-PK definitions. |
+| **8x8 Matrix Dispatcher** | `SQLITE_MAKE_DEFAULT_STORAGE_8X8` | Compile-Time Template Matrix | Dynamic Factory Instantiation | Storage Pointer | $8 \times 8 = 64$ compile-time template specializations based on runtime PK and Value counts. |
 
 ---
 
@@ -131,9 +125,11 @@ This matrix details which macro synthesizers are implemented by each class:
 | :--- | :--- | :--- | :--- | :--- |
 | **`std::unordered_map<SqliteValueOwned, T>`** | `SqliteValueHash` | `SqliteValueEqual` | N/A | `SqliteValueOwned`, `SqliteValueView`, `SqliteStringView`, `SqliteBlobView`, `int`, `sqlite3_int64`, `double`, `bool`, `const char*` |
 | **`std::map<SqliteValueOwned, T>`** | N/A | N/A | `SqliteValueLess` | `SqliteValueOwned`, `SqliteValueView`, `SqliteStringView`, `SqliteBlobView`, `int`, `sqlite3_int64`, `double`, `bool`, `const char*` |
-| **`std::unordered_map<SqliteRowKeyOwned, T>`**| `SqliteRowKeyHash` | `SqliteRowKeyEqual` | N/A | `SqliteRowKeyOwned`, `SqliteRowOwnedWrapper`, `SqliteRowView`, `SqliteValueViewArray`, `SqliteValueOwned`, `SqliteValueView`, `SqliteStringView`, `SqliteBlobView`, primitives |
-| **`std::map<SqliteRowKeyOwned, T>`** | N/A | N/A | `SqliteRowKeyLess` | `SqliteRowKeyOwned`, `SqliteRowOwnedWrapper`, `SqliteRowView`, `SqliteValueViewArray`, `SqliteValueOwned`, `SqliteValueView`, `SqliteStringView`, `SqliteBlobView`, primitives |
-| **`std::unordered_map<SqliteRowDynamic, T>`** | `SqliteRowHash` | `SqliteRowEqual` | N/A | `SqliteRowDynamic`, `SqliteRowOwnedWrapper`, `SqliteRowView`, `SqliteValueViewArray`, `SqliteRowStatic<N>`, `SqliteValueOwned`, primitives |
-| **`std::map<SqliteRowDynamic, T>`** | N/A | N/A | `SqliteRowLess` | `SqliteRowDynamic`, `SqliteRowOwnedWrapper`, `SqliteRowView`, `SqliteValueViewArray`, `SqliteRowStatic<N>`, `SqliteValueOwned`, primitives |
-| **`std::unordered_map<SqliteStringOwned, T>`**| `SqliteValueHash` | `SqliteValueEqual` | N/A | `SqliteStringOwned`, `SqliteStringView`, `const char*` |
+| **`std::unordered_map<SqliteValueTuple<N>, T>`**| `SqliteRowHash` | `SqliteRowEqual` | N/A | `SqliteValueTuple<N>`, `SqliteValueVec<N>`, `SqliteRowOwnedWrapper`, `SqliteRowView`, `SqliteValueOwned`, `SqliteValueView`, `SqliteStringView`, `SqliteBlobView`, primitives |
+| **`std::map<SqliteValueTuple<N>, T>`** | N/A | N/A | `SqliteRowLess` | `SqliteValueTuple<N>`, `SqliteValueVec<N>`, `SqliteRowOwnedWrapper`, `SqliteRowView`, `SqliteValueOwned`, `SqliteValueView`, `SqliteStringView`, `SqliteBlobView`, primitives |
+| **`std::unordered_map<SqliteValueVec<N>, T>`** | `SqliteRowHash` | `SqliteRowEqual` | N/A | `SqliteValueVec<N>`, `SqliteValueTuple<N>`, `SqliteRowOwnedWrapper`, `SqliteRowView`, `SqliteValueOwned`, `SqliteValueView`, `SqliteStringView`, `SqliteBlobView`, primitives |
+| **`std::map<SqliteValueVec<N>, T>`** | N/A | N/A | `SqliteRowLess` | `SqliteValueVec<N>`, `SqliteValueTuple<N>`, `SqliteRowOwnedWrapper`, `SqliteRowView`, `SqliteValueOwned`, `SqliteValueView`, `SqliteStringView`, `SqliteBlobView`, primitives |
+| **`std::unordered_map<SqliteRowOwnedWrapper, T>`**| `SqliteRowHash` | `SqliteRowEqual` | N/A | `SqliteRowOwnedWrapper`, `SqliteValueTuple<N>`, `SqliteValueVec<N>`, `SqliteRowView`, `SqliteValueOwned`, primitives |
+| **`std::map<SqliteRowOwnedWrapper, T>`** | N/A | N/A | `SqliteRowLess` | `SqliteRowOwnedWrapper`, `SqliteValueTuple<N>`, `SqliteValueVec<N>`, `SqliteRowView`, `SqliteValueOwned`, primitives |
+| **`std::unordered_map<SqliteStringOwned, T>`** | `SqliteValueHash` | `SqliteValueEqual` | N/A | `SqliteStringOwned`, `SqliteStringView`, `const char*` |
 | **`std::map<SqliteStringOwned, T>`** | N/A | N/A | `SqliteValueLess` | `SqliteStringOwned`, `SqliteStringView`, `const char*` |

@@ -35,18 +35,15 @@ In SQLite extension development, values appear in two distinct contexts:
 │  [16 Bytes]            [8 Bytes]                   [16 Bytes]               │
 └─────────────────────────────────────────────────────────────────────────────┘
                                      │
-         Compose via SqliteValueOwnedStaticArray<N> / SqliteValueOwnedDynamicArray
+         Compose via SqliteValueTuple<N> / SqliteValueVec<N>
                                      ▼
 ┌──────────────────────────────────────────────────────────────────────────────────┐
-│                            OWNED ARRAY CLASSES                                   │
+│                            VALUE CONTAINERS (sqlite3_value_containers.hpp)       │
 │ (Contiguous N × 16B arrays of SqliteValueOwned, RAII-managed)                    │
 │                                                                                  │
-│  SqliteValueOwnedStaticArray<N>           SqliteValueOwnedDynamicArray           │
-│  (Stack — N columns, 0 mallocs)           (Heap — sqlite3_realloc64-managed)     │
-│  [N × 16 Bytes on Stack/In-Situ]          [16 Bytes handle → Heap Array]         │
-│                                                                                  │
-│          SqliteValueOwnedArray<N>         (Unified template alias)               │
-│  N > 0 → SqliteValueOwnedStaticArray<N>    N == 0 → SqliteValueOwnedDynamicArray │
+│  SqliteValueTuple<N>                      SqliteValueVec<N>                      │
+│  (Stack Tuples — N cols, 0 mallocs)       (Adaptive SBO Vector — Stack/Spill)    │
+│  [N × 16 Bytes on Stack/In-Situ]          [N × 16B In-Situ / Heap Array]         │
 └──────────────────────────────────────────────────────────────────────────────────┘
 ```
 
@@ -65,13 +62,12 @@ In SQLite extension development, values appear in two distinct contexts:
 | **UDF / Statement Interop** | `.result()`, `.bind()` | `.result()`, `.bind()` | `.result()`, `.bind()` | `.result()`, `.bind()` |
 | **Heterogeneous Lookups** | 144+ operators | 144+ operators | Operators for `std::map` | Operators for `std::map` |
 
-### Owned Array Summary
+### Value Container Summary
 
 | Type | Storage | Allocation | Use Case |
 | :--- | :--- | :--- | :--- |
-| `SqliteValueOwnedStaticArray<N>` | Stack / In-Situ | **0 Mallocs** | Fixed-schema caches, VTable rows |
-| `SqliteValueOwnedDynamicArray` | Heap (`sqlite3_realloc64`) | 1 `sqlite3_malloc64` | Runtime-sized row materialization |
-| `SqliteValueOwnedArray<N>` | Alias: Static ($N>0$) / Dynamic ($N=0$) | — | Generic algorithms |
+| `SqliteValueTuple<N>` | Stack / In-Situ ($N \le 8$) | **0 Mallocs** | Fixed-arity Primary Keys, Composite Indexes |
+| `SqliteValueVec<N>` | Adaptive SBO Stack / Heap | **0 Mallocs** (Stack) / Spill | Adaptive dynamic rows, scratch vectors |
 
 ---
 
@@ -202,83 +198,63 @@ assert(a.is_null()); // Moved-from instance is safely reset to NULL
 
 ---
 
-## 5. Owned Value Arrays (`SqliteValueOwnedStaticArray`, `SqliteValueOwnedDynamicArray`)
+## 5. Value Containers (`SqliteValueTuple<N>`, `SqliteValueVec<N>`)
 
-These classes provide contiguous RAII-managed arrays of `SqliteValueOwned` elements — the foundational building blocks from which the Row classes in `sqlite3_row.hpp` are derived.
+These classes provide contiguous RAII-managed arrays of `SqliteValueOwned` elements with 100% stack data density. For complete documentation, see [`docs/VALUE_CONTAINERS_README.md`](VALUE_CONTAINERS_README.md).
 
-### `SqliteValueOwnedStaticArray<N>` — Stack-Allocated Array
+### `SqliteValueTuple<N>` — Stack-Allocated Fixed-Arity Tuple
 
 ```cpp
 // Exactly N * 16 bytes on the stack — zero heap allocations
-SqliteValueOwnedStaticArray<4> static_arr;
-static_arr[0] = 42LL;
-static_arr[1] = SqliteValueOwned::from_text("hello");
-static_arr[2] = 3.14;
-static_arr[3] = SqliteValueOwned(); // SQLITE_NULL
+SqliteValueTuple<4> static_tuple;
+static_tuple[0] = 42LL;
+static_tuple[1] = SqliteValueOwned("hello");
+static_tuple[2] = 3.14;
+static_tuple[3] = SqliteValueOwned(); // SQLITE_NULL
 
-assert(static_arr.size() == 4);
+assert(static_tuple.size() == 4);
 
 // Element access
-SqliteValueOwned& elem = static_arr[2];
-SqliteValueView   view = static_arr.view_at(2); // non-owning view
+SqliteValueOwned& elem = static_tuple[2];
+SqliteRowOwnedWrapper view = static_tuple.view(); // non-owning span
 ```
 
-### `SqliteValueOwnedDynamicArray` — Heap-Allocated Resizable Array
+### `SqliteValueVec<N>` — Adaptive SBO Vector
 
 ```cpp
-// Allocates N * 16 bytes via sqlite3_malloc64
-SqliteValueOwnedDynamicArray dyn_arr(3);
-dyn_arr[0] = 1LL;
-dyn_arr[1] = SqliteValueOwned::from_text("world");
-dyn_arr[2] = 2.71828;
+// Allocates in-situ on stack for size <= N, dynamically spills to heap if > N
+SqliteValueVec<4> vec;
+vec.resize(3);
+vec[0] = 1LL;
+vec[1] = SqliteValueOwned("world");
+vec[2] = 2.71828;
 
-// Resize preserving existing elements (uses sqlite3_realloc64 for in-place growth)
-dyn_arr.resize(5);
-assert(dyn_arr.size() == 5);
-assert(dyn_arr[0].as_int64() == 1);
-assert(dyn_arr[3].is_null()); // New elements are SQLITE_NULL
+// Resize preserving existing elements
+vec.resize(5); // Spills to heap dynamically
+assert(vec.size() == 5);
+assert(vec[0].as_int64() == 1);
+assert(vec[3].is_null()); // New elements are SQLITE_NULL
 
-// 1-cycle move (transfers 8-byte pointer)
-SqliteValueOwnedDynamicArray moved = sqlite_move(dyn_arr);
-assert(dyn_arr.empty()); // Source safely zeroed
+// 1-cycle move
+SqliteValueVec<4> moved = sqlite_move(vec);
+assert(vec.empty()); // Source safely zeroed
 ```
 
 ### Typed Extraction Accessors & Composite Hashing (`SQLITE_DERIVE_ARRAY_ACCESSORS`, `SQLITE_DERIVE_ARRAY_HASH`)
 
-Both `SqliteValueOwnedStaticArray<N>` and `SqliteValueOwnedDynamicArray` utilize unified macros to synthesize zero-overhead direct column extractors and 64-bit MurmurHash2 composite hashing:
+Both `SqliteValueTuple<N>` and `SqliteValueVec<N>` utilize unified macros to synthesize zero-overhead direct column extractors and 64-bit MurmurHash2 composite hashing:
 
 ```cpp
 // Direct typed extraction without indexing into intermediate values
-sqlite3_int64 id   = dyn_arr.as_int64();   // Defaults to index 0 (64-bit integer)
-int           id32 = dyn_arr.as_int(0);     // 32-bit integer
-SqliteStringView s = dyn_arr.as_text(1);    // Non-owning string view
-double        val  = dyn_arr.as_double(2);  // Double float
-bool          nul  = dyn_arr.is_null(3);    // Null check
-uint8_t       sub  = dyn_arr.subtype(1);    // Subtype code
+sqlite3_int64 id   = vec.as_int64();   // Defaults to index 0 (64-bit integer)
+int           id32 = vec.as_int(0);     // 32-bit integer
+SqliteStringView s = vec.as_text(1);    // Non-owning string view
+double        val  = vec.as_double(2);  // Double float
+bool          nul  = vec.is_null(3);    // Null check
+uint8_t       sub  = vec.subtype(1);    // Subtype code
 
 // 64-bit MurmurHash2 composite digest across all elements
-unsigned long long digest = dyn_arr.hash();
-```
-
-### `SqliteValueOwnedArray<N>` — Unified Template Alias
-
-```cpp
-template <size_t N = 0>
-using SqliteValueOwnedArray = /* SqliteValueOwnedStaticArray<N> (N > 0)
-                                  SqliteValueOwnedDynamicArray  (N == 0) */;
-
-// Use identical API regardless of allocation model:
-SqliteValueOwnedArray<3> stack_arr;   // Stack
-SqliteValueOwnedArray<0> heap_arr(3); // Heap
-```
-
-### Relationship to Row Classes
-
-`SqliteRowStatic<N>` and `SqliteRowDynamic` are thin subclasses of these array types, adding only row-domain methods (`view()`, `column_count()`, `operator SqliteRowView()`):
-
-```
-SqliteValueOwnedStaticArray<N>  ←─── SqliteRowStatic<N>
-SqliteValueOwnedDynamicArray    ←─── SqliteRowDynamic
+unsigned long long digest = vec.hash();
 ```
 
 ---

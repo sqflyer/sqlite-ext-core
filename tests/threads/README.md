@@ -131,7 +131,7 @@ The test suite enforces a dual-implementation model:
 - **`test_coro_polymorphic_value_streaming()`**:
   - *Objective*: Streaming polymorphic `SqliteValueOwned` objects (integers, doubles, strings, blobs) across fiber yields with strict type inspection.
 - **`test_coro_multi_column_row_streaming()`**:
-  - *Objective*: Streaming multi-column fixed-schema database rows (`SqliteRowStatic<4>`) across yields with 0 heap overhead.
+  - *Objective*: Streaming multi-column fixed-schema database rows (`SqliteValueTuple<4>`) across yields with 0 heap overhead.
 - **`test_coro_dynamic_array_reallocation()`**:
   - *Objective*: Reallocating dynamic arrays (`sqlite_reallocate_array`) inside fiber routines across yield boundaries.
 

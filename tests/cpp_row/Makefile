@@ -31,9 +31,11 @@ all: test
 test: bin/test_row
 	./bin/test_row
 
-bin/test_row: test_row.cpp
-	mkdir -p bin
+bin/test_row: test_row.cpp | bin
 	$(CXX) $(CXXFLAGS) -o $@ $< $(LIBS)
+
+bin:
+	mkdir -p bin
 
 clean:
 	rm -rf bin

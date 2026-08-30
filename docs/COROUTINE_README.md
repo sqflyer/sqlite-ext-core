@@ -162,13 +162,13 @@ Instead of building a manual cursor state machine, return a `SqliteFiberGenerato
 
 ```cpp
 #include "async/sqlite3_coro.hpp"
-#include "sqlite3_row.hpp"
+#include "sqlite3_value_containers.hpp"
 
 // Define a generator producing synthetic rows:
-SqliteFiberGenerator<SqliteRowStatic<2>> generate_series(int start, int end, int step) {
-    return SqliteFiberGenerator<SqliteRowStatic<2>>([=](const auto& yield) {
+SqliteFiberGenerator<SqliteValueTuple<2>> generate_series(int start, int end, int step) {
+    return SqliteFiberGenerator<SqliteValueTuple<2>>([=](const auto& yield) {
         for (int val = start; val <= end; val += step) {
-            SqliteRowStatic<2> row;
+            SqliteValueTuple<2> row;
             row[0] = static_cast<sqlite3_int64>(val);
             row[1] = static_cast<sqlite3_int64>(val * val);
             yield(row); // Pauses and transfers row to SQLite VDBE

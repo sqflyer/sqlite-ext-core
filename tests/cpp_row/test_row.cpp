@@ -5,6 +5,7 @@
 #include <sqlite3.h>
 #include "sqlite3_statement.hpp"
 #include "sqlite3_row.hpp"
+#include "sqlite3_value_containers.hpp"
 #include "sqlite3_db.hpp"
 
 // ============================================================================
@@ -61,12 +62,14 @@ void test_row_view_statement(sqlite3* db) {
     }
     assert(col_idx == 5);
 
-    // 6. Materialize snapshot to owned dynamic row
-    SqliteRowDynamic snapshot = row.to_owned();
+    // 6. Materialize snapshot into owned SqliteValueVec<8>
+    SqliteValueVec<8> snapshot;
+    snapshot.resize(row.size());
+    for (int i = 0; i < row.size(); ++i) snapshot[i] = row[i].to_owned();
+
     assert(snapshot.size() == 5);
-    assert(snapshot.as_int64(0) == 101);
-    assert(snapshot.as_int() == 101); // default col = 0
-    assert(snapshot.as_text(1) == "Alice");
+    assert(snapshot.data()[0].as_int64() == 101);
+    assert(snapshot.data()[1].as_text() == "Alice");
 
     // 7. Test SqliteRowView default index accessors, hash, and relational comparisons
     assert(row.as_int64() == 101);
@@ -76,17 +79,17 @@ void test_row_view_statement(sqlite3* db) {
     assert(row.hash() == snapshot.view().hash());
     assert(row == snapshot.view());
     assert(row == SqliteRowOwnedWrapper(snapshot));
-    assert(!(row != snapshot));
-    assert(!(row < snapshot));
-    assert(row <= snapshot);
-    assert(row >= snapshot);
+    assert(!(row != snapshot.view()));
+    assert(!(row < snapshot.view()));
+    assert(row <= snapshot.view());
+    assert(row >= snapshot.view());
 }
 
 // ============================================================================
 // 2. Test SqliteRowView over SqliteUdfArgs
 // ============================================================================
 void test_row_view_udf_args() {
-    printf("Testing SqliteRowView over SqliteUdfArgs & SqliteValueViewArray...\n");
+    printf("Testing SqliteRowView over SqliteUdfArgs & contiguous spans...\n");
 
     SqliteValueOwned v1(42LL);
     SqliteValueOwned v2 = SqliteValueOwned::from_text("hello");
@@ -100,39 +103,25 @@ void test_row_view_udf_args() {
     assert(row.as_int64(0) == 42);
     assert(row.as_text(1) == "hello");
     assert(row.as_double(2) == 3.14);
-
-    // Test SqliteValueViewArray construction and extractions
-    sqlite3_value* raw_vals[2] = { nullptr, nullptr };
-    SqliteValueViewArray val_array(2, raw_vals);
-    assert(val_array.size() == 2);
-    assert(val_array.count() == 2);
-    assert(!val_array.empty());
-    assert(val_array[0].is_null());
-    assert(val_array.as_int64(0) == 0);
-    assert(val_array.as_double(0) == 0.0);
-    assert(val_array.as_text(0).length() == 0);
-    assert(val_array.as_blob(0).size() == 0);
-    assert(!val_array.as_bool(0));
-    assert(val_array[10].is_null()); // out of bounds
 }
 
 // ============================================================================
-// 3. Test SqliteRowStatic (Stack-Allocated, 0 Mallocs)
+// 3. Test SqliteValueTuple Stack Allocation (0 Mallocs)
 // ============================================================================
-void test_row_static_stack_allocation(sqlite3* db) {
-    printf("Testing SqliteRowStatic stack allocation...\n");
+void test_row_tuple_stack_allocation(sqlite3* db) {
+    printf("Testing SqliteValueTuple stack allocation...\n");
 
     // Exact footprint check: 3 columns * 16 bytes = 48 bytes!
-    static_assert(sizeof(SqliteRowStatic<3>) == 48, "SqliteRowStatic<3> must be exactly 48 bytes!");
-    static_assert(sizeof(SqliteRowStatic<4>) == 64, "SqliteRowStatic<4> must be exactly 64 bytes!");
+    static_assert(sizeof(SqliteValueTuple<3>) == 48, "SqliteValueTuple<3> must be exactly 48 bytes!");
+    static_assert(sizeof(SqliteValueTuple<4>) == 64, "SqliteValueTuple<4> must be exactly 64 bytes!");
 
-    SqliteRowStatic<3> stack_row;
+    SqliteValueTuple<3> stack_row;
     assert(stack_row.size() == 3);
     assert(stack_row[0].is_null());
 
-    stack_row[0] = 202LL;
+    stack_row[0] = SqliteValueOwned(202LL);
     stack_row[1] = SqliteValueOwned::from_text("Bob");
-    stack_row[2] = 88.0;
+    stack_row[2] = SqliteValueOwned(88.0);
 
     assert(stack_row[0].as_int64() == 202);
     assert(stack_row[1].as_text() == "Bob");
@@ -155,8 +144,9 @@ void test_row_static_stack_allocation(sqlite3* db) {
     assert(q_row.as_text(1) == "Bob");
     assert(q_row.as_double(2) == 88.0);
 
-    // Construct static row from view
-    SqliteRowStatic<3> copied_from_view(q_row);
+    // Construct static tuple from view
+    SqliteValueTuple<3> copied_from_view;
+    for (int i = 0; i < 3; ++i) copied_from_view[i] = q_row[i].to_owned();
     assert(copied_from_view.size() == 3);
     assert(copied_from_view[0].as_int64() == 202);
     assert(copied_from_view[1].as_text() == "Bob");
@@ -164,37 +154,37 @@ void test_row_static_stack_allocation(sqlite3* db) {
 }
 
 // ============================================================================
-// 4. Test SqliteRowDynamic (Heap Allocation & Deep Move Semantics)
+// 4. Test SqliteValueVec Adaptive Heap & Move Semantics
 // ============================================================================
-void test_row_dynamic_heap_and_moves() {
-    printf("Testing SqliteRowDynamic heap allocation and move semantics...\n");
+void test_row_vec_heap_and_moves() {
+    printf("Testing SqliteValueVec heap allocation and move semantics...\n");
 
-    SqliteRowDynamic dyn_row(4);
+    SqliteValueVec<4> dyn_row(4);
     assert(dyn_row.size() == 4);
     assert(dyn_row.column_count() == 4);
     assert(!dyn_row.empty());
 
-    dyn_row[0] = 1001LL;
+    dyn_row[0] = SqliteValueOwned(1001LL);
     dyn_row[1] = SqliteValueOwned::from_text("Charlie");
-    dyn_row[2] = 3.14159;
+    dyn_row[2] = SqliteValueOwned(3.14159);
     dyn_row[3] = SqliteValueOwned::from_blob("BLOB_DATA", 9);
 
-    assert(dyn_row.as_int64(0) == 1001);
-    assert(dyn_row.as_text(1) == "Charlie");
-    assert(dyn_row.as_double(2) == 3.14159);
-    assert(dyn_row.as_blob(3).size() == 9);
+    assert(dyn_row[0].as_int64() == 1001);
+    assert(dyn_row[1].as_text() == "Charlie");
+    assert(dyn_row[2].as_double() == 3.14159);
+    assert(dyn_row[3].as_blob().size() == 9);
 
     // Deep copy constructor
-    SqliteRowDynamic copy_constructed = dyn_row;
+    SqliteValueVec<4> copy_constructed = dyn_row;
     assert(copy_constructed.size() == 4);
-    assert(copy_constructed.as_int64(0) == 1001);
-    assert(copy_constructed.as_text(1) == "Charlie");
+    assert(copy_constructed[0].as_int64() == 1001);
+    assert(copy_constructed[1].as_text() == "Charlie");
 
     // Move constructor
-    SqliteRowDynamic move_constructed = sqlite_move(dyn_row);
+    SqliteValueVec<4> move_constructed = sqlite_move(dyn_row);
     assert(move_constructed.size() == 4);
-    assert(move_constructed.as_int64(0) == 1001);
-    assert(move_constructed.as_text(1) == "Charlie");
+    assert(move_constructed[0].as_int64() == 1001);
+    assert(move_constructed[1].as_text() == "Charlie");
     assert(dyn_row.empty());
     assert(dyn_row.size() == 0);
 
@@ -206,30 +196,7 @@ void test_row_dynamic_heap_and_moves() {
 }
 
 // ============================================================================
-// 5. Test SqliteRowOwned Template Alias
-// ============================================================================
-void test_row_owned_template_alias() {
-    printf("Testing SqliteRowOwned template alias...\n");
-
-    // SqliteRowOwned<N> (N > 0) -> SqliteRowStatic<N>
-    SqliteRowOwned<2> static_alias;
-    static_alias[0] = 77LL;
-    static_alias[1] = 99.9;
-    assert(static_alias.size() == 2);
-    assert(static_alias.as_int64(0) == 77);
-    assert(static_alias.as_double(1) == 99.9);
-
-    // SqliteRowOwned<0> -> SqliteRowDynamic
-    SqliteRowOwned<0> dynamic_alias(2);
-    dynamic_alias[0] = SqliteValueOwned::from_text("DynAlias");
-    dynamic_alias[1] = 12345LL;
-    assert(dynamic_alias.size() == 2);
-    assert(dynamic_alias.as_text(0) == "DynAlias");
-    assert(dynamic_alias.as_int64(1) == 12345);
-}
-
-// ============================================================================
-// 6. Test SqliteDatabaseView Integration
+// 5. Test SqliteDatabaseView Integration
 // ============================================================================
 void test_database_view_integration(sqlite3* db) {
     printf("Testing SqliteDatabaseView statement & row integration...\n");
@@ -247,7 +214,7 @@ void test_database_view_integration(sqlite3* db) {
 }
 
 // ============================================================================
-// 7. Test SqliteRowOwnedWrapper & withSqliteRowOwned
+// 6. Test SqliteRowOwnedWrapper & withSqliteRowOwned
 // ============================================================================
 void test_row_owned_wrapper_and_scope() {
     printf("Testing SqliteRowOwnedWrapper & withSqliteRowOwned...\n");
@@ -259,7 +226,7 @@ void test_row_owned_wrapper_and_scope() {
     assert(w_sc[0].as_int64() == 42);
     assert(w_sc.hash() == val_scalar.hash());
 
-    SqliteValueOwnedStaticArray<3> static_arr;
+    SqliteValueTuple<3> static_arr;
     static_arr[0] = SqliteValueOwned(10);
     static_arr[1] = SqliteValueOwned(20);
     static_arr[2] = SqliteValueOwned(30);
@@ -290,7 +257,7 @@ void test_row_owned_wrapper_and_scope() {
 }
 
 // ============================================================================
-// 8. Exhaustive Test Suite for withSqliteRowOwned (0..64 columns)
+// 7. Exhaustive Test Suite for withSqliteRowOwned (0..64 columns)
 // ============================================================================
 void test_with_sqlite_row_owned_exhaustive() {
     printf("Testing withSqliteRowOwned exhaustive boundary tests (0..64 columns)...\n");
@@ -369,154 +336,273 @@ void test_with_sqlite_row_owned_exhaustive() {
     }
 }
 
+template <typename L, typename R>
+static void assert_row_relops_equal(const L& left, const R& right) {
+    assert(left == right);
+    assert(right == left);
+    assert(!(left != right));
+    assert(!(right != left));
+    assert(left <= right);
+    assert(right <= left);
+    assert(left >= right);
+    assert(right >= left);
+    assert(!(left < right));
+    assert(!(right < left));
+    assert(!(left > right));
+    assert(!(right > left));
+}
+
+template <typename L, typename R>
+static void assert_row_relops_less(const L& left, const R& right) {
+    assert(left < right);
+    assert(left <= right);
+    assert(left != right);
+    assert(!(left == right));
+    assert(!(left > right));
+    assert(!(left >= right));
+
+    // Reverse orientation
+    assert(right > left);
+    assert(right >= left);
+    assert(right != left);
+    assert(!(right == left));
+    assert(!(right < left));
+    assert(!(right <= left));
+}
+
 static void test_row_view_transparent_relational_operators(sqlite3* db) {
-    printf("Testing SqliteRowView Transparent Relational Operators...\n");
+    printf("Testing SqliteRowView & SqliteRowOwnedWrapper Comprehensive Relational Operators...\n");
 
+    // ========================================================================
+    // A. Multi-Column Row Representations Matrix: (10, "alpha", 3.14)
+    // ========================================================================
     sqlite3_stmt* stmt = nullptr;
-    assert(sqlite3_prepare_v2(db, "SELECT 42, 'hello', 3.14;", -1, &stmt, nullptr) == SQLITE_OK);
+    assert(sqlite3_prepare_v2(db, "SELECT 10, 'alpha', 3.14;", -1, &stmt, nullptr) == SQLITE_OK);
     assert(sqlite3_step(stmt) == SQLITE_ROW);
+    SqliteRowView rview(stmt);
 
-    SqliteRowView row(stmt);
-    assert(row.size() == 3);
+    sqlite3_stmt* stmt_dup = nullptr;
+    assert(sqlite3_prepare_v2(db, "SELECT 10, 'alpha', 3.14;", -1, &stmt_dup, nullptr) == SQLITE_OK);
+    assert(sqlite3_step(stmt_dup) == SQLITE_ROW);
+    SqliteRowView rview_dup(stmt_dup);
 
-    // 1. Single scalar row from 1-column statement
-    sqlite3_stmt* stmt1 = nullptr;
-    assert(sqlite3_prepare_v2(db, "SELECT 100;", -1, &stmt1, nullptr) == SQLITE_OK);
-    assert(sqlite3_step(stmt1) == SQLITE_ROW);
-    SqliteRowView row1(stmt1);
-    assert(row1.size() == 1);
+    SqliteValueOwned arr[3];
+    arr[0] = SqliteValueOwned(10);
+    arr[1] = SqliteValueOwned("alpha");
+    arr[2] = SqliteValueOwned(3.14);
+    SqliteRowOwnedWrapper wrap(arr, 3);
 
-    // Transparent comparisons against primitive integers
-    assert(row1 == 100LL);
-    assert(row1 == 100);
-    assert(row1 != 99);
-    assert(row1 < 101);
-    assert(row1 <= 100);
-    assert(row1 > 50);
-    assert(row1 >= 100);
+    SqliteValueView view_array_elems[3] = { rview[0], rview[1], rview[2] };
+    SqliteRowView rview_from_arr(view_array_elems, 3);
 
-    // Symmetric reverse operators
-    assert(100LL == row1);
-    assert(100 == row1);
-    assert(99 != row1);
-    assert(101 > row1);
-    assert(100 >= row1);
-    assert(50 < row1);
-    assert(100 <= row1);
+    // Equality matrix across representations
+    assert_row_relops_equal(rview, rview);
+    assert_row_relops_equal(rview, rview_dup);
+    assert_row_relops_equal(rview, wrap);
+    assert_row_relops_equal(rview, rview_from_arr);
+    assert_row_relops_equal(wrap, wrap);
+    assert_row_relops_equal(wrap, rview_from_arr);
 
-    // Transparent comparisons against SqliteValueOwned & SqliteValueView
-    SqliteValueOwned val_100(100LL);
-    SqliteValueOwned val_50(50LL);
-    assert(row1 == val_100);
-    assert(row1 != val_50);
-    assert(row1 > val_50);
-    assert(val_100 == row1);
-    assert(val_50 < row1);
+    // Hash code equivalences
+    assert(rview.hash() == rview_dup.hash());
+    assert(rview.hash() == wrap.hash());
+    assert(rview.hash() == rview_from_arr.hash());
 
-    SqliteValueView view_100 = row1[0];
-    assert(row1 == view_100);
-    assert(view_100 == row1);
+    // ========================================================================
+    // B. Lexicographical Ordering Differences Matrix (First, Middle, Last)
+    // ========================================================================
+    // Difference in last column (3.14 vs 3.15)
+    SqliteValueOwned arr_last_greater[3];
+    arr_last_greater[0] = SqliteValueOwned(10);
+    arr_last_greater[1] = SqliteValueOwned("alpha");
+    arr_last_greater[2] = SqliteValueOwned(3.15);
+    SqliteRowOwnedWrapper wrap_last_greater(arr_last_greater, 3);
+    assert_row_relops_less(rview, wrap_last_greater);
+    assert_row_relops_less(wrap, wrap_last_greater);
 
-    // 2. Single text row
-    sqlite3_stmt* stmt_str = nullptr;
-    assert(sqlite3_prepare_v2(db, "SELECT 'sqlite';", -1, &stmt_str, nullptr) == SQLITE_OK);
-    assert(sqlite3_step(stmt_str) == SQLITE_ROW);
-    SqliteRowView row_str(stmt_str);
-    assert(row_str.size() == 1);
+    // Difference in middle column ("alpha" vs "beta")
+    SqliteValueOwned arr_mid_greater[3];
+    arr_mid_greater[0] = SqliteValueOwned(10);
+    arr_mid_greater[1] = SqliteValueOwned("beta");
+    arr_mid_greater[2] = SqliteValueOwned(1.0);
+    SqliteRowOwnedWrapper wrap_mid_greater(arr_mid_greater, 3);
+    assert_row_relops_less(rview, wrap_mid_greater);
+    assert_row_relops_less(wrap, wrap_mid_greater);
 
-    assert(row_str == "sqlite");
-    assert(row_str != "other");
-    assert("sqlite" == row_str);
-    assert("other" != row_str);
+    // Difference in first column (10 vs 11)
+    SqliteValueOwned arr_first_greater[3];
+    arr_first_greater[0] = SqliteValueOwned(11);
+    arr_first_greater[1] = SqliteValueOwned("aaa");
+    arr_first_greater[2] = SqliteValueOwned(0.0);
+    SqliteRowOwnedWrapper wrap_first_greater(arr_first_greater, 3);
+    assert_row_relops_less(rview, wrap_first_greater);
+    assert_row_relops_less(wrap, wrap_first_greater);
 
-    SqliteStringView sv("sqlite");
-    assert(row_str == sv);
-    assert(sv == row_str);
+    // ========================================================================
+    // C. Arity / Length Prefix Semantics
+    // ========================================================================
+    SqliteValueOwned arr_prefix[2];
+    arr_prefix[0] = SqliteValueOwned(10);
+    arr_prefix[1] = SqliteValueOwned("alpha");
+    SqliteRowOwnedWrapper wrap_prefix(arr_prefix, 2);
 
-    SqliteStringOwned so("sqlite");
-    assert(row_str == so);
-    assert(so == row_str);
+    assert_row_relops_less(wrap_prefix, rview);
+    assert_row_relops_less(wrap_prefix, wrap);
 
-    // 3. Single double, bool, and blob rows
+    SqliteRowView empty_row_view;
+    SqliteRowOwnedWrapper empty_row_wrap(nullptr, 0);
+    assert_row_relops_equal(empty_row_view, empty_row_wrap);
+    assert_row_relops_less(empty_row_view, wrap_prefix);
+    assert_row_relops_less(empty_row_wrap, rview);
+
+    // ========================================================================
+    // D. SQLite Type-Rank Collation in Multi-Column Rows
+    // ========================================================================
+    SqliteValueOwned arr_null[2];
+    SqliteRowOwnedWrapper wrap_null(arr_null, 2);
+    SqliteValueOwned arr_int_pair[2];
+    arr_int_pair[0] = SqliteValueOwned(10);
+    arr_int_pair[1] = SqliteValueOwned(20);
+    SqliteRowOwnedWrapper wrap_int_pair(arr_int_pair, 2);
+    assert_row_relops_less(wrap_null, wrap_int_pair);
+
+    // Strict integer vs float tie-breaker
+    SqliteValueOwned arr_dbl_pair[2];
+    arr_dbl_pair[0] = SqliteValueOwned(10.0);
+    arr_dbl_pair[1] = SqliteValueOwned(20.0);
+    SqliteRowOwnedWrapper wrap_dbl_pair(arr_dbl_pair, 2);
+    assert_row_relops_less(wrap_int_pair, wrap_dbl_pair);
+    assert(wrap_int_pair != wrap_dbl_pair);
+
+    // Number vs Text ('10' vs 10): 10 < '10'
+    SqliteValueOwned val_10(10);
+    SqliteValueOwned val_str_10("10");
+    SqliteRowOwnedWrapper wrap_num = SqliteRowOwnedWrapper::create(val_10);
+    SqliteRowOwnedWrapper wrap_txt = SqliteRowOwnedWrapper::create(val_str_10);
+    assert_row_relops_less(wrap_num, wrap_txt);
+
+    // Text vs Blob ('10' vs blob'10'): '10' < blob'10'
+    const uint8_t blob_10_bytes[] = { '1', '0' };
+    SqliteBlobView bv_10(blob_10_bytes, 2);
+    SqliteValueOwned val_blob_10(bv_10);
+    SqliteRowOwnedWrapper wrap_blob_10 = SqliteRowOwnedWrapper::create(val_blob_10);
+    assert_row_relops_less(wrap_txt, wrap_blob_10);
+
+    // ========================================================================
+    // E. 1-Column Row Relational Operators across ALL Fundamental Types
+    // ========================================================================
+    sqlite3_stmt* stmt_int1 = nullptr;
+    assert(sqlite3_prepare_v2(db, "SELECT 42;", -1, &stmt_int1, nullptr) == SQLITE_OK);
+    assert(sqlite3_step(stmt_int1) == SQLITE_ROW);
+    SqliteRowView row_int1(stmt_int1);
+
+    SqliteValueOwned val_42(42);
+    SqliteRowOwnedWrapper wrap_int1 = SqliteRowOwnedWrapper::create(val_42);
+
+    // Signed and unsigned integer overloads in both orientations
+    assert_row_relops_equal(row_int1, 42);
+    assert_row_relops_equal(row_int1, 42LL);
+    assert_row_relops_equal(row_int1, 42u);
+    assert_row_relops_equal(row_int1, 42UL);
+    assert_row_relops_equal(row_int1, 42ULL);
+    assert(row_int1 != 42.0);
+    assert_row_relops_less(row_int1, 50);
+    assert_row_relops_less(row_int1, 50u);
+
+    assert_row_relops_equal(wrap_int1, 42);
+    assert_row_relops_equal(wrap_int1, 42LL);
+    assert_row_relops_equal(wrap_int1, 42u);
+    assert_row_relops_equal(wrap_int1, 42UL);
+    assert_row_relops_equal(wrap_int1, 42ULL);
+    assert(wrap_int1 != 42.0);
+    assert_row_relops_less(wrap_int1, 50);
+
+    // Direct comparison against SqliteValueOwned and SqliteValueView
+    assert_row_relops_equal(row_int1, val_42);
+    assert_row_relops_equal(wrap_int1, val_42);
+    assert_row_relops_equal(row_int1, row_int1[0]);
+    assert_row_relops_equal(wrap_int1, row_int1[0]);
+
+    // Floating-point 1-column row
     sqlite3_stmt* stmt_dbl = nullptr;
-    assert(sqlite3_prepare_v2(db, "SELECT 3.14159;", -1, &stmt_dbl, nullptr) == SQLITE_OK);
+    assert(sqlite3_prepare_v2(db, "SELECT 42.0;", -1, &stmt_dbl, nullptr) == SQLITE_OK);
     assert(sqlite3_step(stmt_dbl) == SQLITE_ROW);
     SqliteRowView row_dbl(stmt_dbl);
-    assert(row_dbl == 3.14159);
-    assert(3.14159 == row_dbl);
-    assert(row_dbl > 2.0);
-    assert(2.0 < row_dbl);
 
+    SqliteValueOwned val_42_dbl(42.0);
+    SqliteRowOwnedWrapper wrap_dbl = SqliteRowOwnedWrapper::create(val_42_dbl);
+
+    assert_row_relops_equal(row_dbl, 42.0);
+    assert_row_relops_equal(row_dbl, 42.0f);
+    assert(row_dbl != 42);
+    assert_row_relops_less(row_dbl, 50.0);
+    assert_row_relops_less(row_dbl, 50.0f);
+
+    assert_row_relops_equal(wrap_dbl, 42.0);
+    assert_row_relops_equal(wrap_dbl, 42.0f);
+    assert(wrap_dbl != 42);
+    assert_row_relops_less(wrap_dbl, 50.0);
+
+    // Text 1-column row
+    sqlite3_stmt* stmt_str = nullptr;
+    assert(sqlite3_prepare_v2(db, "SELECT 'delta';", -1, &stmt_str, nullptr) == SQLITE_OK);
+    assert(sqlite3_step(stmt_str) == SQLITE_ROW);
+    SqliteRowView row_str(stmt_str);
+
+    SqliteValueOwned val_delta("delta");
+    SqliteRowOwnedWrapper wrap_str = SqliteRowOwnedWrapper::create(val_delta);
+
+    assert_row_relops_equal(row_str, "delta");
+    assert_row_relops_equal(row_str, SqliteStringView("delta"));
+    SqliteStringOwned str_owned("delta");
+    assert_row_relops_equal(row_str, str_owned);
+    assert_row_relops_less(row_str, "echo");
+    assert_row_relops_less(row_str, SqliteStringView("echo"));
+
+    assert_row_relops_equal(wrap_str, "delta");
+    assert_row_relops_equal(wrap_str, SqliteStringView("delta"));
+    assert_row_relops_equal(wrap_str, str_owned);
+    assert_row_relops_less(wrap_str, "echo");
+
+    // Boolean 1-column row
     sqlite3_stmt* stmt_bool = nullptr;
     assert(sqlite3_prepare_v2(db, "SELECT 1;", -1, &stmt_bool, nullptr) == SQLITE_OK);
     assert(sqlite3_step(stmt_bool) == SQLITE_ROW);
     SqliteRowView row_bool(stmt_bool);
-    assert(row_bool == true);
-    assert(true == row_bool);
+    assert_row_relops_equal(row_bool, true);
+    assert_row_relops_equal(row_bool, 1);
 
+    // Blob 1-column row
     sqlite3_stmt* stmt_blob = nullptr;
     assert(sqlite3_prepare_v2(db, "SELECT X'01020304';", -1, &stmt_blob, nullptr) == SQLITE_OK);
     assert(sqlite3_step(stmt_blob) == SQLITE_ROW);
     SqliteRowView row_blob(stmt_blob);
-    const uint8_t blob_bytes[] = {0x01, 0x02, 0x03, 0x04};
+    const uint8_t blob_bytes[] = { 0x01, 0x02, 0x03, 0x04 };
     SqliteBlobView bv(blob_bytes, 4);
-    assert(row_blob == bv);
-    assert(bv == row_blob);
+    assert_row_relops_equal(row_blob, bv);
     SqliteBlobOwned bo(bv.data(), bv.size());
-    assert(row_blob == bo);
-    assert(bo == row_blob);
+    assert_row_relops_equal(row_blob, bo);
 
-    // 4. Multi-column comparisons against SqliteRowOwnedWrapper, and other SqliteRowView
-    SqliteValueOwned vals[3];
-    vals[0] = 42LL;
-    vals[1] = SqliteValueOwned::from_text("hello");
-    vals[2] = 3.14;
-    SqliteRowOwnedWrapper wrapper(vals, 3);
+    SqliteValueOwned val_blob(bv);
+    SqliteRowOwnedWrapper wrap_blob = SqliteRowOwnedWrapper::create(val_blob);
+    assert_row_relops_equal(wrap_blob, bv);
+    assert_row_relops_equal(wrap_blob, bo);
 
-    assert(row == wrapper);
-    assert(wrapper == row);
-    assert(!(row != wrapper));
-    assert(row <= wrapper);
-    assert(row >= wrapper);
-
-    // Lexicographical ordering checks
-    SqliteValueOwned vals_smaller[3];
-    vals_smaller[0] = 41LL;
-    vals_smaller[1] = SqliteValueOwned::from_text("hello");
-    vals_smaller[2] = 3.14;
-    SqliteRowOwnedWrapper wrap_smaller(vals_smaller, 3);
-    assert(wrap_smaller < row);
-    assert(row > wrap_smaller);
-    assert(wrap_smaller <= row);
-    assert(row >= wrap_smaller);
-
-    // SqliteRowView vs SqliteRowView (Stmt vs ViewArray)
-    SqliteValueView view_array_elems[3] = { row[0], row[1], row[2] };
-    SqliteRowView row_from_view_arr(view_array_elems, 3);
-    assert(row == row_from_view_arr);
-    assert(row_from_view_arr == row);
-    assert(row <= row_from_view_arr);
-    assert(row >= row_from_view_arr);
-
-    // Empty SqliteRowView comparisons
-    SqliteRowView empty_row;
-    assert(empty_row.size() == 0);
-    assert(empty_row < row);
-    assert(row > empty_row);
-
+    // Cleanup
     sqlite3_finalize(stmt_dbl);
     sqlite3_finalize(stmt_bool);
     sqlite3_finalize(stmt_blob);
-    sqlite3_finalize(stmt1);
+    sqlite3_finalize(stmt_int1);
     sqlite3_finalize(stmt_str);
+    sqlite3_finalize(stmt_dup);
     sqlite3_finalize(stmt);
 }
 
 // ============================================================================
-// 10. Test Range-Based For Loop Iterators on all Row Types
+// 8. Test Range-Based For Loop Iterators on all Row Types
 // ============================================================================
 void test_row_iterators(sqlite3* db) {
-    printf("Testing Range-Based For Loop Iterators on all Row Types...\n");
+    printf("Testing Range-Based For Loop Iterators on Row Types...\n");
 
     // 1. SqliteRowView Iterator over SQLite Statement
     SqliteStatement stmt(db, "SELECT 10, 'Hello', 3.14;");
@@ -531,37 +617,13 @@ void test_row_iterators(sqlite3* db) {
     }
     assert(view_count == 3);
 
-    // 2. SqliteRowStatic<3> Iterator
-    SqliteRowStatic<3> s_row;
-    s_row[0] = 1LL;
-    s_row[1] = 2LL;
-    s_row[2] = 3LL;
-    sqlite3_int64 s_sum = 0;
-    int s_count = 0;
-    for (const SqliteValueOwned& val : s_row) {
-        s_sum += val.as_int64();
-        s_count++;
-    }
-    assert(s_count == 3);
-    assert(s_sum == 6);
-
-    // 3. SqliteRowDynamic Iterator
-    SqliteRowDynamic d_row(4);
+    // 2. SqliteRowOwnedWrapper Iterator
+    SqliteValueOwned d_row[4];
     d_row[0] = 10LL;
     d_row[1] = 20LL;
     d_row[2] = 30LL;
     d_row[3] = 40LL;
-    sqlite3_int64 d_sum = 0;
-    int d_count = 0;
-    for (const SqliteValueOwned& val : d_row) {
-        d_sum += val.as_int64();
-        d_count++;
-    }
-    assert(d_count == 4);
-    assert(d_sum == 100);
-
-    // 4. SqliteRowOwnedWrapper Iterator
-    SqliteRowOwnedWrapper wrap = d_row.view();
+    SqliteRowOwnedWrapper wrap(d_row, 4);
     sqlite3_int64 w_sum = 0;
     int w_count = 0;
     for (const SqliteValueOwned& val : wrap) {
@@ -571,26 +633,7 @@ void test_row_iterators(sqlite3* db) {
     assert(w_count == 4);
     assert(w_sum == 100);
 
-    // 5. SqliteRowOwned<N> Template Alias Iterators
-    SqliteRowOwned<2> alias_static;
-    alias_static[0] = 5LL;
-    alias_static[1] = 15LL;
-    sqlite3_int64 a_sum = 0;
-    for (const SqliteValueOwned& val : alias_static) {
-        a_sum += val.as_int64();
-    }
-    assert(a_sum == 20);
-
-    SqliteRowOwned<0> alias_dyn(2);
-    alias_dyn[0] = 100LL;
-    alias_dyn[1] = 200LL;
-    sqlite3_int64 ad_sum = 0;
-    for (const SqliteValueOwned& val : alias_dyn) {
-        ad_sum += val.as_int64();
-    }
-    assert(ad_sum == 300);
-
-    // 6. Empty Row Iterator
+    // 3. Empty Row Iterator
     SqliteRowView empty_view;
     int e_count = 0;
     for (SqliteValueView col : empty_view) {
@@ -599,19 +642,11 @@ void test_row_iterators(sqlite3* db) {
     }
     assert(e_count == 0);
     assert(empty_view.begin() == empty_view.end());
-
-    SqliteRowDynamic empty_dyn(0);
-    for (const SqliteValueOwned& val : empty_dyn) {
-        (void)val;
-        e_count++;
-    }
-    assert(e_count == 0);
-    assert(empty_dyn.begin() == empty_dyn.end());
 }
 
 int main() {
     printf("================================================================\n");
-    printf("RUNNING SQLITE ROW TESTS (SqliteRowView, SqliteRowStatic, SqliteRowDynamic)\n");
+    printf("RUNNING SQLITE ROW TESTS (SqliteRowView, SqliteRowOwnedWrapper)\n");
     printf("================================================================\n");
 
     sqlite3* db = nullptr;
@@ -619,9 +654,8 @@ int main() {
 
     test_row_view_statement(db);
     test_row_view_udf_args();
-    test_row_static_stack_allocation(db);
-    test_row_dynamic_heap_and_moves();
-    test_row_owned_template_alias();
+    test_row_tuple_stack_allocation(db);
+    test_row_vec_heap_and_moves();
     test_database_view_integration(db);
     test_row_owned_wrapper_and_scope();
     test_with_sqlite_row_owned_exhaustive();

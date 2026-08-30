@@ -127,7 +127,7 @@ This finalizer eliminates any remaining linear dependencies and ensures that low
 
 ## 6. High-Entropy Composite Hash Combiner
 
-When hashing multi-column database rows (e.g. `SqliteRowKeyOwned` with $N \ge 2$), individual column hashes must be combined into a single unified 64-bit hash.
+When hashing multi-column database rows (e.g. `SqliteValueTuple<N>` or `SqliteValueVec<N>` with $N \ge 2$), individual column hashes must be combined into a single unified 64-bit hash.
 
 Simply using bitwise XOR ($h_1 \oplus h_2$) causes catastrophic collision failures:
 - Symmetrical columns cancel out: $\text{combine}(h_A, h_A) = 0$.

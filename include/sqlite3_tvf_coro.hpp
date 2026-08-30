@@ -15,7 +15,7 @@
  * Key Architectural Highlights:
  * - 100% Freestanding: Zero standard library dependencies (`-nostdlib++` compliant).
  * - Automatic Column Multiplexing: Natively routes scalar types, `SqliteValueOwned`,
- *   `SqliteRowStatic<N>`, and `SqliteRowDynamic` to SQLite output contexts.
+ *   `SqliteValueTuple<N>`, and `SqliteValueVec<N>` to SQLite output contexts.
  * - Profiled Allocation: Coroutine state frames and virtual table cursors are allocated
  *   strictly via `sqlite3_malloc64` and accounted for in `sqlite3_memory_used()`.
  * - State Injection: Supports shared per-connection database state via `SqliteExtState`.
@@ -138,18 +138,18 @@ struct SqliteTvfColumnWriter<SqliteValueOwned> {
 };
 
 /**
- * @brief Specialization of SqliteTvfColumnWriter for fixed-size static row arrays.
- * @tparam N Fixed column count in the row array.
+ * @brief Specialization of SqliteTvfColumnWriter for fixed-size static row tuples.
+ * @tparam N Fixed column count in the tuple.
  */
-template <size_t N>
-struct SqliteTvfColumnWriter<SqliteRowStatic<N>> {
+template <size_t N, typename Enable>
+struct SqliteTvfColumnWriter<SqliteValueTuple<N, Enable>> {
     /**
-     * @brief Writes the specific column value at `col_idx` from the static row array.
+     * @brief Writes the specific column value at `col_idx` from the static tuple.
      * @param ctx The SQLite output context.
-     * @param row The static row array.
+     * @param row The static tuple.
      * @param col_idx 0-based column index requested by SQLite.
      */
-    static inline void write(SqliteContext ctx, const SqliteRowStatic<N>& row, int col_idx) {
+    static inline void write(SqliteContext ctx, const SqliteValueTuple<N, Enable>& row, int col_idx) {
         if (col_idx >= 0 && col_idx < static_cast<int>(N)) {
             row[col_idx].result(ctx.get());
         }
@@ -157,17 +157,17 @@ struct SqliteTvfColumnWriter<SqliteRowStatic<N>> {
 };
 
 /**
- * @brief Specialization of SqliteTvfColumnWriter for dynamic multi-column rows.
+ * @brief Specialization of SqliteTvfColumnWriter for dynamic multi-column value vectors.
  */
-template <>
-struct SqliteTvfColumnWriter<SqliteRowDynamic> {
+template <size_t N, typename Enable>
+struct SqliteTvfColumnWriter<SqliteValueVec<N, Enable>> {
     /**
-     * @brief Writes the specific column value at `col_idx` from the dynamic row container.
+     * @brief Writes the specific column value at `col_idx` from the dynamic vector container.
      * @param ctx The SQLite output context.
-     * @param row The dynamic row container.
+     * @param row The dynamic vector container.
      * @param col_idx 0-based column index requested by SQLite.
      */
-    static inline void write(SqliteContext ctx, const SqliteRowDynamic& row, int col_idx) {
+    static inline void write(SqliteContext ctx, const SqliteValueVec<N, Enable>& row, int col_idx) {
         if (col_idx >= 0 && col_idx < row.size()) {
             row[col_idx].result(ctx.get());
         }
