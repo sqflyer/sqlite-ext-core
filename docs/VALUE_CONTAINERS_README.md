@@ -1,6 +1,6 @@
-# C++ Value Containers & 8x8 Compile-Time Matrix Dispatch (`sqlite3_value_containers.hpp` & `sqlite3_dispatch_8x8.hpp`)
+# C++ Value Containers & Matrix Dispatch (`sqlite3_value_containers.hpp`)
 
-`sqlite-ext-core` provides a unified pair of footprint-optimized, zero-dependency C++11 value container templates alongside generic $8 \times 8$ compile-time matrix dispatchers for multi-column extension engines.
+`sqlite-ext-core` provides a unified pair of footprint-optimized, zero-dependency C++11 value container templates alongside generic $8 \times 8$ compile-time matrix dispatchers and scope allocators for multi-column extension engines.
 
 ---
 
@@ -90,16 +90,23 @@ withSqliteRowOwned(num_cols, [&](SqliteRowOwnedWrapper row) {
 });
 ```
 
-### D. Generic $8 \times 8$ Compile-Time Dispatch (`sqlite3_dispatch_8x8.hpp`)
+### D. Generic $8 \times 8$ Compile-Time Dispatch & Scope Macros
 
 ```cpp
-#include "sqlite3_dispatch_8x8.hpp"
+#include "sqlite3_value_containers.hpp"
 
-// 1-liner instantiating any of 64 template combinations:
+// 1. Shorthand 8x8 factory instantiating any of 64 template combinations:
 ITableStorage* create_storage(int total_cols, int pk_count, const int* pk_indices) {
     int val_count = total_cols - pk_count;
     SQLITE_MAKE_DEFAULT_STORAGE_8X8(MapTableImpl, pk_count, val_count, total_cols, pk_count, pk_indices);
 }
+
+// 2. Direct scope dispatch without wrapper class:
+SQLITE_WITH_KEY_VAL_OWNED_8X8(key, val, pk_cnt, val_cnt, {
+    key[0] = 1001;
+    val[0] = "data";
+    insert_vtab_row(key, val);
+});
 ```
 
 ---

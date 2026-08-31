@@ -1,6 +1,6 @@
-# Value Containers & 8x8 Matrix Dispatch Test Suite (`tests/cpp_value_containers`)
+# Value Containers & Matrix Dispatch Test Suite (`tests/cpp_value_containers`)
 
-An exhaustive test suite verifying the **dual value container templates** (`SqliteValueTuple<N>`, `SqliteValueVec<N>`), the **scope-guarded stack dispatcher** (`withSqliteRowOwned`), and the **generic $8 \times 8$ compile-time matrix dispatch framework** (`sqlite3_dispatch_8x8.hpp`).
+An exhaustive test suite verifying the **dual value container templates** (`SqliteValueTuple<N>`, `SqliteValueVec<N>`), the **scope-guarded stack dispatcher** (`withSqliteRowOwned`, `withSqliteKeyValOwned`), and the **generic $8 \times 8$ compile-time matrix dispatch framework** (`sqlite3_value_containers.hpp`).
 
 ---
 

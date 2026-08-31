@@ -11,7 +11,6 @@
 #include "sqlite3_value.hpp"
 #include "sqlite3_row.hpp"
 #include "sqlite3_value_containers.hpp"
-#include "sqlite3_dispatch_8x8.hpp"
 #include "sqlite3_udf.hpp"
 #include "sqlite3_aggregate.hpp"
 #include "sqlite3_tvf.hpp"

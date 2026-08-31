@@ -1,4 +1,4 @@
-# Value Containers & 8x8 Dispatch Architecture (`sqlite3_value_containers.hpp` & `sqlite3_dispatch_8x8.hpp`)
+# Value Containers & Matrix Dispatch Architecture (`sqlite3_value_containers.hpp`)
 
 This document details the internal systems architecture, binary layout, Small Buffer Optimization (SBO) state machine, L1 cache line density calculations, standard `std::array` / `std::vector` alignment, and compile-time matrix dispatch mechanics for multi-column value containers.
 
@@ -109,15 +109,15 @@ Both `SqliteValueTuple` and `SqliteValueVec` are synthesized using modular macro
 
 ---
 
-## 5. Generic $8 \times 8$ Compile-Time Matrix Dispatcher (`sqlite3_dispatch_8x8.hpp`)
+## 5. Generic $8 \times 8$ Compile-Time Matrix Dispatchers & Scope Allocators
 
 Virtual tables and in-memory key-value engines (`memkv_map`, `memkv_lru`, `memkv_zset`, `memkv_ring`) determine table schemas at runtime (`pk_count` and `val_count`).
 
-To avoid runtime branching inside inner iteration loops, `sqlite3_dispatch_8x8.hpp` provides compile-time expansion:
+To avoid runtime branching inside inner iteration loops, `sqlite3_value_containers.hpp` provides compile-time expansion and scope-guarded stack allocation:
 
 ```cpp
 #define SQLITE_DISPATCH_1D_8(N, runtime_count, ...) \
-    switch ((runtime_count) <= 0 ? 1 : (runtime_count)) { \
+    switch (runtime_count) { \
         case 1:  { constexpr size_t N = 1; __VA_ARGS__; } break; \
         ... \
         case 8:  { constexpr size_t N = 8; __VA_ARGS__; } break; \
@@ -125,11 +125,15 @@ To avoid runtime branching inside inner iteration loops, `sqlite3_dispatch_8x8.h
     }
 
 #define SQLITE_DISPATCH_2D_8X8(KeyN, ValN, pk_count, val_count, ...) \
-    switch ((pk_count) <= 0 ? 1 : (pk_count)) { \
+    switch (pk_count) { \
         case 1:  { constexpr size_t KeyN = 1; SQLITE_DISPATCH_1D_8(ValN, val_count, __VA_ARGS__) } break; \
         ... \
         default: { constexpr size_t KeyN = 0; SQLITE_DISPATCH_1D_8(ValN, val_count, __VA_ARGS__) } break; \
     }
+
+// Direct SqliteRowOwnedWrapper scope wrappers:
+SQLITE_WITH_ROW_OWNED_1D(row, num_cols, { ... });
+SQLITE_WITH_KEY_VAL_OWNED_8X8(key, val, pk_cnt, val_cnt, { ... });
 ```
 
 ---

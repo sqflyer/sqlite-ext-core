@@ -98,8 +98,8 @@ Zero-dependency, `-nostdlib++` compliant wrappers for multi-column SQLite tabula
 - [Row Types README](docs/ROW_README.md)
 - [Row Types Architecture](docs/ROW_ARCHITECTURE.md)
 
-### 4.6. C++ Value Containers & 8x8 Dispatch (`sqlite3_value_containers.hpp`, `sqlite3_dispatch_8x8.hpp`)
-Zero-dependency, footprint-optimized value containers (`SqliteValueTuple<N>` for fixed-arity compile-time keys and `SqliteValueVec<N>` for adaptive payload vectors) conforming to standard `std::array` and `std::vector` interfaces alongside generic $8 \times 8$ compile-time dispatchers.
+### 4.6. C++ Value Containers & Matrix Dispatch (`sqlite3_value_containers.hpp`)
+Zero-dependency, footprint-optimized value containers (`SqliteValueTuple<N>` for fixed-arity compile-time keys and `SqliteValueVec<N>` for adaptive payload vectors) conforming to standard `std::array` and `std::vector` interfaces alongside generic $8 \times 8$ compile-time dispatchers and scope allocators.
 
 #### Key Features:
 - **`SqliteValueTuple<N = 0>` ($N \in [1..8]$ Stack, $N = 0$ Direct Heap)**: Exact $N \times 16\text{B}$ in-situ stack footprint (16B, 32B, 48B, 64B, 128B) for $N \in [1..8]$ with **0 heap allocations** and 0 capacity overhead. $N = 0$ (default `SqliteValueTuple<>`) provides an immutable-width direct heap tuple where size is passed as constructor argument. Features `front()`, `back()`, `at()`, `fill()`, `swap()`, and bidirectional forward/reverse iterators.
@@ -107,8 +107,8 @@ Zero-dependency, footprint-optimized value containers (`SqliteValueTuple<N>` for
 - **Direct In-Situ Primitive Assignments**: `row[idx]` returns `SqliteValueOwned&`, allowing direct assignment of all primitive types (`row[0] = static_cast<sqlite3_int64>(i);`, `row[1] = 42;`, `row[2] = 3.14;`, `row[3] = "text";`, `row[4] = true;`) without intermediate wrapper allocations.
 - **Single-Burst SIMD Initialization**: Container constructors leverage a pre-populated static 128-byte array of 8 canonical `SQLITE_NULL` instances (`static_null_array()`), lowered by Clang/GCC/MSVC directly into 1–4 vector register operations (`vmovups`) executing in 1–2 CPU clock cycles (~0.3–0.6 ns).
 - **100% Stack Data Density & `0x20` Tag Threshold**: Eliminates external size integer overhead on stack by encoding datatypes in bits 5..7 (`type >= 1` $\rightarrow$ `tag >= 0x20`), enabling $O(1)$ backwards active tag scanning.
-- **Generic 8x8 Compile-Time Dispatch (`sqlite3_dispatch_8x8.hpp`)**: `SQLITE_DISPATCH_1D_8` and `SQLITE_DISPATCH_2D_8X8` dispatch runtime column counts to compile-time `constexpr` specializations for any storage container.
-- **Stack-Allocated Row Dispatcher (`withSqliteRowOwned`)**: Allocates exact `SqliteValueTuple<1..8>` on the stack for sizes 1..8 with zero heap allocations, falling back to `SqliteValueTuple<>` (default $N = 0$) direct dynamic heap allocation for sizes $> 8$.
+- **Generic 8x8 Compile-Time Dispatch & Scope Wrappers**: `SQLITE_DISPATCH_1D_8`, `SQLITE_DISPATCH_2D_8X8`, `SQLITE_WITH_ROW_OWNED_1D`, and `SQLITE_WITH_KEY_VAL_OWNED_8X8` expand runtime column counts to compile-time `constexpr` specializations and stack-backed `SqliteRowOwnedWrapper` spans.
+- **Stack-Allocated Row Dispatcher (`withSqliteRowOwned`, `withSqliteKeyValOwned`)**: Allocates exact `SqliteValueTuple<1..8>` on the stack for sizes 1..8 with zero heap allocations, falling back to `SqliteValueTuple<>` (default $N = 0$) direct dynamic heap allocation for sizes $> 8$.
 - **Transparent Heterogeneous Lookups & Range Iterators**: Range-based for loops, Swiss table hashing (`SqliteRowHash`, `SqliteRowEqual`), and transparent B-Tree comparisons (`SqliteRowLess`).
 
 #### Documentation:

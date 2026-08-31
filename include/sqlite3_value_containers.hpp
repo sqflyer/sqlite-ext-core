@@ -2125,12 +2125,269 @@ public:
 };
 
 // ============================================================================
-// PART 3: withSqliteRowOwned: Stack-Allocated Row Scope Dispatcher (1..8 cols)
+// PART 3: Static Footprint Verifications
+// ============================================================================
+
+static_assert(sizeof(SqliteValueTuple<0>) == 16,
+              "SqliteValueTuple<0> must be 16 bytes (ptr + size + capacity)!");
+static_assert(sizeof(SqliteValueTuple<>) == 16,
+              "SqliteValueTuple<> must be 16 bytes (default pure heap)!");
+static_assert(sizeof(SqliteValueTuple<1>) == 16,
+              "SqliteValueTuple<1> must be 16 bytes!");
+static_assert(sizeof(SqliteValueTuple<2>) == 32,
+              "SqliteValueTuple<2> must be 32 bytes!");
+static_assert(sizeof(SqliteValueTuple<4>) == 64,
+              "SqliteValueTuple<4> must be 64 bytes (1 L1 Line)!");
+static_assert(sizeof(SqliteValueTuple<8>) == 128,
+              "SqliteValueTuple<8> must be 128 bytes (2 L1 Lines)!");
+
+static_assert(sizeof(SqliteValueVec<0>) == 16,
+              "SqliteValueVec<0> must be 16 bytes (ptr + size + capacity)!");
+static_assert(sizeof(SqliteValueVec<>) == 16,
+              "SqliteValueVec<> must be 16 bytes (default pure heap)!");
+static_assert(sizeof(SqliteValueVec<1>) == 16,
+              "SqliteValueVec<1> must be 16 bytes!");
+static_assert(sizeof(SqliteValueVec<2>) == 32,
+              "SqliteValueVec<2> must be 32 bytes!");
+static_assert(sizeof(SqliteValueVec<4>) == 64,
+              "SqliteValueVec<4> must be 64 bytes (1 L1 Line)!");
+static_assert(sizeof(SqliteValueVec<8>) == 128,
+              "SqliteValueVec<8> must be 128 bytes (2 L1 Lines)!");
+
+// ============================================================================
+// PART 4: 1D Generic Compile-Time Dispatcher (1..8 + Default Heap Fallback N = 0 / <>)
+// ============================================================================
+
+/**
+ * @def SQLITE_DISPATCH_1D_8
+ * @brief Dispatches a runtime count (1..8) to a compile-time constexpr size_t 'N' (1..8).
+ *        Counts outside [1..8] (e.g. 0 or > 8) dispatch to N = 0 (direct dynamic heap type SqliteValueTuple<> / SqliteValueVec<>).
+ * 
+ * Usage:
+ *   SQLITE_DISPATCH_1D_8(ColsN, runtime_count, {
+ *       return sqlite_new<MyContainer<SqliteValueTuple<ColsN>>>(arg1, arg2);
+ *   });
+ */
+#define SQLITE_DISPATCH_1D_8(N, runtime_count, ...) \
+    switch (runtime_count) { \
+        case 1:  { constexpr size_t N = 1; __VA_ARGS__; } break; \
+        case 2:  { constexpr size_t N = 2; __VA_ARGS__; } break; \
+        case 3:  { constexpr size_t N = 3; __VA_ARGS__; } break; \
+        case 4:  { constexpr size_t N = 4; __VA_ARGS__; } break; \
+        case 5:  { constexpr size_t N = 5; __VA_ARGS__; } break; \
+        case 6:  { constexpr size_t N = 6; __VA_ARGS__; } break; \
+        case 7:  { constexpr size_t N = 7; __VA_ARGS__; } break; \
+        case 8:  { constexpr size_t N = 8; __VA_ARGS__; } break; \
+        default: { constexpr size_t N = 0; __VA_ARGS__; } break; /* Dynamic Heap Fallback (N = 0 / <>) */ \
+    }
+
+// ============================================================================
+// PART 5: 2D Generic Compile-Time Matrix Dispatcher (8x8 = 64 Matrix Combinations)
+// ============================================================================
+
+/**
+ * @def SQLITE_DISPATCH_2D_8X8
+ * @brief Dispatches runtime key_count (1..8) and val_count (1..8) to compile-time 
+ *        constexpr size_t 'KeyN' and 'ValN' variables inside the provided block.
+ *        Counts outside [1..8] dispatch to KeyN = 0 / ValN = 0 (direct dynamic heap types).
+ * 
+ * Works with ANY container, template types, or custom factory logic.
+ * 
+ * Usage:
+ *   SQLITE_DISPATCH_2D_8X8(KeyN, ValN, pk_count, val_count, {
+ *       return sqlite_new<MyContainer<SqliteValueTuple<KeyN>, SqliteValueVec<ValN>>>(args...);
+ *   });
+ */
+#define SQLITE_DISPATCH_2D_8X8(KeyN, ValN, pk_count, val_count, ...) \
+    switch (pk_count) { \
+        case 1:  { constexpr size_t KeyN = 1; SQLITE_DISPATCH_1D_8(ValN, val_count, __VA_ARGS__) } break; \
+        case 2:  { constexpr size_t KeyN = 2; SQLITE_DISPATCH_1D_8(ValN, val_count, __VA_ARGS__) } break; \
+        case 3:  { constexpr size_t KeyN = 3; SQLITE_DISPATCH_1D_8(ValN, val_count, __VA_ARGS__) } break; \
+        case 4:  { constexpr size_t KeyN = 4; SQLITE_DISPATCH_1D_8(ValN, val_count, __VA_ARGS__) } break; \
+        case 5:  { constexpr size_t KeyN = 5; SQLITE_DISPATCH_1D_8(ValN, val_count, __VA_ARGS__) } break; \
+        case 6:  { constexpr size_t KeyN = 6; SQLITE_DISPATCH_1D_8(ValN, val_count, __VA_ARGS__) } break; \
+        case 7:  { constexpr size_t KeyN = 7; SQLITE_DISPATCH_1D_8(ValN, val_count, __VA_ARGS__) } break; \
+        case 8:  { constexpr size_t KeyN = 8; SQLITE_DISPATCH_1D_8(ValN, val_count, __VA_ARGS__) } break; \
+        default: { constexpr size_t KeyN = 0; SQLITE_DISPATCH_1D_8(ValN, val_count, __VA_ARGS__) } break; \
+    }
+
+// ============================================================================
+// PART 6: Shorthand Factory Macros (Direct sqlite_new Instantiation with Templates)
+// ============================================================================
+
+/**
+ * @def SQLITE_MAKE_STORAGE_1D_8
+ * @brief Generic 1D instantiator passing explicit Container and Value templates.
+ */
+#define SQLITE_MAKE_STORAGE_1D_8(ContainerT, ValT, count, ...) \
+    SQLITE_DISPATCH_1D_8(_V_N, count, { \
+        return sqlite_new<ContainerT<ValT<_V_N>>>(__VA_ARGS__); \
+    })
+
+/**
+ * @def SQLITE_MAKE_DEFAULT_STORAGE_1D_8
+ * @brief Shorthand 1D instantiator using standard SqliteValueTuple for columns.
+ */
+#define SQLITE_MAKE_DEFAULT_STORAGE_1D_8(ContainerT, count, ...) \
+    SQLITE_MAKE_STORAGE_1D_8(ContainerT, SqliteValueTuple, count, __VA_ARGS__)
+
+/**
+ * @def SQLITE_MAKE_DEFAULT_VEC_STORAGE_1D_8
+ * @brief Shorthand 1D instantiator using standard SqliteValueVec for columns.
+ */
+#define SQLITE_MAKE_DEFAULT_VEC_STORAGE_1D_8(ContainerT, count, ...) \
+    SQLITE_MAKE_STORAGE_1D_8(ContainerT, SqliteValueVec, count, __VA_ARGS__)
+
+/**
+ * @def SQLITE_MAKE_STORAGE_8X8
+ * @brief Generic 8x8 instantiator passing explicit Container, Key, and Value templates.
+ */
+#define SQLITE_MAKE_STORAGE_8X8(ContainerT, KeyT, ValT, pk_count, val_count, ...) \
+    SQLITE_DISPATCH_2D_8X8(_K_N, _V_N, pk_count, val_count, { \
+        return sqlite_new<ContainerT<KeyT<_K_N>, ValT<_V_N>>>(__VA_ARGS__); \
+    })
+
+/**
+ * @def SQLITE_MAKE_DEFAULT_STORAGE_8X8
+ * @brief Shorthand 8x8 instantiator using standard SqliteValueTuple for Key and SqliteValueVec for Value.
+ */
+#define SQLITE_MAKE_DEFAULT_STORAGE_8X8(ContainerT, pk_count, val_count, ...) \
+    SQLITE_MAKE_STORAGE_8X8(ContainerT, SqliteValueTuple, SqliteValueVec, pk_count, val_count, __VA_ARGS__)
+
+/**
+ * @def SQLITE_MAKE_DEFAULT_TUPLE_STORAGE_8X8
+ * @brief Shorthand 8x8 instantiator using SqliteValueTuple for both Key and Value.
+ */
+#define SQLITE_MAKE_DEFAULT_TUPLE_STORAGE_8X8(ContainerT, pk_count, val_count, ...) \
+    SQLITE_MAKE_STORAGE_8X8(ContainerT, SqliteValueTuple, SqliteValueTuple, pk_count, val_count, __VA_ARGS__)
+
+/**
+ * @def SQLITE_MAKE_DEFAULT_VEC_STORAGE_8X8
+ * @brief Shorthand 8x8 instantiator using SqliteValueVec for both Key and Value.
+ */
+#define SQLITE_MAKE_DEFAULT_VEC_STORAGE_8X8(ContainerT, pk_count, val_count, ...) \
+    SQLITE_MAKE_STORAGE_8X8(ContainerT, SqliteValueVec, SqliteValueVec, pk_count, val_count, __VA_ARGS__)
+
+// ============================================================================
+// PART 7: Row Wrapper Scope Dispatch Macros (Direct SqliteRowOwnedWrapper Spans)
+// ============================================================================
+
+/**
+ * @def SQLITE_WITH_ROW_OWNED_1D
+ * @brief Dispatches runtime count (1..8) to a stack-allocated SqliteValueTuple<N> (or heap SqliteValueTuple<> if > 8),
+ *        providing a SqliteRowOwnedWrapper span with the specified identifier inside the block without requiring a wrapper class.
+ * 
+ * Usage:
+ *   SQLITE_WITH_ROW_OWNED_1D(row, num_cols, {
+ *       row[0] = 100;
+ *       row[1] = "sensor";
+ *       process_row(row);
+ *   });
+ */
+#define SQLITE_WITH_ROW_OWNED_1D(RowWrapperVar, runtime_count, ...) \
+    do { \
+        const int _sz = static_cast<int>(runtime_count); \
+        switch (_sz) { \
+            case 1: { SqliteValueTuple<1> _arr; SqliteRowOwnedWrapper RowWrapperVar(_arr.data(), 1); __VA_ARGS__; } break; \
+            case 2: { SqliteValueTuple<2> _arr; SqliteRowOwnedWrapper RowWrapperVar(_arr.data(), 2); __VA_ARGS__; } break; \
+            case 3: { SqliteValueTuple<3> _arr; SqliteRowOwnedWrapper RowWrapperVar(_arr.data(), 3); __VA_ARGS__; } break; \
+            case 4: { SqliteValueTuple<4> _arr; SqliteRowOwnedWrapper RowWrapperVar(_arr.data(), 4); __VA_ARGS__; } break; \
+            case 5: { SqliteValueTuple<5> _arr; SqliteRowOwnedWrapper RowWrapperVar(_arr.data(), 5); __VA_ARGS__; } break; \
+            case 6: { SqliteValueTuple<6> _arr; SqliteRowOwnedWrapper RowWrapperVar(_arr.data(), 6); __VA_ARGS__; } break; \
+            case 7: { SqliteValueTuple<7> _arr; SqliteRowOwnedWrapper RowWrapperVar(_arr.data(), 7); __VA_ARGS__; } break; \
+            case 8: { SqliteValueTuple<8> _arr; SqliteRowOwnedWrapper RowWrapperVar(_arr.data(), 8); __VA_ARGS__; } break; \
+            default: { \
+                if (_sz <= 0) { \
+                    SqliteRowOwnedWrapper RowWrapperVar(nullptr, 0); \
+                    __VA_ARGS__; \
+                } else { \
+                    SqliteValueTuple<> _arr(_sz); \
+                    SqliteRowOwnedWrapper RowWrapperVar(_arr.data(), _sz); \
+                    __VA_ARGS__; \
+                } \
+            } break; \
+        } \
+    } while (0)
+
+/**
+ * @def SQLITE_WITH_VEC_ROW_1D
+ * @brief Dispatches runtime count (1..8) to a stack-allocated SqliteValueVec<N> (or heap SqliteValueVec<> if > 8),
+ *        providing a SqliteRowOwnedWrapper span with the specified identifier inside the block without requiring a wrapper class.
+ */
+#define SQLITE_WITH_VEC_ROW_1D(RowWrapperVar, runtime_count, ...) \
+    do { \
+        const int _sz = static_cast<int>(runtime_count); \
+        switch (_sz) { \
+            case 1: { SqliteValueVec<1> _arr(1); SqliteRowOwnedWrapper RowWrapperVar(_arr.data(), 1); __VA_ARGS__; } break; \
+            case 2: { SqliteValueVec<2> _arr(2); SqliteRowOwnedWrapper RowWrapperVar(_arr.data(), 2); __VA_ARGS__; } break; \
+            case 3: { SqliteValueVec<3> _arr(3); SqliteRowOwnedWrapper RowWrapperVar(_arr.data(), 3); __VA_ARGS__; } break; \
+            case 4: { SqliteValueVec<4> _arr(4); SqliteRowOwnedWrapper RowWrapperVar(_arr.data(), 4); __VA_ARGS__; } break; \
+            case 5: { SqliteValueVec<5> _arr(5); SqliteRowOwnedWrapper RowWrapperVar(_arr.data(), 5); __VA_ARGS__; } break; \
+            case 6: { SqliteValueVec<6> _arr(6); SqliteRowOwnedWrapper RowWrapperVar(_arr.data(), 6); __VA_ARGS__; } break; \
+            case 7: { SqliteValueVec<7> _arr(7); SqliteRowOwnedWrapper RowWrapperVar(_arr.data(), 7); __VA_ARGS__; } break; \
+            case 8: { SqliteValueVec<8> _arr(8); SqliteRowOwnedWrapper RowWrapperVar(_arr.data(), 8); __VA_ARGS__; } break; \
+            default: { \
+                if (_sz <= 0) { \
+                    SqliteRowOwnedWrapper RowWrapperVar(nullptr, 0); \
+                    __VA_ARGS__; \
+                } else { \
+                    SqliteValueVec<> _arr(_sz); \
+                    SqliteRowOwnedWrapper RowWrapperVar(_arr.data(), _sz); \
+                    __VA_ARGS__; \
+                } \
+            } break; \
+        } \
+    } while (0)
+
+/**
+ * @def SQLITE_WITH_KEY_VAL_OWNED_8X8
+ * @brief Dispatches runtime pk_count and val_count (1..8) to stack-allocated containers 
+ *        (SqliteValueTuple for Key, SqliteValueVec for Value; or heap fallback if > 8),
+ *        providing two SqliteRowOwnedWrapper spans (KeyWrapperVar, ValWrapperVar) inside the block.
+ * 
+ * Usage:
+ *   SQLITE_WITH_KEY_VAL_OWNED_8X8(key_row, val_row, pk_cols, val_cols, {
+ *       key_row[0] = 1001;
+ *       val_row[0] = "payload";
+ *       vtab_insert(key_row, val_row);
+ *   });
+ */
+#define SQLITE_WITH_KEY_VAL_OWNED_8X8(KeyWrapperVar, ValWrapperVar, pk_count, val_count, ...) \
+    SQLITE_WITH_ROW_OWNED_1D(KeyWrapperVar, pk_count, { \
+        SQLITE_WITH_VEC_ROW_1D(ValWrapperVar, val_count, { \
+            __VA_ARGS__; \
+        }); \
+    })
+
+/**
+ * @def SQLITE_WITH_TUPLE_KEY_VAL_OWNED_8X8
+ * @brief Shorthand 8x8 scope macro allocating SqliteValueTuple for both Key and Value.
+ */
+#define SQLITE_WITH_TUPLE_KEY_VAL_OWNED_8X8(KeyWrapperVar, ValWrapperVar, pk_count, val_count, ...) \
+    SQLITE_WITH_ROW_OWNED_1D(KeyWrapperVar, pk_count, { \
+        SQLITE_WITH_ROW_OWNED_1D(ValWrapperVar, val_count, { \
+            __VA_ARGS__; \
+        }); \
+    })
+
+/**
+ * @def SQLITE_WITH_VEC_KEY_VAL_OWNED_8X8
+ * @brief Shorthand 8x8 scope macro allocating SqliteValueVec for both Key and Value.
+ */
+#define SQLITE_WITH_VEC_KEY_VAL_OWNED_8X8(KeyWrapperVar, ValWrapperVar, pk_count, val_count, ...) \
+    SQLITE_WITH_VEC_ROW_1D(KeyWrapperVar, pk_count, { \
+        SQLITE_WITH_VEC_ROW_1D(ValWrapperVar, val_count, { \
+            __VA_ARGS__; \
+        }); \
+    })
+
+// ============================================================================
+// PART 8: Functional Row Scope Dispatchers (withSqliteRowOwned, withSqliteKeyValOwned)
 // ============================================================================
 
 /**
  * @brief Zero-heap stack allocation dispatcher using SqliteValueTuple for
- * sizes 1..8 (0 heap allocations). Falls back to adaptive SqliteValueVec for
+ * sizes 1..8 (0 heap allocations). Falls back to SqliteValueTuple<> (N = 0) for
  * sizes > 8.
  *
  * Usage:
@@ -2142,10 +2399,8 @@ public:
  * });
  * @endcode
  *
- * @tparam Callable Lambda/Functor signature: `auto(SqliteRowOwnedWrapper
- * row_wrapper)`
- * @param size Requested number of columns (1..8 for stack, >8 uses heap
- * fallback).
+ * @tparam Callable Lambda/Functor signature: `auto(SqliteRowOwnedWrapper row_wrapper)`
+ * @param size Requested number of columns (1..8 for stack, >8 uses dynamic heap).
  * @param fn Visitor callback receiving the mutable wrapper span.
  * @return Return value of the user callback function.
  */
@@ -2190,42 +2445,25 @@ inline auto withSqliteRowOwned(int size, Callable &&fn)
       return fn(SqliteRowOwnedWrapper(nullptr, 0));
     }
     // For sizes > 8, use SqliteValueTuple<> (N = 0) which compiles to the direct heap
-    // tuple template specialization, allocating the dynamic buffer via
-    // sqlite3_malloc64.
+    // tuple template specialization, allocating the dynamic buffer via sqlite3_malloc64.
     SqliteValueTuple<> arr(size);
     return fn(SqliteRowOwnedWrapper(arr.data(), size));
   }
   }
 }
 
-// ============================================================================
-// PART 4: Static Footprint Verifications
-// ============================================================================
-
-static_assert(sizeof(SqliteValueTuple<0>) == 16,
-              "SqliteValueTuple<0> must be 16 bytes (ptr + size + capacity)!");
-static_assert(sizeof(SqliteValueTuple<>) == 16,
-              "SqliteValueTuple<> must be 16 bytes (default pure heap)!");
-static_assert(sizeof(SqliteValueTuple<1>) == 16,
-              "SqliteValueTuple<1> must be 16 bytes!");
-static_assert(sizeof(SqliteValueTuple<2>) == 32,
-              "SqliteValueTuple<2> must be 32 bytes!");
-static_assert(sizeof(SqliteValueTuple<4>) == 64,
-              "SqliteValueTuple<4> must be 64 bytes (1 L1 Line)!");
-static_assert(sizeof(SqliteValueTuple<8>) == 128,
-              "SqliteValueTuple<8> must be 128 bytes (2 L1 Lines)!");
-
-static_assert(sizeof(SqliteValueVec<0>) == 16,
-              "SqliteValueVec<0> must be 16 bytes (ptr + size + capacity)!");
-static_assert(sizeof(SqliteValueVec<>) == 16,
-              "SqliteValueVec<> must be 16 bytes (default pure heap)!");
-static_assert(sizeof(SqliteValueVec<1>) == 16,
-              "SqliteValueVec<1> must be 16 bytes!");
-static_assert(sizeof(SqliteValueVec<2>) == 32,
-              "SqliteValueVec<2> must be 32 bytes!");
-static_assert(sizeof(SqliteValueVec<4>) == 64,
-              "SqliteValueVec<4> must be 64 bytes (1 L1 Line)!");
-static_assert(sizeof(SqliteValueVec<8>) == 128,
-              "SqliteValueVec<8> must be 128 bytes (2 L1 Lines)!");
+/**
+ * @brief Zero-heap 2D scope dispatcher evaluating runtime key and value column counts (1..8),
+ *        passing two mutable SqliteRowOwnedWrapper spans (Key & Value) to the callback.
+ */
+template <typename Callable>
+inline auto withSqliteKeyValOwned(int pk_count, int val_count, Callable &&fn)
+    -> decltype(fn(SqliteRowOwnedWrapper(), SqliteRowOwnedWrapper())) {
+    return withSqliteRowOwned(pk_count, [&](SqliteRowOwnedWrapper key_row) {
+        return withSqliteRowOwned(val_count, [&](SqliteRowOwnedWrapper val_row) {
+            return fn(key_row, val_row);
+        });
+    });
+}
 
 #endif // SQLITE3_VALUE_CONTAINERS_HPP

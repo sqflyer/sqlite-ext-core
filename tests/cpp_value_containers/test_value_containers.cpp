@@ -586,55 +586,205 @@ static void test_containers_sqlite_sql() {
 }
 
 // ============================================================================
-// 7. Generic 8x8 Compile-Time Dispatch Verification (sqlite3_dispatch_8x8.hpp)
+// 7. Generic 8x8 Compile-Time Matrix Dispatch Framework Tests
 // ============================================================================
-#include "sqlite3_dispatch_8x8.hpp"
+
+struct IMockTable {
+  virtual ~IMockTable() {}
+  virtual int get_tag() const = 0;
+  virtual size_t get_key_size() const = 0;
+  virtual size_t get_val_size() const = 0;
+};
 
 template <typename KeyContainer, typename ValContainer>
-struct MockStorageTable {
+struct MockStorageTable : public IMockTable {
   KeyContainer key;
   ValContainer val;
   int tag;
 
   MockStorageTable(int t) : tag(t) {}
+  virtual int get_tag() const override { return tag; }
+  virtual size_t get_key_size() const override { return sizeof(KeyContainer); }
+  virtual size_t get_val_size() const override { return sizeof(ValContainer); }
 };
 
-template <typename ValContainer> struct MockScratchTable {
+struct IMockScratchTable {
+  virtual ~IMockScratchTable() {}
+  virtual int get_tag() const = 0;
+  virtual size_t get_val_size() const = 0;
+};
+
+template <typename ValContainer>
+struct MockScratchTable : public IMockScratchTable {
   ValContainer val;
   int tag;
 
   MockScratchTable(int t) : tag(t) {}
+  virtual int get_tag() const override { return tag; }
+  virtual size_t get_val_size() const override { return sizeof(ValContainer); }
 };
+
+static IMockScratchTable *create_scratch_1d_tuple(int count, int tag) {
+  SQLITE_MAKE_DEFAULT_STORAGE_1D_8(MockScratchTable, count, tag);
+}
+
+static IMockScratchTable *create_scratch_1d_vec(int count, int tag) {
+  SQLITE_MAKE_DEFAULT_VEC_STORAGE_1D_8(MockScratchTable, count, tag);
+}
+
+static IMockTable *create_storage_8x8_default(int pk, int val, int tag) {
+  SQLITE_MAKE_DEFAULT_STORAGE_8X8(MockStorageTable, pk, val, tag);
+}
+
+static IMockTable *create_storage_8x8_tuple(int pk, int val, int tag) {
+  SQLITE_MAKE_DEFAULT_TUPLE_STORAGE_8X8(MockStorageTable, pk, val, tag);
+}
+
+static IMockTable *create_storage_8x8_vec(int pk, int val, int tag) {
+  SQLITE_MAKE_DEFAULT_VEC_STORAGE_8X8(MockStorageTable, pk, val, tag);
+}
+
+static IMockTable *create_storage_8x8_custom(int pk, int val, int tag) {
+  SQLITE_MAKE_STORAGE_8X8(MockStorageTable, SqliteValueTuple, SqliteValueTuple, pk, val, tag);
+}
 
 static void test_dispatch_framework() {
   printf("7. Testing Generic 8x8 compile-time dispatch framework...\n");
 
-  // 1D Dispatch test across 1..10
-  int dispatched_1d_n = 0;
-  for (int cols = 1; cols <= 10; ++cols) {
+  // 1. 1D Dispatch test across boundary and active ranges (-5..12)
+  for (int cols = -5; cols <= 12; ++cols) {
+    size_t dispatched_1d_n = 999;
     SQLITE_DISPATCH_1D_8(ColsN, cols, {
-      MockScratchTable<SqliteValueVec<ColsN>> table(cols);
-      dispatched_1d_n = static_cast<int>(ColsN);
+      MockScratchTable<SqliteValueTuple<ColsN>> table(cols);
+      dispatched_1d_n = ColsN;
       assert(table.tag == cols);
     });
-    if (cols <= 8) {
-      assert(dispatched_1d_n == cols);
+    if (cols >= 1 && cols <= 8) {
+      assert(dispatched_1d_n == static_cast<size_t>(cols));
     } else {
-      assert(dispatched_1d_n == 0); // Fallback to 0 (direct heap)
+      assert(dispatched_1d_n == 0); // Out of 1..8 range maps to N=0 (<> default heap)
     }
   }
 
-  // 2D Dispatch test across 1..9 x 1..9 matrix
-  for (int k = 1; k <= 9; ++k) {
-    for (int v = 1; v <= 9; ++v) {
-      size_t observed_k = 0;
-      size_t observed_v = 0;
+  // 2. 2D Dispatch test across -2..10 x -2..10 matrix
+  for (int k = -2; k <= 10; ++k) {
+    for (int v = -2; v <= 10; ++v) {
+      size_t observed_k = 999;
+      size_t observed_v = 999;
       SQLITE_DISPATCH_2D_8X8(KeyN, ValN, k, v, {
         observed_k = KeyN;
         observed_v = ValN;
       });
-      assert(observed_k == (k <= 8 ? (size_t)k : 0));
-      assert(observed_v == (v <= 8 ? (size_t)v : 0));
+      assert(observed_k == (k >= 1 && k <= 8 ? static_cast<size_t>(k) : 0));
+      assert(observed_v == (v >= 1 && v <= 8 ? static_cast<size_t>(v) : 0));
+    }
+  }
+
+  // 3. 1D Factory Macro Verification (SQLITE_MAKE_DEFAULT_STORAGE_1D_8 & SQLITE_MAKE_DEFAULT_VEC_STORAGE_1D_8)
+  for (int cols = 0; cols <= 10; ++cols) {
+    IMockScratchTable *t_tup = create_scratch_1d_tuple(cols, 100 + cols);
+    assert(t_tup != nullptr);
+    assert(t_tup->get_tag() == 100 + cols);
+    if (cols >= 1 && cols <= 8) {
+      assert(t_tup->get_val_size() == static_cast<size_t>(cols) * 16);
+    } else {
+      assert(t_tup->get_val_size() == 16); // SqliteValueTuple<0> is 16 bytes
+    }
+    sqlite_delete(t_tup);
+
+    IMockScratchTable *t_vec = create_scratch_1d_vec(cols, 200 + cols);
+    assert(t_vec != nullptr);
+    assert(t_vec->get_tag() == 200 + cols);
+    if (cols >= 1 && cols <= 8) {
+      assert(t_vec->get_val_size() == static_cast<size_t>(cols) * 16);
+    } else {
+      assert(t_vec->get_val_size() == 16); // SqliteValueVec<0> is 16 bytes
+    }
+    sqlite_delete(t_vec);
+  }
+
+  // 4. 2D Factory Macro Verification (SQLITE_MAKE_DEFAULT_STORAGE_8X8 & SQLITE_MAKE_STORAGE_8X8)
+  for (int k = 0; k <= 9; ++k) {
+    for (int v = 0; v <= 9; ++v) {
+      IMockTable *t_8x8 = create_storage_8x8_default(k, v, k * 100 + v);
+      assert(t_8x8 != nullptr);
+      assert(t_8x8->get_tag() == k * 100 + v);
+      if (k >= 1 && k <= 8) {
+        assert(t_8x8->get_key_size() == static_cast<size_t>(k) * 16);
+      } else {
+        assert(t_8x8->get_key_size() == 16); // SqliteValueTuple<0>
+      }
+      if (v >= 1 && v <= 8) {
+        assert(t_8x8->get_val_size() == static_cast<size_t>(v) * 16);
+      } else {
+        assert(t_8x8->get_val_size() == 16); // SqliteValueVec<0>
+      }
+      sqlite_delete(t_8x8);
+
+      IMockTable *t_tup_tup = create_storage_8x8_tuple(k, v, k * 100 + v);
+      assert(t_tup_tup != nullptr);
+      assert(t_tup_tup->get_tag() == k * 100 + v);
+      sqlite_delete(t_tup_tup);
+
+      IMockTable *t_vec_vec = create_storage_8x8_vec(k, v, k * 100 + v);
+      assert(t_vec_vec != nullptr);
+      assert(t_vec_vec->get_tag() == k * 100 + v);
+      sqlite_delete(t_vec_vec);
+
+      IMockTable *t_cust = create_storage_8x8_custom(k, v, 5000 + k * 10 + v);
+      assert(t_cust != nullptr);
+      assert(t_cust->get_tag() == 5000 + k * 10 + v);
+      sqlite_delete(t_cust);
+    }
+  }
+
+  // 5. Direct SqliteRowOwnedWrapper Scope Dispatch Macros (1D & 2D)
+  for (int cols = 0; cols <= 10; ++cols) {
+    bool executed = false;
+    SQLITE_WITH_ROW_OWNED_1D(row, cols, {
+      executed = true;
+      assert(row.size() == cols);
+      for (int i = 0; i < cols; ++i) {
+        row[i] = SqliteValueOwned(i * 10);
+        assert(row[i].as_int() == i * 10);
+      }
+    });
+    assert(executed);
+
+    bool vec_executed = false;
+    SQLITE_WITH_VEC_ROW_1D(vec_row, cols, {
+      vec_executed = true;
+      assert(vec_row.size() == cols);
+      for (int i = 0; i < cols; ++i) {
+        vec_row[i] = SqliteValueOwned(i * 20);
+        assert(vec_row[i].as_int() == i * 20);
+      }
+    });
+    assert(vec_executed);
+  }
+
+  // 6. Direct 2D SqliteRowOwnedWrapper Scope Dispatch & Functional Dispatcher
+  for (int k = 0; k <= 9; ++k) {
+    for (int v = 0; v <= 9; ++v) {
+      bool executed_2d = false;
+      SQLITE_WITH_KEY_VAL_OWNED_8X8(key_row, val_row, k, v, {
+        executed_2d = true;
+        assert(key_row.size() == k);
+        assert(val_row.size() == v);
+        for (int i = 0; i < k; ++i) key_row[i] = SqliteValueOwned(100 + i);
+        for (int i = 0; i < v; ++i) val_row[i] = SqliteValueOwned(200 + i);
+      });
+      assert(executed_2d);
+
+      bool executed_fn = false;
+      int ret = withSqliteKeyValOwned(k, v, [&](SqliteRowOwnedWrapper key_span, SqliteRowOwnedWrapper val_span) {
+        executed_fn = true;
+        assert(key_span.size() == k);
+        assert(val_span.size() == v);
+        return k * 1000 + v;
+      });
+      assert(executed_fn);
+      assert(ret == k * 1000 + v);
     }
   }
 

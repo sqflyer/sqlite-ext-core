@@ -10,13 +10,11 @@ The macro suite is organized into clean functional tiers:
 
 ```
 ┌───────────────────────────────────────────────────────────────────────────┐
-│               5. 8x8 COMPILE-TIME MATRIX DISPATCH SUITE                   │
-│  (include/sqlite3_dispatch_8x8.hpp)                                       │
-│  SQLITE_DISPATCH_1D_8                  SQLITE_DISPATCH_2D_8X8             │
-│  SQLITE_MAKE_STORAGE_8X8               SQLITE_MAKE_DEFAULT_STORAGE_8X8    │
-├───────────────────────────────────────────────────────────────────────────┤
-│               4. VALUE CONTAINER MODIFIERS & CONSTRUCTORS                 │
+│       5. MATRIX DISPATCH, SCOPE ALLOCATION & VALUE CONTAINERS             │
 │  (include/sqlite3_value_containers.hpp)                                   │
+│  SQLITE_DISPATCH_1D_8                  SQLITE_DISPATCH_2D_8X8             │
+│  SQLITE_WITH_ROW_OWNED_1D              SQLITE_WITH_KEY_VAL_OWNED_8X8       │
+│  SQLITE_MAKE_STORAGE_8X8               SQLITE_MAKE_DEFAULT_STORAGE_8X8    │
 │  SQLITE_DERIVE_STD_TUPLE_MODIFIERS     SQLITE_DERIVE_STD_VEC_METHODS      │
 │  SQLITE_DERIVE_PRIMITIVE_CONSTRUCTORS  SQLITE_DERIVE_HETEROGENEOUS_CTORS  │
 ├───────────────────────────────────────────────────────────────────────────┤
@@ -171,10 +169,12 @@ Synthesizes transparent hash, equality, and ordering structs with `using is_tran
 
 ---
 
-## 5. Generic $8 \times 8$ Compile-Time Matrix Dispatch Suite (`include/sqlite3_dispatch_8x8.hpp`)
+## 5. Generic $8 \times 8$ Compile-Time Matrix Dispatch & Scope Suite (`include/sqlite3_value_containers.hpp`)
 
-- `SQLITE_DISPATCH_1D_8(N, runtime_count, ...)`: Dispatches runtime column count ($1 \dots 8$) to compile-time `constexpr size_t N`.
+- `SQLITE_DISPATCH_1D_8(N, runtime_count, ...)`: Dispatches runtime column count ($1 \dots 8$) to compile-time `constexpr size_t N` (falls back to $N = 0$ for dynamic heap).
 - `SQLITE_DISPATCH_2D_8X8(KeyN, ValN, pk_count, val_count, ...)`: Dispatches runtime 2D grid ($8 \times 8 = 64$ combinations).
+- `SQLITE_WITH_ROW_OWNED_1D(var, count, ...)`: Dispatches runtime count to stack-allocated `SqliteRowOwnedWrapper` span.
+- `SQLITE_WITH_KEY_VAL_OWNED_8X8(key, val, pk_count, val_count, ...)`: Dispatches 2D runtime counts to key/val `SqliteRowOwnedWrapper` spans.
 - `SQLITE_MAKE_STORAGE_8X8`: 1-line heap factory macro instantiating container specializations via `sqlite_new`.
 
 ---
