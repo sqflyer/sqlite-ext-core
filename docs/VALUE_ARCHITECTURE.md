@@ -274,7 +274,7 @@ Multi-column composite keys and rows are modeled as contiguous RAII-managed arra
 To prevent code bloat and maintain a unified API across all container and tabular types, all containers utilize `SQLITE_DERIVE_ARRAY_ACCESSORS` and `SQLITE_DERIVE_ARRAY_HASH`:
 - **Direct Typed Extraction**: Provides inlined `as_int64(i = 0)`, `as_int(i = 0)`, `as_double(i = 0)`, `as_text(i = 0)`, `as_blob(i = 0)`, `as_bool(i = 0)`, `is_null(i = 0)`, `type(i = 0)`, and `subtype(i = 0)`.
 - **Unified MurmurHash2 Digest**: Generates inlined `hash()` computing multi-column composite MurmurHash2 digests combining each element sequentially.
-- **Shared Identically Across All Containers**: `SqliteValueTuple<N>`, `SqliteValueVec<N>`, `SqliteRowView`, and `SqliteRowOwnedWrapper`.
+- **Shared Identically Across All Containers**: `SqliteValueTuple<N>`, `SqliteValueVec<N>`, `SqliteRowView`, `SqliteRowOwnedView`, and `SqliteRowOwnedWrapper`.
 
 ---
 

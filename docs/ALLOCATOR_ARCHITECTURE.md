@@ -50,12 +50,14 @@ These are the primary entry points for single-object dynamic allocation.
 - `sqlite_new` calls `sqlite3_malloc(sizeof(T))`, then safely delegates to `sqlite_construct_at` to initialize the object.
 - `sqlite_delete` explicitly invokes the qualified pseudo-destructor (`ptr->T::~T()`) before routing the memory to `sqlite3_free`, ensuring safe destruction while silencing compiler warnings (`-Wdelete-non-abstract-non-virtual-dtor`).
 
-### Zero-Dependency Utilities
-To support variadic perfect forwarding and move semantics without `<utility>` or `<type_traits>`, the allocator implements lightweight traits and helpers:
-- `sqlite_remove_reference<T>` (Mimics `std::remove_reference`)
+### Consolidated Freestanding Type Traits & Utilities
+To support variadic perfect forwarding, move semantics, and template specialization without `<utility>` or `<type_traits>`, the allocator acts as the single canonical repository for all freestanding traits across `sqlite-ext-core`:
+- `sqlite_remove_reference<T>`, `sqlite_remove_const<T>`, `sqlite_remove_cv<T>` (Mimics standard type transformations)
+- `sqlite_add_rvalue_reference<T>`, `sqlite_declval<T>()` (Unevaluated reference conversion for `decltype`)
 - `sqlite_move` / `sqlite_move_ptr` (Mimics `std::move` for rvalue reference casts)
 - `sqlite_forward` (Mimics `std::forward` for perfect forwarding)
 - `sqlite_is_same<T, U>` (Compile-time type equality trait)
+- `sqlite_is_pointer<T>` (Compile-time pointer detection trait)
 - `sqlite_enable_if<B, T>` (Freestanding SFINAE conditional type enabler)
 - `sqlite_is_trivially_copyable<T>` (Leverages compiler intrinsic `__is_trivially_copyable`)
 - `SQLITE_FAST_MEMCPY` (Compiler-optimized memory copy intrinsic using `__builtin_memcpy` on GCC/Clang and `__movsb` on MSVC)

@@ -1,6 +1,6 @@
 # C++ Row Types Architecture (`sqlite3_row.hpp`)
 
-This document provides an exhaustive systems-level architectural analysis of `sqlite3_row.hpp`, detailing its **multi-source tagged multiplexing engine**, **24-byte universal row view (`SqliteRowView`)**, **16-byte span representation (`SqliteRowOwnedWrapper`)**, **standard `std::array` compliance**, **`sqlite_reverse_iterator` proxy mechanics**, **assembly-level execution characteristics**, and **freestanding memory guarantees**.
+This document provides an exhaustive systems-level architectural analysis of `sqlite3_row.hpp`, detailing its **multi-source tagged multiplexing engine**, **16-byte universal row view (`SqliteRowView`)**, **16-byte owned view (`SqliteRowOwnedView`)**, **16-byte span representation (`SqliteRowOwnedWrapper`)**, **standard `std::array` compliance**, **`sqlite_reverse_iterator` proxy mechanics**, **assembly-level execution characteristics**, and **freestanding memory guarantees**.
 
 > **API & Usage Guide**: For practical usage tutorials, code examples, and the public API reference, see [`docs/ROW_README.md`](ROW_README.md).  
 > **Value Containers Architecture**: For owning multi-column primary key tuples and adaptive SBO vectors, see [`docs/VALUE_CONTAINERS_ARCHITECTURE.md`](VALUE_CONTAINERS_ARCHITECTURE.md).
@@ -25,16 +25,29 @@ SQLite extensions and virtual tables frequently interact with tabular records ac
 │       • Prepared Statements (sqlite3_stmt*)                                           │
 │       • UDF / Aggregate Argv (sqlite3_value**)                                        │
 │       • Transient View Arrays (const SqliteValueView*)                                │
+│       • View Pointer Arrays (const SqliteValueView* const*)                          │
 │   - Standard std::array interface: front(), back(), at(), operator[], max_size()     │
 │   - Bidirectional Iterators: begin(), end(), rbegin(), rend()                         │
-│   [24 Bytes: 16B Tagged Union + 4B Col Count + 1B Source Tag + 3B Pad]                │
+│   [16 Bytes: 8B Tagged Union + 4B Col Count + 1B Source Tag + 3B Pad]                 │
 └───────────────────────────────────────────────────────────────────────────────────────┘
                                            ▲
                         .to_vec() / .to_tuple() extraction
                                            │
 ┌───────────────────────────────────────────────────────────────────────────────────────┐
+│                                 SqliteRowOwnedView                                    │
+│   - 16-byte universal view over owned memory (2 CPU Registers: rax, rdx)              │
+│   - Multiplexes:                                                                      │
+│       • Contiguous arrays/spans (const SqliteValueOwned*)                             │
+│       • Non-contiguous pointer arrays (const SqliteValueOwned* const*)                │
+│   - Standard std::array interface: front(), back(), at(), operator[], max_size()     │
+│   - Bidirectional Iterators: begin(), end(), rbegin(), rend()                         │
+└───────────────────────────────────────────────────────────────────────────────────────┘
+                                           ▲
+                        .to_view() / constructor conversion
+                                           │
+┌───────────────────────────────────────────────────────────────────────────────────────┐
 │                        SqliteRowOwnedWrapper (Span)                                   │
-│   - 16-byte non-owning span over contiguous SqliteValueOwned arrays (2 CPU Registers) │
+│   - 16-byte mutable/const span over contiguous SqliteValueOwned arrays (2 Registers)  │
 │   - Standard std::array interface: front(), back(), at(), operator[], max_size()     │
 │   - Bidirectional Iterators: begin(), end(), rbegin(), rend()                         │
 │   - Wraps: SqliteValueTuple<N>, SqliteValueVec<N>, C-arrays, and single values        │
@@ -43,24 +56,46 @@ SQLite extensions and virtual tables frequently interact with tabular records ac
 
 ---
 
-## 2. Universal 24-Byte Multi-Source Row View (`SqliteRowView`)
+## 2. Universal 16-Byte Multi-Source Row View (`SqliteRowView`)
 
 `SqliteRowView` multiplexes four backing memory models without virtual method tables (`vtable`), function pointers, or heap allocation:
 
 ```
-Byte Offset:  0                       8                       16      20   21  23
-              ┌───────────────────────┬───────────────────────┬───────┬────┬───┐
-              │ m_stmt / m_argv /     │ (union storage)       │m_count│src │pad│
-              │ m_view_array          │                       │[4B]   │[1B]│[3]│
-              │ [8 Bytes Pointer]     │ [8 Bytes]             │       │    │   │
-              └───────────────────────┴───────────────────────┴───────┴────┴───┘
+Byte Offset:  0                       8                       12   13  15
+              ┌───────────────────────┬───────────────────────┬────┬───┐
+              │ m_stmt / m_argv /     │ m_col_count           │src │pad│
+              │ m_view_array /        │ [4 Bytes]             │[1B]│[3]│
+              │ m_view_ptr_array      │                       │    │   │
+              │ [8 Bytes Pointer]     │                       │    │   │
+              └───────────────────────┴───────────────────────┴────┴───┘
 ```
 
 ### Source Discriminator Tag (`m_source`)
 - `SQLITE_ROW_SOURCE_STMT (0)`: Direct column extraction from active prepared statements.
 - `SQLITE_ROW_SOURCE_ARGV (1)`: Direct pointer access into SQLite UDF argument arrays (`sqlite3_value**`).
 - `SQLITE_ROW_SOURCE_VIEW_ARRAY (2)`: Contiguous in-memory `SqliteValueView*` array.
-- `SQLITE_ROW_SOURCE_EMPTY (3)`: Null / empty row view.
+- `SQLITE_ROW_SOURCE_VIEW_PTR_ARRAY (3)`: Array of `const SqliteValueView*` pointers. Primarily used for extracting primary keys or non-contiguous column projections from complete tabular rows without allocating intermediate buffers or memory copies.
+- `SQLITE_ROW_SOURCE_EMPTY (4)`: Null / empty row view.
+
+---
+
+## 3. Universal 16-Byte Owned Row View (`SqliteRowOwnedView`)
+
+`SqliteRowOwnedView` provides a zero-allocation, 16-byte read-only view over owned values, multiplexing contiguous arrays and non-contiguous pointer arrays:
+
+```
+Byte Offset:  0                       8                       12   13  15
+              ┌───────────────────────┬───────────────────────┬────┬───┐
+              │ m_array /             │ m_col_count           │src │pad│
+              │ m_ptr_array           │ [4 Bytes]             │[1B]│[3]│
+              │ [8 Bytes Pointer]     │                       │    │   │
+              └───────────────────────┴───────────────────────┴────┴───┘
+```
+
+### Source Discriminator Tag (`m_source`)
+- `SQLITE_ROW_OWNED_SOURCE_ARRAY (0)`: Contiguous in-memory `const SqliteValueOwned*` array (or `SqliteRowOwnedWrapper`, `SqliteValueTuple`, `SqliteValueVec`).
+- `SQLITE_ROW_OWNED_SOURCE_PTR_ARRAY (1)`: Array of `const SqliteValueOwned*` pointers. Used for extracting non-contiguous primary key projections from complete owned rows without intermediate buffer allocations.
+- `SQLITE_ROW_OWNED_SOURCE_EMPTY (2)`: Null / empty owned row view.
 
 ---
 

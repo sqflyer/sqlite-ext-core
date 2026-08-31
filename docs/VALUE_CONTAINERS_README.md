@@ -117,7 +117,7 @@ SQLITE_WITH_KEY_VAL_OWNED_8X8(key, val, pk_cnt, val_cnt, {
 | :--- | :---: | :---: | :---: | :---: |
 | **Ownership** | Owning (RAII) | Owning (RAII) | Non-Owning (Span) | Non-Owning (Multi-Source View) |
 | **Standard Alignment** | `std::array` | `std::vector` | `std::array` | `std::array` |
-| **Stack SBO Limit** | Exact $N \times 16\text{B}$ ($N \le 8$) | $N \times 16\text{B}$ in-situ ($N \le 8$) | 16 Bytes (Pointer + Len) | 24 Bytes (Tagged Union + Len) |
+| **Stack SBO Limit** | Exact $N \times 16\text{B}$ ($N \le 8$) | $N \times 16\text{B}$ in-situ ($N \le 8$) | 16 Bytes (Pointer + Len) | 16 Bytes (Tagged Union + Len) |
 | **Heap Model** | $N = 0$ (`SqliteValueTuple<>`) | Dynamic Spill ($> N$) / $N = 0$ | N/A | N/A |
 | **Default Creation** | $N$ active `SQLITE_NULL` elements ($N \in [1..8]$) | 0 active elements (`empty() == true`) | 0 length span | 0 length view |
 | **Element Access** | `front`, `back`, `at`, `[]`, `data` | `front`, `back`, `at`, `[]`, `data` | `front`, `back`, `at`, `[]`, `data` | `front`, `back`, `at`, `[]`, `data` |

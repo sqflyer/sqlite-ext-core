@@ -20,11 +20,12 @@ Core Guarantees:
 
 Because we cannot rely on `std::string_view` or `std::unique_ptr` in a `-nostdlib++` environment, we reinvented a zero-cost ownership model applied uniformly across the entire library (Values, Strings, Buffers, and Databases).
 
-- **`View` Classes**: (e.g., `SqliteValueView`, `SqliteDatabaseView`, `SqliteStringView`, `SqliteBlobView`, `SqliteRowView`)
+- **`View` Classes**: (e.g., `SqliteValueView`, `SqliteDatabaseView`, `SqliteStringView`, `SqliteBlobView`, `SqliteRowView`, `SqliteRowOwnedView`)
   - Hold a raw pointer or a tagged union of pointers.
   - Never allocate memory, and never free it.
-  - `SqliteRowView` provides a 24-byte multi-source union over statements, UDF argv, and view arrays, adhering to standard `std::array` accessors and bidirectional iteration (`sqlite_reverse_iterator`).
-  - Used when SQLite hands you data (e.g., in a UDF callback) and you just want C++ convenience methods.
+  - `SqliteRowView` provides a 16-byte multi-source tagged union over statements, UDF argv, view arrays, and pointer arrays, adhering to standard `std::array` accessors and bidirectional iteration (`sqlite_reverse_iterator`).
+  - `SqliteRowOwnedView` provides a 16-byte zero-allocation read-only view over contiguous `const SqliteValueOwned*` arrays/spans and non-contiguous `const SqliteValueOwned* const*` pointer arrays.
+  - Used when SQLite hands you data (e.g., in a UDF callback) or when inspecting in-memory rows without copying.
 
 - **`Owned` Classes**: (e.g., `SqliteValueOwned`, `SqliteDatabaseOwned`, `SqliteStringOwned`, `SqliteBlobOwned`)
   - Inherit publicly from their respective `View` base class.
@@ -65,7 +66,7 @@ For a deeper dive into the specific mechanics and C++ paradigms used in individu
 ### Memory & State Management
 - [**Value System (`SqliteValue`)**](docs/VALUE_ARCHITECTURE.md): The core zero-cost `Owned`/`View` wrappers over `sqlite3_value`, 16-byte Small Buffer Optimization, heterogeneous lookups, and SQLite subtype representations.
 - [**Value Containers & Matrix Dispatch (`sqlite3_value_containers.hpp`)**](docs/VALUE_CONTAINERS_ARCHITECTURE.md): Zero-dependency value containers (`SqliteValueTuple<N>`, `SqliteValueVec<N>`), scope-guarded stack allocator (`withSqliteRowOwned`), and generic compile-time 2D matrix dispatchers.
-- [**Row System (`SqliteRow`)**](docs/ROW_ARCHITECTURE.md): Universal `SqliteRowView` (24B) multiplexing prepared statement step rows, UDF argument vectors, and in-memory view arrays with zero heap allocation.
+- [**Row System (`SqliteRow`)**](docs/ROW_ARCHITECTURE.md): Universal `SqliteRowView` (16B) and `SqliteRowOwnedView` (16B) multiplexing prepared statement step rows, UDF argument vectors, and in-memory view arrays with zero heap allocation.
 - [**Dynamic Buffers (`SqliteBuffer`)**](docs/BUFFER_ARCHITECTURE.md): `-nostdlib++` replacements for `std::string` and `std::vector` using `sqlite3_realloc64` that natively hook into the Value System's FNV-1a hashing engine.
 - [**Blob Streams (`SqliteBlobStream`)**](docs/BLOB_STREAM_ARCHITECTURE.md): Zero-copy stream interfaces for handling large SQLite blobs without loading them entirely into memory.
 - [**Online Backup (`SqliteBackup`)**](docs/BACKUP_ARCHITECTURE.md): RAII wrappers for the SQLite Online Backup API to ensure safe resource disposal during long-running background tasks.

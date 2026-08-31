@@ -121,6 +121,13 @@ template <typename T, typename U> struct sqlite_is_same       { static const boo
 template <typename T>             struct sqlite_is_same<T, T> { static const bool value = true; };
 
 /**
+ * @struct sqlite_is_pointer
+ * @brief Compile-time trait to detect if a type is a pointer.
+ */
+template <typename T> struct sqlite_is_pointer      { static const bool value = false; };
+template <typename T> struct sqlite_is_pointer<T*>  { static const bool value = true; };
+
+/**
  * @struct sqlite_enable_if
  * @brief SFINAE conditional type enabler, equivalent to `std::enable_if`.
  */

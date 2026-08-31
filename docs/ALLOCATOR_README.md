@@ -15,7 +15,7 @@ When building C++ SQLite extensions with strict compiler flags like `-nostdlib++
 - **In-place Construction**: Provides `sqlite_construct_at` and `sqlite_construct_n` for safe placement-new C++ object initialization without `<new>`.
 - **Zero-Dependency Move Semantics**: Includes `sqlite_move` and `sqlite_move_ptr` to completely replace `std::move`.
 - **Perfect Forwarding**: Includes `sqlite_forward` to mimic `std::forward`.
-- **Freestanding Type Traits**: Includes `sqlite_is_same`, `sqlite_enable_if`, `sqlite_remove_reference`, and `sqlite_is_trivially_copyable`.
+- **Freestanding Type Traits**: Single canonical header providing `sqlite_enable_if`, `sqlite_is_same`, `sqlite_is_pointer`, `sqlite_remove_reference`, `sqlite_remove_const`, `sqlite_remove_cv`, `sqlite_add_rvalue_reference`, `sqlite_declval`, and `sqlite_is_trivially_copyable`.
 - **SIMD Fast Memory Copy**: Provides `SQLITE_FAST_MEMCPY` optimized across GCC/Clang built-ins (`__builtin_memcpy`) and MSVC intrinsics (`__movsb`).
 - **Smart Pointer Ready**: Acts as the foundational memory layer for `SqliteSharedPtr` and `SqliteUniquePtr`.
 

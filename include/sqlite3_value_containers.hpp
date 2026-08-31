@@ -792,6 +792,7 @@ public:
   SQLITE_DERIVE_ARRAY_ACCESSORS
   SQLITE_DERIVE_CONTAINER_RELATIONAL_OPS(SqliteValueTuple)
   SQLITE_DERIVE_CONTAINER_RELATIONAL_OPS(SqliteRowOwnedWrapper)
+  SQLITE_DERIVE_CONTAINER_RELATIONAL_OPS(SqliteRowOwnedView)
   SQLITE_DERIVE_CONTAINER_RELATIONAL_OPS(SqliteRowView)
   SQLITE_DERIVE_ALL_SCALAR_RELATIONAL_OPS
 };
@@ -1094,6 +1095,7 @@ public:
   SQLITE_DERIVE_ARRAY_ACCESSORS
   SQLITE_DERIVE_CONTAINER_RELATIONAL_OPS(SqliteValueTuple)
   SQLITE_DERIVE_CONTAINER_RELATIONAL_OPS(SqliteRowOwnedWrapper)
+  SQLITE_DERIVE_CONTAINER_RELATIONAL_OPS(SqliteRowOwnedView)
   SQLITE_DERIVE_CONTAINER_RELATIONAL_OPS(SqliteRowView)
   SQLITE_DERIVE_ALL_SCALAR_RELATIONAL_OPS
 };
@@ -1736,8 +1738,9 @@ public:
   SQLITE_DERIVE_ARRAY_ACCESSORS
   SQLITE_DERIVE_CONTAINER_RELATIONAL_OPS(SqliteValueVec)
   SQLITE_DERIVE_CONTAINER_RELATIONAL_OPS(SqliteRowOwnedWrapper)
+  SQLITE_DERIVE_CONTAINER_RELATIONAL_OPS(SqliteRowOwnedView)
   SQLITE_DERIVE_CONTAINER_RELATIONAL_OPS(SqliteRowView)
-    SQLITE_DERIVE_ALL_SCALAR_RELATIONAL_OPS
+  SQLITE_DERIVE_ALL_SCALAR_RELATIONAL_OPS
 };
 
 /**
@@ -2120,9 +2123,31 @@ public:
   SQLITE_DERIVE_ARRAY_ACCESSORS
   SQLITE_DERIVE_CONTAINER_RELATIONAL_OPS(SqliteValueVec)
   SQLITE_DERIVE_CONTAINER_RELATIONAL_OPS(SqliteRowOwnedWrapper)
+  SQLITE_DERIVE_CONTAINER_RELATIONAL_OPS(SqliteRowOwnedView)
   SQLITE_DERIVE_CONTAINER_RELATIONAL_OPS(SqliteRowView)
   SQLITE_DERIVE_ALL_SCALAR_RELATIONAL_OPS
 };
+
+// Symmetrical cross-container relational operators
+SQLITE_DERIVE_TEMPLATE_REVERSE_RELATIONAL_OPS(SqliteRowOwnedView, SqliteValueTuple)
+SQLITE_DERIVE_TEMPLATE_REVERSE_RELATIONAL_OPS(SqliteRowOwnedView, SqliteValueVec)
+SQLITE_DERIVE_TEMPLATE_REVERSE_RELATIONAL_OPS(SqliteRowView, SqliteValueTuple)
+SQLITE_DERIVE_TEMPLATE_REVERSE_RELATIONAL_OPS(SqliteRowView, SqliteValueVec)
+
+// Out-of-line template constructor implementations for SqliteRowOwnedView
+template <size_t N, typename Enable>
+inline SqliteRowOwnedView::SqliteRowOwnedView(
+    const SqliteValueTuple<N, Enable> &tuple) noexcept
+    : m_array(tuple.data()), m_col_count(tuple.size()),
+      m_source(tuple.size() > 0 ? SQLITE_ROW_OWNED_SOURCE_ARRAY
+                                : SQLITE_ROW_OWNED_SOURCE_EMPTY) {}
+
+template <size_t N, typename Enable>
+inline SqliteRowOwnedView::SqliteRowOwnedView(
+    const SqliteValueVec<N, Enable> &vec) noexcept
+    : m_array(vec.data()), m_col_count(vec.size()),
+      m_source(vec.size() > 0 ? SQLITE_ROW_OWNED_SOURCE_ARRAY
+                              : SQLITE_ROW_OWNED_SOURCE_EMPTY) {}
 
 // ============================================================================
 // PART 3: Static Footprint Verifications

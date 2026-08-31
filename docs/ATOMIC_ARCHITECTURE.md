@@ -50,8 +50,8 @@ Unlike integers which can be atomically loaded using a bitwise identity operatio
 ## C++ Zero-Dependency Polymorphism (`sqlite3_atomic.hpp`)
 While C developers must explicitly call `sqlite_atomic_store_32`, modern C++ developers expect standard polymorphic overloads (`sqlite_atomic_store(ptr, val)`). However, SQLite extensions built in `no-std` environments cannot link against `<type_traits>` to use `std::enable_if`.
 
-To solve this, `sqlite3_atomic.hpp` implements a custom, zero-dependency **SFINAE (Substitution Failure Is Not An Error)** engine. 
-1. It defines a manual `sqlite_is_pointer<T>` and `sqlite_enable_if`.
+To solve this, `sqlite3_atomic.hpp` includes `sqlite3_allocator.hpp` to leverage the consolidated, zero-dependency **SFINAE (Substitution Failure Is Not An Error)** engine. 
+1. It utilizes `sqlite_is_pointer<T>` and `sqlite_enable_if`.
 2. When a C++ developer calls `sqlite_atomic_store(&my_var, 5)`, the SFINAE engine intercepts the call.
 3. If `my_var` is a pointer, it routes instantly to the underlying `_ptr` C macro.
 4. If `my_var` is a primitive (integer/bool), it calculates `sizeof(my_var)` and routes the request to a highly optimized struct template (`SqliteAtomicOps<Size>`), bridging the type directly to the correct `_8`, `_16`, `_32`, or `_64` C macro.

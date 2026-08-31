@@ -13,7 +13,8 @@ A fully freestanding C++ allocator that brings `std::allocator`, `std::construct
 - **Zero-Dependency Construction**: Leverages proprietary `operator new` tag trickery to safely invoke C++ constructors natively without the `<new>` header.
 - **SQLite Profiler Integration**: Provides `sqlite_new` and `sqlite_delete` to flawlessly route all C++ instantiations through `sqlite3_malloc` and `sqlite3_free`, keeping memory limits perfectly tracked by the core engine.
 - **Decoupled Array Architecture**: Explicitly separates raw memory allocation (`sqlite_new_array`) from construction (`sqlite_construct_at`) to completely eliminate the hidden length overhead of standard C++ `new[]`.
-- **Zero-Dependency Move Semantics & Perfect Forwarding**: Implements `sqlite_move` (and `sqlite_move_ptr`) as a complete drop-in replacement for `std::move`, and `sqlite_forward` for variadic constructor forwarding without `#include <utility>`.
+- **Zero-Dependency Move Semantics & Forwarding**: Implements `sqlite_move` (and `sqlite_move_ptr`) as a complete drop-in replacement for `std::move`, and `sqlite_forward` for variadic constructor forwarding without `#include <utility>`.
+- **Consolidated Freestanding Type Traits**: Implements `sqlite_enable_if`, `sqlite_is_same`, `sqlite_is_pointer`, `sqlite_remove_reference`, `sqlite_remove_const`, `sqlite_remove_cv`, `sqlite_add_rvalue_reference`, `sqlite_declval`, and `sqlite_is_trivially_copyable` in a single canonical header without `<type_traits>`.
 - **Fast SIMD Memory Copy**: Provides `SQLITE_FAST_MEMCPY` optimized across GCC/Clang built-ins, MSVC intrinsics (`__movsb`), and standard memory models.
 - **Smart Pointer Ready**: Acts as the foundational memory and lifecycle layer for components like `SqliteSharedPtr` and `SqliteUniquePtr`.
 
@@ -26,7 +27,7 @@ A zero-dependency, freestanding suite of cross-platform atomics, locks, and gene
 
 #### Key Features:
 - **`sqlite3_lock_base.hpp`**: Provides non-copyable, non-movable base classes (`SqliteLockBase`, `SqliteGuardBase`) and generic RAII guard templates (`SqliteLockGuard<T>`, `SqliteBasicReadGuard<T>`, `SqliteBasicWriteGuard<T>`) without virtual function overhead (`-nostdlib++` compliant).
-- **`sqlite3_atomic.h` / `.hpp`**: Explicitly sized (8, 16, 32, 64-bit) C atomics wrapping GCC/Clang built-ins and MSVC intrinsics. The `.hpp` header adds a zero-dependency C++ SFINAE engine that perfectly mimics the polymorphism of `<atomic>` automatically detecting variable widths at compile-time.
+- **`sqlite3_atomic.h` / `.hpp`**: Explicitly sized (8, 16, 32, 64-bit) C atomics wrapping GCC/Clang built-ins and MSVC intrinsics. The `.hpp` header includes `sqlite3_allocator.hpp` to leverage the consolidated SFINAE engine, automatically detecting variable widths at compile-time.
 - **`sqlite3_tiny_lock.h` / `.hpp`**: A microscopic (1-byte) hybrid lock. On native hardware, it acts as a blistering-fast, cache-friendly TTAS (Test and Test-And-Set) spinlock to prevent MESI bouncing storms. On WebAssembly, it dynamically scales to 4-bytes and transforms into a true 0% CPU sleeping mutex via `memory.atomic.wait32`. Inherits from `SqliteLockBase`.
 - **`sqlite3_mutex_lock.h` / `.hpp`**: An owning Pure C struct (`sqlite3_mutex_lock`) and C++ wrapper (`SqliteMutex : public SqliteLockBase`) over SQLite's native `sqlite3_mutex_alloc`. Mimics `std::mutex` and `std::lock_guard` perfectly, while safely handling `nullptr` mutexes in single-threaded SQLite compilations.
 - **`sqlite3_rw_lock.h` / `.hpp`**: A cross-platform Read/Write lock (`SqliteRwLock : public SqliteLockBase`) that seamlessly maps to Windows `SRWLOCK`, POSIX `pthread_rwlock_t`, and WASM `memory.atomic.wait32` (via `TinyLock`). Includes zero-overhead C++ RAII wrappers (`SqliteReadGuard` / `SqliteWriteGuard`) to maximize read concurrency while guaranteeing exception-safe locking.
@@ -88,10 +89,11 @@ Zero-dependency C++ RAII wrappers for SQLite core data types designed for zero-a
 Zero-dependency, `-nostdlib++` compliant wrappers for multi-column SQLite tabular row inspection, parameter reflection, standard `std::array` compliance, and non-owning span wrappers.
 
 #### Key Features:
-- **Universal Non-Owning Row View**: `SqliteRowView` (24 Bytes) multiplexes all SQLite row sources — prepared statements (`sqlite3_stmt*`), UDF argument vectors (`sqlite3_value**`), and in-memory contiguous `SqliteValueOwned` / `SqliteValueView` arrays — behind a single uniform API (`typedef SqliteRowView SqliteUdfArgs;`).
+- **Universal Non-Owning Row View (`SqliteRowView`)**: 16-byte tagged union (2 CPU registers) multiplexing prepared statements (`sqlite3_stmt*`), UDF argument vectors (`sqlite3_value**`), contiguous `SqliteValueView*` arrays, and non-contiguous `const SqliteValueView* const*` pointer arrays behind a single uniform API (`typedef SqliteRowView SqliteUdfArgs;`).
+- **Universal Non-Owning Owned Row View (`SqliteRowOwnedView`)**: 16-byte tagged union (2 CPU registers) providing zero-allocation read-only inspection over contiguous `const SqliteValueOwned*` arrays/spans and non-contiguous `const SqliteValueOwned* const*` pointer arrays (e.g. primary keys projected from row containers).
+- **Zero-Allocation Row Span Wrapper (`SqliteRowOwnedWrapper`)**: 16-byte mutable/const span over contiguous `SqliteValueOwned` arrays (`SqliteValueOwned*` + `int len`).
 - **Standard `std::array` Interface**: Implements standard element accessors (`front()`, `back()`, `at()`, `operator[]`, `data()`, `max_size()`) with canonical `SQLITE_NULL` fallback on out-of-bounds access.
-- **Zero-Allocation Row Span Wrapper**: `SqliteRowOwnedWrapper` (16 Bytes) provides an ergonomic non-owning reference over any contiguous array of `SqliteValueOwned` objects (`SqliteValueOwned*` + `int len`).
-- **Comprehensive Relational Comparisons**: Complete set of relational operators (`==`, `!=`, `<`, `<=`, `>`, `>=`) allowing comparisons between row views, wrapper spans, and scalar values.
+- **Comprehensive Relational Comparisons**: Complete set of bidirectional relational operators (`==`, `!=`, `<`, `<=`, `>`, `>=`) across `SqliteRowView`, `SqliteRowOwnedView`, `SqliteRowOwnedWrapper`, `SqliteValueTuple<N>`, `SqliteValueVec<N>`, and scalar values.
 - **Bidirectional & Reverse Iteration**: Provides `begin()`, `end()`, `cbegin()`, `cend()`, `rbegin()`, `rend()`, `crbegin()`, `crend()` via `sqlite_reverse_iterator<Iter>` supporting both lvalue references and transient prvalue views.
 
 #### Documentation:

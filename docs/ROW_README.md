@@ -17,14 +17,19 @@ In SQLite extension and virtual table development, tabular row data manifests ac
 
 ```
 ┌─────────────────────────────────────────────────────────────────────────────┐
-│                            UNIVERSAL ROW VIEW                               │
-│ (Non-owning, Zero-Allocation, Multi-Source Universal Row View)              │
+│                            UNIVERSAL ROW VIEWS                              │
+│ (Non-owning, Zero-Allocation, Multi-Source Universal Row Views)             │
 │                                                                             │
 │                            SqliteRowView                                    │
-│   Multiplexes: sqlite3_stmt* | sqlite3_value** argv | Value Views           │
-│   [24 Bytes: 16B Tagged Union + 4B Column Count + 1B Source Tag + 3B Pad]   │
+│   Multiplexes: stmt* | argv** | view* | view** ptrs                         │
+│   [16 Bytes: 8B Tagged Union + 4B Column Count + 1B Source Tag + 3B Pad]    │
 │   Standard std::array interface: front(), back(), at(), []                  │
 │   Iterators: begin(), end(), cbegin(), cend(), rbegin(), rend()             │
+│                                                                             │
+│                         SqliteRowOwnedView                                  │
+│   Multiplexes: owned* array/span | owned** non-contiguous PK ptr array      │
+│   [16 Bytes: 8B Union Pointer + 4B Column Count + 1B Source Tag + 3B Pad]   │
+│   Standard std::array interface: front(), back(), at(), [], iterators       │
 └─────────────────────────────────────────────────────────────────────────────┘
                                      │
            Convert via .to_vec() OR Extract via direct typed accessors
@@ -37,7 +42,7 @@ In SQLite extension and virtual table development, tabular row data manifests ac
 │  [N × 16 Bytes on Stack, 0 Mallocs]        [N × 16B In-Situ / Heap Spill]   │
 │                                                                             │
 │                            SqliteRowOwnedWrapper                            │
-│   [16-Byte Non-Owning Span: SqliteValueOwned* data + int len (2 Registers)] │
+│   [16-Byte Mutable/Const Span: SqliteValueOwned* data + int len (2 Regs)]   │
 │   Standard std::array interface: front(), back(), at(), [], rbegin(), rend()│
 └─────────────────────────────────────────────────────────────────────────────┘
 ```
@@ -46,25 +51,25 @@ In SQLite extension and virtual table development, tabular row data manifests ac
 
 ## 2. Feature Matrix
 
-| Feature | `SqliteRowView` (`SqliteUdfArgs`) | `SqliteRowOwnedWrapper` | `SqliteValueTuple<N>` | `SqliteValueVec<N>` |
-| :--- | :---: | :---: | :---: | :---: |
-| **Size in Memory** | **24 Bytes** | **16 Bytes** (2 Registers) | **$N \times 16$ Bytes** | **$N \times 16$ Bytes** |
-| **Standard Alignment** | `std::array` | `std::array` | `std::array` | `std::vector` |
-| **Allocation Model** | Zero (Non-owning View) | Zero (Non-owning Span) | Stack ($N \in [1..8]$) / Heap ($N = 0$) | Stack SBO ($N \in [1..8]$) / Heap ($N = 0$) |
-| **Backing Sources** | Statement, Argv, View Array | Contiguous `SqliteValueOwned` | In-Situ Stack Array | In-Situ Stack / Heap Buffer |
-| **Column Count** | Dynamic ($0 \dots N$) | Dynamic ($0 \dots N$) | Fixed ($N$) | Adaptive ($0 \dots N$) |
-| **Element Access** | `front`, `back`, `at`, `[]`, `data` | `front`, `back`, `at`, `[]`, `data` | `front`, `back`, `at`, `[]`, `data` | `front`, `back`, `at`, `[]`, `data` |
-| **Direct Typed Access** | `.as_int64()`, `.as_text()`... | `.as_int64()`, `.as_text()`... | `.as_int64()`, `.as_text()`... | `.as_int64()`, `.as_text()`... |
-| **Bounds Safety** | Returns fallback `SQLITE_NULL` | Returns fallback `SQLITE_NULL` | Returns fallback `SQLITE_NULL` | Returns fallback `SQLITE_NULL` |
-| **Iterators** | Forward + Reverse (`rbegin`/`rend`) | Forward + Reverse (`rbegin`/`rend`) | Forward + Reverse (`rbegin`/`rend`) | Forward + Reverse (`rbegin`/`rend`) |
-| **Swiss Table Hashing** | `SqliteRowHash` | `SqliteRowHash` | `SqliteRowHash` | `SqliteRowHash` |
-| **Transparent B-Tree** | `SqliteRowLess` | `SqliteRowLess` | `SqliteRowLess` | `SqliteRowLess` |
+| Feature | `SqliteRowView` (`SqliteUdfArgs`) | `SqliteRowOwnedView` | `SqliteRowOwnedWrapper` | `SqliteValueTuple<N>` | `SqliteValueVec<N>` |
+| :--- | :---: | :---: | :---: | :---: | :---: |
+| **Size in Memory** | **16 Bytes** (2 Regs) | **16 Bytes** (2 Regs) | **16 Bytes** (2 Regs) | **$N \times 16$ Bytes** | **$N \times 16$ Bytes** |
+| **Standard Alignment** | `std::array` | `std::array` | `std::array` | `std::array` | `std::vector` |
+| **Allocation Model** | Zero (View) | Zero (View) | Zero (Span) | Stack ($1..8$) / Heap ($0$) | Stack SBO ($1..8$) / Heap ($0$) |
+| **Backing Sources** | Statement, Argv, View Array, View Pointer Array | Contiguous Array, Non-Contiguous Owned Pointer Array | Contiguous `SqliteValueOwned*` | In-Situ Stack Array | In-Situ Stack / Heap Buffer |
+| **Column Count** | Dynamic ($0 \dots N$) | Dynamic ($0 \dots N$) | Dynamic ($0 \dots N$) | Fixed ($N$) | Adaptive ($0 \dots N$) |
+| **Element Access** | `front`, `back`, `at`, `[]` | `front`, `back`, `at`, `[]` | `front`, `back`, `at`, `[]` | `front`, `back`, `at`, `[]` | `front`, `back`, `at`, `[]` |
+| **Direct Typed Access** | `.as_int64()`, `.as_text()`... | `.as_int64()`, `.as_text()`... | `.as_int64()`, `.as_text()`... | `.as_int64()`, `.as_text()`... | `.as_int64()`, `.as_text()`... |
+| **Bounds Safety** | Returns `SQLITE_NULL` | Returns `SQLITE_NULL` | Returns `SQLITE_NULL` | Returns `SQLITE_NULL` | Returns `SQLITE_NULL` |
+| **Iterators** | Forward + Reverse | Forward + Reverse | Forward + Reverse | Forward + Reverse | Forward + Reverse |
+| **Swiss Table Hashing** | `SqliteRowHash` | `SqliteRowHash` | `SqliteRowHash` | `SqliteRowHash` | `SqliteRowHash` |
+| **Transparent B-Tree** | `SqliteRowLess` | `SqliteRowLess` | `SqliteRowLess` | `SqliteRowLess` | `SqliteRowLess` |
 
 ---
 
 ## 3. `SqliteRowView` API Reference
 
-`SqliteRowView` (aliased as `SqliteUdfArgs`) is a lightweight, non-owning 24-byte universal view multiplexing prepared statements, UDF arguments, and in-memory value arrays with zero dynamic allocations and complete `std::array` compliance.
+`SqliteRowView` (aliased as `SqliteUdfArgs`) is a lightweight, non-owning 16-byte universal view multiplexing prepared statements, UDF arguments, in-memory value arrays, and non-contiguous pointer arrays with zero dynamic allocations and complete `std::array` compliance.
 
 ### Multi-Source Creation
 ```cpp
@@ -87,6 +92,32 @@ void my_custom_udf(sqlite3_context* ctx, int argc, sqlite3_value** argv) {
 // 3. Wrap in-memory contiguous SqliteValueView arrays
 SqliteValueView view_arr[2] = { SqliteValueView::from_column(stmt.get(), 0), SqliteValueView::from_column(stmt.get(), 1) };
 SqliteRowView row(view_arr, 2);
+
+// 4. Wrap non-contiguous view pointer arrays (extracting Primary Keys from complete rows)
+// Suppose PK columns are col 0 (id) and col 2 (tenant_id) from complete row
+SqliteValueView v0 = row[0], v2 = row[2];
+const SqliteValueView* pk_view_ptrs[2] = { &v0, &v2 };
+SqliteRowView pk_view(pk_view_ptrs, 2);
+assert(pk_view.source_type() == SQLITE_ROW_SOURCE_VIEW_PTR_ARRAY);
+```
+
+---
+
+## 4. `SqliteRowOwnedView` API Reference
+
+`SqliteRowOwnedView` is a lightweight, non-owning 16-byte view over owned value memory, supporting both contiguous arrays and non-contiguous pointer arrays:
+
+```cpp
+// 1. Wrap non-contiguous owned pointer arrays (extracting PKs from owned complete rows)
+const SqliteValueOwned* pk_owned_ptrs[2] = { &owned_row[0], &owned_row[2] };
+SqliteRowOwnedView pk_owned_view(pk_owned_ptrs, 2);
+assert(pk_owned_view.source_type() == SQLITE_ROW_OWNED_SOURCE_PTR_ARRAY);
+assert(pk_owned_view[0] == owned_row[0]);
+assert(pk_owned_view.as_int64(0) == owned_row[0].as_int64());
+
+// 2. Wrap contiguous arrays or spans
+SqliteRowOwnedView contiguous_view(arr, 3);
+assert(contiguous_view.source_type() == SQLITE_ROW_OWNED_SOURCE_ARRAY);
 ```
 
 ### Forward and Reverse Iteration

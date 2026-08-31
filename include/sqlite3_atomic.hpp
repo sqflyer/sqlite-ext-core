@@ -2,6 +2,7 @@
 #define SQLITE3_ATOMIC_HPP
 
 #include "sqlite3_atomic.h"
+#include "sqlite3_allocator.hpp"
 #include <stddef.h>
 #include <stdint.h>
 
@@ -16,32 +17,6 @@
  * It automatically supports all integer types, booleans, and pointers.
  * No stdlib is required (`-nostdlib++` safe).
  */
-
-// ============================================================================
-// ZERO-DEPENDENCY SFINAE HELPERS (No <type_traits>)
-// ============================================================================
-
-/**
- * @brief Compile-time trait to detect if a type is a pointer.
- * Evaluates to true only if the provided type is a raw pointer (T*).
- * Used to conditionally route atomic operations differently for pointers vs values.
- */
-template<typename T> struct sqlite_is_pointer { static const bool value = false; };
-template<typename T> struct sqlite_is_pointer<T*> { static const bool value = true; };
-
-/**
- * @brief Zero-dependency implementation of std::enable_if.
- * 
- * If B is true, it provides a nested `type` typedef (which defaults to void or the provided T).
- * If B is false, the `type` typedef is omitted entirely. 
- * 
- * When used in a template function signature, passing a false condition causes the 
- * return type deduction to fail. Because "Substitution Failure Is Not An Error" (SFINAE), 
- * the compiler silently discards that function overload instead of crashing, allowing 
- * it to neatly pick the correct overload based on type conditions.
- */
-template<bool B, typename T = void> struct sqlite_enable_if {};
-template<typename T> struct sqlite_enable_if<true, T> { typedef T type; };
 
 // ============================================================================
 // COMPILER-SPECIFIC CASTING
