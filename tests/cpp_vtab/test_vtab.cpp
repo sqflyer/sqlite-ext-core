@@ -323,11 +323,264 @@ void test_vtab() {
     exec(db, "DROP TABLE my_complex_renamed;");
 
     printf("Closing DB...\n");
-    sqlite3_close(db);
+    assert(sqlite3_close(db) == SQLITE_OK);
     printf("Virtual Table Tests Passed!\n");
+}
+
+// ============================================================================
+// 6. Error Propagation Test Table (Comprehensive get_error_message() tests)
+// ============================================================================
+
+class ErrorProneCursor : public SqliteVTabCursor {
+private:
+    bool m_fail_filter;
+    bool m_fail_next;
+    int m_count;
+public:
+    ErrorProneCursor(bool fail_filter, bool fail_next)
+        : m_fail_filter(fail_filter), m_fail_next(fail_next), m_count(0) {}
+
+    int filter(int idxNum, const char* idxStr, SqliteUdfArgs args) override {
+        (void)idxNum; (void)idxStr; (void)args;
+        if (m_fail_filter) return SQLITE_ERROR;
+        m_count = 0;
+        return SQLITE_OK;
+    }
+
+    int next() override {
+        if (m_fail_next) return SQLITE_ERROR;
+        m_count++;
+        return SQLITE_OK;
+    }
+
+    bool eof() override { return m_count >= 5; }
+
+    int column(SqliteContext& ctx, int N) override {
+        (void)N;
+        ctx.result_int(m_count);
+        return SQLITE_OK;
+    }
+
+    int rowid(sqlite3_int64& pRowid) override {
+        pRowid = m_count;
+        return SQLITE_OK;
+    }
+};
+
+class ErrorProneTable : public SqliteVTable {
+public:
+    static ErrorProneTable* s_latest_instance;
+    const char* m_err_msg = nullptr;
+    bool m_fail_update = false;
+    bool m_fail_best_index = false;
+    bool m_fail_begin = false;
+    bool m_fail_sync = false;
+    bool m_fail_commit = false;
+    bool m_fail_rollback = false;
+    bool m_fail_rename = false;
+    bool m_fail_savepoint = false;
+    bool m_fail_release = false;
+    bool m_fail_rollback_to = false;
+    bool m_fail_filter = false;
+    bool m_fail_next = false;
+
+    ErrorProneTable(sqlite3* db) : SqliteVTable(db) {
+        s_latest_instance = this;
+    }
+
+    ~ErrorProneTable() override {
+        if (s_latest_instance == this) {
+            s_latest_instance = nullptr;
+        }
+    }
+
+    static int connect(SqliteConnectArgs& args) {
+        int rc = sqlite3_declare_vtab(args.db(), "CREATE TABLE x(id, val)");
+        if (rc == SQLITE_OK) {
+            args.set_instance(sqlite_new<ErrorProneTable>(args.db()));
+        }
+        return rc;
+    }
+
+    const char* get_error_message() const override {
+        return m_err_msg;
+    }
+
+    int bestIndex(SqliteIndexInfo& info) override {
+        if (m_fail_best_index) return SQLITE_ERROR;
+        info.set_estimated_cost(10.0);
+        return SQLITE_OK;
+    }
+
+    SqliteVTabCursor* open() override {
+        return sqlite_new<ErrorProneCursor>(m_fail_filter, m_fail_next);
+    }
+
+    int update(SqliteUdfArgs args, sqlite3_int64* pRowid) override {
+        (void)args; (void)pRowid;
+        if (m_fail_update) return SQLITE_CONSTRAINT;
+        return SQLITE_OK;
+    }
+
+    int begin() override {
+        if (m_fail_begin) return SQLITE_ERROR;
+        return SQLITE_OK;
+    }
+
+    int sync() override {
+        if (m_fail_sync) return SQLITE_ERROR;
+        return SQLITE_OK;
+    }
+
+    int commit() override {
+        if (m_fail_commit) return SQLITE_ERROR;
+        return SQLITE_OK;
+    }
+
+    int rollback() override {
+        if (m_fail_rollback) return SQLITE_ERROR;
+        return SQLITE_OK;
+    }
+
+    int rename(const char* zNewName) override {
+        (void)zNewName;
+        if (m_fail_rename) return SQLITE_ERROR;
+        return SQLITE_OK;
+    }
+
+    int savepoint(int iSavepoint) override {
+        (void)iSavepoint;
+        if (m_fail_savepoint) return SQLITE_ERROR;
+        return SQLITE_OK;
+    }
+
+    int release(int iSavepoint) override {
+        (void)iSavepoint;
+        if (m_fail_release) return SQLITE_ERROR;
+        return SQLITE_OK;
+    }
+
+    int rollbackTo(int iSavepoint) override {
+        (void)iSavepoint;
+        if (m_fail_rollback_to) return SQLITE_ERROR;
+        return SQLITE_OK;
+    }
+};
+
+ErrorProneTable* ErrorProneTable::s_latest_instance = nullptr;
+
+void test_vtab_error_messages() {
+    printf("Testing Virtual Table Error Message Propagation (zErrMsg)...\n");
+    sqlite3* db;
+    assert(sqlite3_open(":memory:", &db) == SQLITE_OK);
+
+    constexpr VTabOptions OPTS = VTabOptions::Writable | VTabOptions::Renameable | VTabOptions::Savepoint;
+    int rc = SqliteVTab::define<ErrorProneTable, OPTS>(db, "err_module");
+    assert(rc == SQLITE_OK);
+
+    rc = sqlite3_exec(db, "CREATE VIRTUAL TABLE err_tab USING err_module;", nullptr, nullptr, nullptr);
+    assert(rc == SQLITE_OK);
+    assert(ErrorProneTable::s_latest_instance != nullptr);
+    ErrorProneTable* vtab = ErrorProneTable::s_latest_instance;
+
+    // 1. Test xUpdate custom error message
+    printf("  1. Testing xUpdate error message...\n");
+    fflush(stdout);
+    vtab->m_fail_update = true;
+    vtab->m_err_msg = "Custom update constraint failed: value must be positive";
+    rc = sqlite3_exec(db, "INSERT INTO err_tab(id, val) VALUES(1, 'abc');", nullptr, nullptr, nullptr);
+    assert(rc != SQLITE_OK);
+    const char* errmsg = sqlite3_errmsg(db);
+    printf("     SQLite reported error: %s\n", errmsg);
+    fflush(stdout);
+    assert(strstr(errmsg, "Custom update constraint failed: value must be positive") != nullptr);
+
+    // Reset update failure
+    vtab->m_fail_update = false;
+    vtab->m_err_msg = nullptr;
+
+    // 2. Test xFilter custom error message
+    printf("  2. Testing xFilter error message...\n");
+    fflush(stdout);
+    vtab->m_fail_filter = true;
+    vtab->m_err_msg = "Custom filter error: invalid scan range";
+    sqlite3_stmt* stmt = nullptr;
+    rc = sqlite3_prepare_v2(db, "SELECT * FROM err_tab;", -1, &stmt, nullptr);
+    assert(rc == SQLITE_OK);
+    rc = sqlite3_step(stmt);
+    assert(rc != SQLITE_ROW && rc != SQLITE_DONE);
+    errmsg = sqlite3_errmsg(db);
+    printf("     SQLite reported error: %s\n", errmsg);
+    fflush(stdout);
+    assert(strstr(errmsg, "Custom filter error: invalid scan range") != nullptr);
+    sqlite3_finalize(stmt);
+
+    // Reset filter failure
+    vtab->m_fail_filter = false;
+    vtab->m_err_msg = nullptr;
+
+    // 3. Test xNext custom error message
+    printf("  3. Testing xNext error message...\n");
+    fflush(stdout);
+    vtab->m_fail_next = true;
+    vtab->m_err_msg = "Custom next iteration error: corrupted row pointer";
+    rc = sqlite3_prepare_v2(db, "SELECT * FROM err_tab;", -1, &stmt, nullptr);
+    assert(rc == SQLITE_OK);
+    rc = sqlite3_step(stmt); // First row (via filter)
+    assert(rc == SQLITE_ROW);
+    rc = sqlite3_step(stmt); // Second row (via next) -> fails!
+    assert(rc != SQLITE_ROW && rc != SQLITE_DONE);
+    errmsg = sqlite3_errmsg(db);
+    printf("     SQLite reported error: %s\n", errmsg);
+    fflush(stdout);
+    assert(strstr(errmsg, "Custom next iteration error: corrupted row pointer") != nullptr);
+    sqlite3_finalize(stmt);
+
+    // Reset next failure
+    vtab->m_fail_next = false;
+    vtab->m_err_msg = nullptr;
+
+    // 4. Test xRename custom error message
+    printf("  4. Testing xRename error message...\n");
+    fflush(stdout);
+    vtab->m_fail_rename = true;
+    vtab->m_err_msg = "Custom rename error: virtual table is locked by another session";
+    rc = sqlite3_exec(db, "ALTER TABLE err_tab RENAME TO err_tab_renamed;", nullptr, nullptr, nullptr);
+    assert(rc != SQLITE_OK);
+    errmsg = sqlite3_errmsg(db);
+    printf("     SQLite reported error: %s\n", errmsg);
+    fflush(stdout);
+    assert(strstr(errmsg, "Custom rename error: virtual table is locked by another session") != nullptr);
+
+    // Reset rename failure
+    vtab->m_fail_rename = false;
+    vtab->m_err_msg = nullptr;
+
+    // 5. Test xBegin / xSync / xCommit custom error message
+    printf("  5. Testing transaction error messages...\n");
+    fflush(stdout);
+    vtab->m_fail_begin = true;
+    vtab->m_err_msg = "Custom begin error: transaction engine not ready";
+    rc = sqlite3_exec(db, "INSERT INTO err_tab(id, val) VALUES(2, 'xyz');", nullptr, nullptr, nullptr);
+    assert(rc != SQLITE_OK);
+    errmsg = sqlite3_errmsg(db);
+    printf("     SQLite reported error: %s\n", errmsg);
+    fflush(stdout);
+    assert(strstr(errmsg, "Custom begin error: transaction engine not ready") != nullptr);
+
+    vtab->m_fail_begin = false;
+    vtab->m_err_msg = nullptr;
+
+    // Clean up
+    rc = sqlite3_exec(db, "DROP TABLE err_tab;", nullptr, nullptr, nullptr);
+    assert(rc == SQLITE_OK);
+    assert(sqlite3_close(db) == SQLITE_OK);
+    printf("All Virtual Table Error Message Propagation Tests Passed!\n");
 }
 
 int main() {
     test_vtab();
+    test_vtab_error_messages();
     return 0;
 }
+

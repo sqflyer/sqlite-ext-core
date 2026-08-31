@@ -176,6 +176,8 @@ class MyWriteableTable : public SqliteVTable {
 
 ---
 
+---
+
 ## 3. Transactions and Savepoints (`VTabOptions::Savepoint`)
 
 If you want your virtual table to participate in SQLite's nested transactions and savepoints, you must include `VTabOptions::Savepoint` in your registration options and implement the savepoint methods.
@@ -198,7 +200,7 @@ class MyTransactionalTable : public SqliteVTable {
 };
 
 // Registration:
-SqliteVTabModule<MyTransactionalTable, VTabOptions::Savepoint>::register_module(db, "my_tx_table");
+SqliteVTab::define<MyTransactionalTable, VTabOptions::Savepoint>(db, "my_tx_table");
 ```
 
 ---
@@ -220,39 +222,73 @@ class MyShadowTable : public SqliteVTable {
 };
 
 // Registration:
-SqliteVTabModule<MyShadowTable, VTabOptions::HasShadow>::register_module(db, "my_shadow_table");
-```
-
----
-
-SqliteVTab::define<MyTransactionalTable, VTabOptions::Savepoint>(db, "my_tx_table");
-```
-
----
-
-## 4. Shadow Tables (Defensive Mode)
-
-To protect underlying storage tables with `xShadowName`:
-
-```cpp
-// Registration:
 SqliteVTab::define<MyShadowTable, VTabOptions::HasShadow>(db, "my_shadow_table");
 ```
 
 ---
 
-## 5. Renaming Virtual Tables (`xRename`)
+## 5. Renaming Virtual Tables (`VTabOptions::Renameable`)
 
 To handle `ALTER TABLE RENAME TO`:
 
 ```cpp
+class MyRenameableTable : public SqliteVTable {
+    // ...
+    int rename(const char* zNewName) override {
+        // Handle renaming internal storage
+        return SQLITE_OK;
+    }
+};
+
 // Registration:
 SqliteVTab::define<MyRenameableTable, VTabOptions::Renameable>(db, "my_renameable_table");
 ```
 
 ---
 
-## 6. Eponymous Virtual Tables (`VTabOptions::Eponymous`)
+## 6. Custom Error Message Propagation (`get_error_message()`)
+
+When a virtual table operation fails (returning `SQLITE_ERROR`, `SQLITE_CONSTRAINT`, etc.), SQLite checks `pVTab->zErrMsg` to return descriptive error text to the SQL caller.
+
+`sqlite3_vtab.hpp` makes this seamless: simply override `get_error_message()` on your `SqliteVTable` class to return a string describing the failure. The wrapper automatically allocates the message via `sqlite3_mprintf` and assigns it to `pVTab->zErrMsg`.
+
+```cpp
+class ValidatedTable : public SqliteVTable {
+private:
+    const char* m_last_error = nullptr;
+
+public:
+    ValidatedTable(sqlite3* db) : SqliteVTable(db) {}
+
+    const char* get_error_message() const override {
+        return m_last_error;
+    }
+
+    int update(SqliteUdfArgs args, sqlite3_int64* pRowid) override {
+        if (args.size() > 2) {
+            int val = args[2].as_int();
+            if (val < 0) {
+                m_last_error = "Constraint failed: 'value' must be a positive integer";
+                return SQLITE_CONSTRAINT;
+            }
+        }
+        m_last_error = nullptr;
+        return SQLITE_OK;
+    }
+};
+```
+
+When an `INSERT INTO my_vtab VALUES(-1);` query fails, SQLite will report:
+`Runtime error: Constraint failed: 'value' must be a positive integer`.
+
+Error message propagation is automatically supported across **all** virtual table callbacks:
+- **Mutations & Schema**: `update()`, `rename()`
+- **Cursor Operations**: `bestIndex()`, `filter()`, `next()`, `rowid()`
+- **Transactions & Savepoints**: `begin()`, `sync()`, `commit()`, `rollback()`, `savepoint()`, `release()`, `rollbackTo()`
+
+---
+
+## 7. Eponymous Virtual Tables (`VTabOptions::Eponymous`)
 
 Sometimes you don't want the user to have to run `CREATE VIRTUAL TABLE x USING module`. You just want them to be able to instantly query a function that returns a table:
 
@@ -270,7 +306,7 @@ SqliteVTab::define<MySeriesTable, VTabOptions::Eponymous>(db, "generate_series")
 
 ---
 
-## 7. Stateful Virtual Tables (`SqliteVTab::define_with_state`)
+## 8. Stateful Virtual Tables (`SqliteVTab::define_with_state`)
 
 Virtual tables can participate in shared per-connection state alongside Scalar UDFs and Aggregates using **`SqliteVTab::define_with_state`**:
 
@@ -304,7 +340,7 @@ Inside cursor `column(SqliteContext& ctx, int N)`, state is resolved via **`ctx.
 
 ---
 
-## 8. The `MATCH` Operator: `xFindFunction` vs `bestIndex`
+## 9. The `MATCH` Operator: `xFindFunction` vs `bestIndex`
 
 One of the most powerful features of virtual tables is the ability to implement custom search logic for keywords like `MATCH` (e.g. `WHERE column MATCH 'search_term'`). 
 

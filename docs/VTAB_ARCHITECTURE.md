@@ -193,3 +193,38 @@ schema.bind_size("capacity", &capacity)
 schema.parse(vargs);
 ```
 
+---
+
+## 8. Unified Error Propagation Architecture (`set_error_message` & `zErrMsg` Lifecycle)
+
+SQLite virtual tables report custom, human-readable error messages by allocating a string via `sqlite3_mprintf` / `sqlite3_malloc` and assigning it to the `zErrMsg` field of `sqlite3_vtab`.
+
+### A. Lifecycle & Memory Ownership
+1. **Invocation**: When a user-defined virtual table or cursor returns a non-zero error code (e.g. `SQLITE_ERROR`, `SQLITE_CONSTRAINT`), the router calls `set_error_message(pVTab, wrapper->instance)`.
+2. **Querying Error State**: `set_error_message` calls `instance->get_error_message()`. If non-null and `pVTab->zErrMsg` is not yet set, it allocates the string via `sqlite3_mprintf("%s", err)`.
+3. **SQLite Engine Consumption**: SQLite reads `pVTab->zErrMsg`, incorporates the message into `sqlite3_errmsg(db)`, and automatically frees `zErrMsg` using `sqlite3_free`.
+4. **Disconnect Safety**: If a table is torn down with an active `zErrMsg`, `xDisconnect` explicitly invokes `sqlite3_free(wrapper->base.zErrMsg)` to guarantee zero memory leaks under AddressSanitizer.
+
+```cpp
+static inline void set_error_message(sqlite3_vtab* pVTab, VTableType* instance) {
+    if (pVTab && instance) {
+        const char* err = instance->get_error_message();
+        if (err && !pVTab->zErrMsg) {
+            pVTab->zErrMsg = sqlite3_mprintf("%s", err);
+        }
+    }
+}
+```
+
+### B. Callback Coverage Matrix
+| Subsystem | Callback | Trigger Condition | Error Message Channel |
+| :--- | :--- | :--- | :--- |
+| **Creation & Connect** | `xCreate` / `xConnect` | `connect(args)` fails | `*pzErr = sqlite3_mprintf(...)` via `args.set_error()` |
+| **Query Planning** | `xBestIndex` | `bestIndex(info)` fails | `pVTab->zErrMsg = sqlite3_mprintf(...)` via `get_error_message()` |
+| **Cursor Operations** | `xFilter`, `xNext`, `xRowid` | `filter()`, `next()`, `rowid()` fail | `pCursor->pVtab->zErrMsg = sqlite3_mprintf(...)` |
+| **Data Mutations** | `xUpdate` | `update(args, pRowid)` fails | `pVTab->zErrMsg = sqlite3_mprintf(...)` |
+| **Transactions** | `xBegin`, `xSync`, `xCommit`, `xRollback` | `begin()`, `sync()`, `commit()`, `rollback()` fail | `pVTab->zErrMsg = sqlite3_mprintf(...)` |
+| **Savepoints** | `xSavepoint`, `xRelease`, `xRollbackTo` | `savepoint()`, `release()`, `rollbackTo()` fail | `pVTab->zErrMsg = sqlite3_mprintf(...)` |
+| **Schema Operations** | `xRename` | `rename(zNewName)` fails | `pVTab->zErrMsg = sqlite3_mprintf(...)` |
+
+

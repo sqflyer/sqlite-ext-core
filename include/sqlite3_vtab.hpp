@@ -324,6 +324,15 @@ private:
         SqliteVTabCursor* instance;
     };
 
+    static inline void set_error_message(sqlite3_vtab* pVTab, VTableType* instance) {
+        if (pVTab && instance) {
+            const char* err = instance->get_error_message();
+            if (err && !pVTab->zErrMsg) {
+                pVTab->zErrMsg = sqlite3_mprintf("%s", err);
+            }
+        }
+    }
+
     static int xCreate(sqlite3* db, void* pAux, int argc, const char* const* argv,
                        sqlite3_vtab** ppVTab, char** pzErr) {
         SqliteConnectArgs args(db, pAux, argc, argv);
@@ -359,11 +368,7 @@ private:
         TableWrapper* wrapper = reinterpret_cast<TableWrapper*>(pVTab);
         SqliteIndexInfo info(pInfo);
         int rc = wrapper->instance->bestIndex(info);
-        
-        const char* err = wrapper->instance->get_error_message();
-        if (err && !pVTab->zErrMsg) {
-            pVTab->zErrMsg = sqlite3_mprintf("%s", err);
-        }
+        set_error_message(pVTab, wrapper->instance);
         return rc;
     }
 
@@ -410,12 +415,18 @@ private:
     static int xFilter(sqlite3_vtab_cursor* pCursor, int idxNum, const char* idxStr,
                        int argc, sqlite3_value** argv) {
         CursorWrapper* wrapper = reinterpret_cast<CursorWrapper*>(pCursor);
-        return wrapper->instance->filter(idxNum, idxStr, SqliteUdfArgs(argc, argv));
+        int rc = wrapper->instance->filter(idxNum, idxStr, SqliteUdfArgs(argc, argv));
+        TableWrapper* tab = reinterpret_cast<TableWrapper*>(pCursor->pVtab);
+        if (tab) set_error_message(pCursor->pVtab, tab->instance);
+        return rc;
     }
 
     static int xNext(sqlite3_vtab_cursor* pCursor) {
         CursorWrapper* wrapper = reinterpret_cast<CursorWrapper*>(pCursor);
-        return wrapper->instance->next();
+        int rc = wrapper->instance->next();
+        TableWrapper* tab = reinterpret_cast<TableWrapper*>(pCursor->pVtab);
+        if (tab) set_error_message(pCursor->pVtab, tab->instance);
+        return rc;
     }
 
     static int xEof(sqlite3_vtab_cursor* pCursor) {
@@ -432,27 +443,45 @@ private:
 
     static int xRowid(sqlite3_vtab_cursor* pCursor, sqlite3_int64* pRowid) {
         CursorWrapper* wrapper = reinterpret_cast<CursorWrapper*>(pCursor);
-        return wrapper->instance->rowid(*pRowid);
+        int rc = wrapper->instance->rowid(*pRowid);
+        TableWrapper* tab = reinterpret_cast<TableWrapper*>(pCursor->pVtab);
+        if (tab) set_error_message(pCursor->pVtab, tab->instance);
+        return rc;
     }
 
     static int xUpdate(sqlite3_vtab* pVTab, int argc, sqlite3_value** argv, sqlite3_int64* pRowid) {
-        return reinterpret_cast<TableWrapper*>(pVTab)->instance->update(SqliteUdfArgs(argc, argv), pRowid);
+        TableWrapper* wrapper = reinterpret_cast<TableWrapper*>(pVTab);
+        int rc = wrapper->instance->update(SqliteUdfArgs(argc, argv), pRowid);
+        set_error_message(pVTab, wrapper->instance);
+        return rc;
     }
 
     static int xBegin(sqlite3_vtab* pVTab) {
-        return reinterpret_cast<TableWrapper*>(pVTab)->instance->begin();
+        TableWrapper* wrapper = reinterpret_cast<TableWrapper*>(pVTab);
+        int rc = wrapper->instance->begin();
+        set_error_message(pVTab, wrapper->instance);
+        return rc;
     }
 
     static int xSync(sqlite3_vtab* pVTab) {
-        return reinterpret_cast<TableWrapper*>(pVTab)->instance->sync();
+        TableWrapper* wrapper = reinterpret_cast<TableWrapper*>(pVTab);
+        int rc = wrapper->instance->sync();
+        set_error_message(pVTab, wrapper->instance);
+        return rc;
     }
 
     static int xCommit(sqlite3_vtab* pVTab) {
-        return reinterpret_cast<TableWrapper*>(pVTab)->instance->commit();
+        TableWrapper* wrapper = reinterpret_cast<TableWrapper*>(pVTab);
+        int rc = wrapper->instance->commit();
+        set_error_message(pVTab, wrapper->instance);
+        return rc;
     }
 
     static int xRollback(sqlite3_vtab* pVTab) {
-        return reinterpret_cast<TableWrapper*>(pVTab)->instance->rollback();
+        TableWrapper* wrapper = reinterpret_cast<TableWrapper*>(pVTab);
+        int rc = wrapper->instance->rollback();
+        set_error_message(pVTab, wrapper->instance);
+        return rc;
     }
 
     static int xFindFunction(sqlite3_vtab* pVTab, int nArg, const char* zName,
@@ -468,7 +497,10 @@ private:
     }
 
     static int xRename(sqlite3_vtab* pVTab, const char* zNew) {
-        return reinterpret_cast<TableWrapper*>(pVTab)->instance->rename(zNew);
+        TableWrapper* wrapper = reinterpret_cast<TableWrapper*>(pVTab);
+        int rc = wrapper->instance->rename(zNew);
+        set_error_message(pVTab, wrapper->instance);
+        return rc;
     }
 
     static int xShadowName(const char* zName) {
@@ -476,15 +508,24 @@ private:
     }
 
     static int xSavepoint(sqlite3_vtab* pVTab, int iSavepoint) {
-        return reinterpret_cast<TableWrapper*>(pVTab)->instance->savepoint(iSavepoint);
+        TableWrapper* wrapper = reinterpret_cast<TableWrapper*>(pVTab);
+        int rc = wrapper->instance->savepoint(iSavepoint);
+        set_error_message(pVTab, wrapper->instance);
+        return rc;
     }
 
     static int xRelease(sqlite3_vtab* pVTab, int iSavepoint) {
-        return reinterpret_cast<TableWrapper*>(pVTab)->instance->release(iSavepoint);
+        TableWrapper* wrapper = reinterpret_cast<TableWrapper*>(pVTab);
+        int rc = wrapper->instance->release(iSavepoint);
+        set_error_message(pVTab, wrapper->instance);
+        return rc;
     }
 
     static int xRollbackTo(sqlite3_vtab* pVTab, int iSavepoint) {
-        return reinterpret_cast<TableWrapper*>(pVTab)->instance->rollbackTo(iSavepoint);
+        TableWrapper* wrapper = reinterpret_cast<TableWrapper*>(pVTab);
+        int rc = wrapper->instance->rollbackTo(iSavepoint);
+        set_error_message(pVTab, wrapper->instance);
+        return rc;
     }
 
 public:
