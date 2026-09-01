@@ -139,11 +139,37 @@ Verification enforces strict equivalence across actual and expected result sets:
 
 ---
 
-## 7. Verification Matrix
+## 7. Turnkey Test Harness & Runner Macros
+
+To eliminate boilerplate across extension repositories, the runner provides standalone macro generators:
+
+```
+                  +-----------------------------------+
+                  |  SQLITE_RUN_SQL_EXAMPLE_MAIN(...) |
+                  +-----------------+-----------------+
+                                    |
+            +-----------------------v-----------------------+
+            | 1. SqliteDatabaseOwned::open_memory()         |
+            | 2. Invoke init_fn(db.get()) -> SQLITE_OK     |
+            | 3. SqliteSqlRunner::run_file(db, filepath)    |
+            | 4. Return exit code (0 = PASS, 1 = FAIL)      |
+            +-----------------------------------------------+
+```
+
+- **`SQLITE_RUN_SQL_EXAMPLE_MAIN(filepath, init_fn)`**: Synthesizes a freestanding `main()` that opens an in-memory database, runs extension initialization, executes the test script, and returns exit code 0 or 1.
+- **`SQLITE_RUN_SQL_FILE_MAIN(filepath)`**: Synthesizes a freestanding `main()` for standard SQL script execution without custom C callbacks.
+- **`run_file_with_init(filepath, init_fn)` / `run_string_with_init(script, title, init_fn)`**: Template methods enabling programmatic execution with custom lambdas or function pointers.
+
+---
+
+## 8. Verification Matrix
 
 | Component | Test File | Verification Scope |
 |---|---|---|
 | Buffer Growth & SBO | `test_sql_runner.cpp` | Buffer expansion ($0 \rightarrow 8 \rightarrow 16 \rightarrow 32$), SBO stack-to-heap spill (> 8 cols), Move semantics |
 | Parser Edge Cases | `test_sql_runner.cpp` | Whitespace trimming, Table dividers (`:---|---`), UTF-8 international characters, Compact comments (`--%%`, `--@snapshot`) |
 | Execution Engine | `test_sql_runner.cpp` | DDL/DML changes tracking, SELECT row formatting, Missing snapshot enforcement, Value mismatches, Error propagation |
-| File I/O Engine | `test_sql_runner.cpp` | Valid `.sql` files, Empty files, Non-existent file error handling |
+| File I/O Engine | `test_sql_runner.cpp` | Valid `.sql` files, Empty files, Non-existent file error handling, Free functions (`sqlite_run_file`, `sqlite_run_string`) |
+| Turnkey Macro Harness | `test_example_main.cpp` | Standalone executable generated via `SQLITE_RUN_SQL_EXAMPLE_MAIN` with extension initialization |
+| Standalone File Harness | `test_file_main.cpp` | Standalone executable generated via `SQLITE_RUN_SQL_FILE_MAIN` |
+

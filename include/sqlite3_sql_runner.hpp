@@ -56,6 +56,11 @@
 
 namespace sqlite_ext {
 
+// Alias core SQLite database & statement types into sqlite_ext namespace
+using ::SqliteDatabaseView;
+using ::SqliteDatabaseOwned;
+using ::SqliteStatement;
+
 /**
  * @struct SqlTableBuffer
  * @brief Dynamic, heap-backed table container storing rows as `SqliteValueVec<8>`.
@@ -666,8 +671,124 @@ public:
         sqlite3_free(script);
         return result;
     }
+
+    /**
+     * @brief Opens an in-memory SQLite database, invokes an initialization callback (e.g. extension registration),
+     * and executes the target SQL script file with snapshot validation.
+     *
+     * @tparam InitFn Callable type accepting (sqlite3*) or (SqliteDatabaseView) and returning an int status (SQLITE_OK).
+     * @param filepath Path to the target .sql script file.
+     * @param init_fn Initialization callback.
+     * @param require_snapshots If true, requires every row-returning query to have a companion snapshot.
+     * @return true on complete execution and verification success; false otherwise.
+     */
+    template <typename InitFn>
+    static bool run_file_with_init(const char* filepath, InitFn&& init_fn, bool require_snapshots = true) {
+        SqliteDatabaseOwned db = SqliteDatabaseOwned::open_memory();
+        if (!db.is_valid()) return false;
+        if (init_fn(db.get()) != SQLITE_OK) return false;
+        return run_file(db, filepath, require_snapshots);
+    }
+
+    /**
+     * @brief Opens an in-memory SQLite database, invokes an initialization callback,
+     * and executes the target SQL script string with snapshot validation.
+     *
+     * @tparam InitFn Callable type accepting (sqlite3*) or (SqliteDatabaseView) and returning an int status (SQLITE_OK).
+     * @param script_content In-memory SQL script content.
+     * @param script_title Title to display on the ASCII header banner.
+     * @param init_fn Initialization callback.
+     * @param require_snapshots If true, requires every row-returning query to have a companion snapshot.
+     * @return true on complete execution and verification success; false otherwise.
+     */
+    template <typename InitFn>
+    static bool run_string_with_init(const char* script_content, const char* script_title, InitFn&& init_fn, bool require_snapshots = true) {
+        SqliteDatabaseOwned db = SqliteDatabaseOwned::open_memory();
+        if (!db.is_valid()) return false;
+        if (init_fn(db.get()) != SQLITE_OK) return false;
+        return run_string(db, script_content, script_title, require_snapshots);
+    }
 };
 
+/**
+ * @brief Convenience free function to execute a SQL script file against a database handle.
+ * @param db Database handle or view.
+ * @param filepath Path to target .sql script file.
+ * @param require_snapshots If true, requires snapshot validation for row-returning queries.
+ * @return true on success, false on failure.
+ */
+inline bool sqlite_run_file(SqliteDatabaseView db, const char* filepath, bool require_snapshots = true) {
+    return SqliteSqlRunner::run_file(db, filepath, require_snapshots);
+}
+
+/**
+ * @brief Convenience free function to execute an in-memory SQL script against a database handle.
+ * @param db Database handle or view.
+ * @param script_content In-memory SQL script content.
+ * @param script_title Title to display on the ASCII header banner.
+ * @param require_snapshots If true, requires snapshot validation for row-returning queries.
+ * @return true on success, false on failure.
+ */
+inline bool sqlite_run_string(SqliteDatabaseView db, const char* script_content, const char* script_title = "SQL Script", bool require_snapshots = true) {
+    return SqliteSqlRunner::run_string(db, script_content, script_title, require_snapshots);
+}
+
 } // namespace sqlite_ext
+
+/**
+ * @brief Macro to execute a SQL script file with snapshot validation.
+ */
+#define SQLITE_RUN_SQL_FILE(db, filepath) \
+    ::sqlite_ext::SqliteSqlRunner::run_file((db), (filepath))
+
+/**
+ * @brief Macro to execute a SQL script file with explicit snapshot requirement flag.
+ */
+#define SQLITE_RUN_SQL_FILE_EX(db, filepath, require_snapshots) \
+    ::sqlite_ext::SqliteSqlRunner::run_file((db), (filepath), (require_snapshots))
+
+/**
+ * @brief Macro to execute an in-memory SQL script string with snapshot validation.
+ */
+#define SQLITE_RUN_SQL_STRING(db, script, title) \
+    ::sqlite_ext::SqliteSqlRunner::run_string((db), (script), (title))
+
+/**
+ * @brief Generates a complete, turnkey main() entrypoint for running a SQL script file against an in-memory database.
+ * @param filepath Path to the .sql script file.
+ */
+#define SQLITE_RUN_SQL_FILE_MAIN(filepath) \
+int main(int argc, char* argv[]) { \
+    (void)argc; (void)argv; \
+    ::SqliteDatabaseOwned _runner_db = ::SqliteDatabaseOwned::open_memory(); \
+    if (!_runner_db.is_valid()) { \
+        fprintf(stderr, "Error: Failed to open in-memory SQLite database\n"); \
+        return 1; \
+    } \
+    bool _runner_ok = ::sqlite_ext::SqliteSqlRunner::run_file(_runner_db, (filepath)); \
+    return _runner_ok ? 0 : 1; \
+}
+
+/**
+ * @brief Generates a complete, turnkey main() entrypoint for initializing an extension and running a SQL script file.
+ * @param filepath Path to the .sql script file.
+ * @param init_fn Extension initialization function or lambda returning SQLITE_OK.
+ */
+#define SQLITE_RUN_SQL_EXAMPLE_MAIN(filepath, init_fn) \
+int main(int argc, char* argv[]) { \
+    (void)argc; (void)argv; \
+    ::SqliteDatabaseOwned _runner_db = ::SqliteDatabaseOwned::open_memory(); \
+    if (!_runner_db.is_valid()) { \
+        fprintf(stderr, "Error: Failed to open in-memory SQLite database\n"); \
+        return 1; \
+    } \
+    int _runner_rc = (init_fn)(_runner_db.get()); \
+    if (_runner_rc != SQLITE_OK) { \
+        fprintf(stderr, "Error: Extension initialization failed with code %d\n", _runner_rc); \
+        return 1; \
+    } \
+    bool _runner_ok = ::sqlite_ext::SqliteSqlRunner::run_file(_runner_db, (filepath)); \
+    return _runner_ok ? 0 : 1; \
+}
 
 #endif /* SQLITE3_SQL_RUNNER_HPP */

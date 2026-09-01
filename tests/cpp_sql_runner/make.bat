@@ -20,6 +20,18 @@ if %ERRORLEVEL% neq 0 exit /b %ERRORLEVEL%
 bin\test_sql_runner.exe
 if %ERRORLEVEL% neq 0 exit /b %ERRORLEVEL%
 
+cl /nologo /O2 /W4 /Zi /fsanitize=address /MD /I"../../include" /I"%SQLITE_INC%" /std:c++14 /Fe:bin\test_example_main.exe test_example_main.cpp "%SQLITE_LIB%"
+if %ERRORLEVEL% neq 0 exit /b %ERRORLEVEL%
+
+bin\test_example_main.exe
+if %ERRORLEVEL% neq 0 exit /b %ERRORLEVEL%
+
+cl /nologo /O2 /W4 /Zi /fsanitize=address /MD /I"../../include" /I"%SQLITE_INC%" /std:c++14 /Fe:bin\test_file_main.exe test_file_main.cpp "%SQLITE_LIB%"
+if %ERRORLEVEL% neq 0 exit /b %ERRORLEVEL%
+
+bin\test_file_main.exe
+if %ERRORLEVEL% neq 0 exit /b %ERRORLEVEL%
+
 goto end
 
 :clean

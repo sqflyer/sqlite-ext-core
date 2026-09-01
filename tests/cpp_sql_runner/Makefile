@@ -28,10 +28,20 @@ LIBS := -lsqlite3 $(SAN_FLAGS)
 
 all: test
 
-test: bin/test_sql_runner
+test: bin/test_sql_runner bin/test_example_main bin/test_file_main
 	./bin/test_sql_runner
+	./bin/test_example_main
+	./bin/test_file_main
 
 bin/test_sql_runner: test_sql_runner.cpp
+	mkdir -p bin
+	$(CXX) $(CXXFLAGS) -o $@ $< $(LIBS)
+
+bin/test_example_main: test_example_main.cpp
+	mkdir -p bin
+	$(CXX) $(CXXFLAGS) -o $@ $< $(LIBS)
+
+bin/test_file_main: test_file_main.cpp
 	mkdir -p bin
 	$(CXX) $(CXXFLAGS) -o $@ $< $(LIBS)
 

@@ -426,6 +426,41 @@ void test_sql_runner_file_execution() {
 
     bool ok = SqliteSqlRunner::run_file(db, filename);
     assert(ok);
+
+    // 5. Test convenience free functions and macros with fresh in-memory databases
+    {
+        SqliteDatabaseOwned db2 = SqliteDatabaseOwned::open_memory();
+        assert(sqlite_run_file(db2, filename));
+    }
+    {
+        SqliteDatabaseOwned db3 = SqliteDatabaseOwned::open_memory();
+        assert(SQLITE_RUN_SQL_FILE(db3, filename));
+    }
+    {
+        SqliteDatabaseOwned db4 = SqliteDatabaseOwned::open_memory();
+        assert(SQLITE_RUN_SQL_FILE_EX(db4, filename, true));
+    }
+
+    // 6. Test run_file_with_init
+    bool ok_init = SqliteSqlRunner::run_file_with_init(filename, [](sqlite3* d) {
+        assert(d != nullptr);
+        return SQLITE_OK;
+    });
+    assert(ok_init);
+
+    // 7. Test run_string_with_init
+    bool ok_str_init = SqliteSqlRunner::run_string_with_init(kFileContent, "Init Title", [](sqlite3* d) {
+        assert(d != nullptr);
+        return SQLITE_OK;
+    });
+    assert(ok_str_init);
+
+    // 8. Test initialization error propagation
+    bool fail_init = SqliteSqlRunner::run_file_with_init(filename, [](sqlite3*) {
+        return SQLITE_ERROR;
+    });
+    assert(!fail_init);
+
     remove(filename);
 
     printf("   [PASS] SqliteSqlRunner::run_file verified.\n");

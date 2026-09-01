@@ -101,7 +101,7 @@ void run_in_memory_suite() {
 }
 ```
 
-### 2. File-Based Script Execution (`run_file`)
+### 2. File-Based Script Execution (`run_file` / `sqlite_run_file`)
 
 ```cpp
 #include "sqlite3_sql_runner.hpp"
@@ -114,10 +114,41 @@ void run_file_suite() {
 
     // Automatically attempts direct path, "docs/<filepath>", and "../../docs/<filepath>"
     bool success = SqliteSqlRunner::run_file(db, "tests/scripts/test_demo.sql");
+    // Or via convenience free function / macro:
+    // bool success = sqlite_run_file(db, "tests/scripts/test_demo.sql");
+    // bool success = SQLITE_RUN_SQL_FILE(db, "tests/scripts/test_demo.sql");
     if (!success) {
         // Handle failure
     }
 }
+```
+
+### 3. Turnkey Extension Test Executable (`SQLITE_RUN_SQL_EXAMPLE_MAIN`)
+
+For extension testing, `SQLITE_RUN_SQL_EXAMPLE_MAIN` generates a complete, zero-boilerplate `main()` function that opens an in-memory database, registers your extension via an initialization callback, executes the target `.sql` test script, and returns exit code `0` on success or `1` on failure:
+
+```cpp
+#include "sqlite3_sql_runner.hpp"
+#include "my_extension.hpp"
+
+// Extension registration callback
+static int init_extension(sqlite3* db) {
+    return sqlite3_my_ext_init(db, nullptr, nullptr);
+}
+
+// Generates complete main() function running docs/MY_EXTENSION_EXAMPLE.sql
+SQLITE_RUN_SQL_EXAMPLE_MAIN("docs/MY_EXTENSION_EXAMPLE.sql", init_extension)
+```
+
+### 4. Standalone SQL Test Executable (`SQLITE_RUN_SQL_FILE_MAIN`)
+
+For standard SQL script execution without custom C extension callbacks:
+
+```cpp
+#include "sqlite3_sql_runner.hpp"
+
+// Generates complete main() function running docs/SCHEMA_TEST.sql
+SQLITE_RUN_SQL_FILE_MAIN("docs/SCHEMA_TEST.sql")
 ```
 
 ---
@@ -165,11 +196,25 @@ SQL > SELECT sku, qty FROM items ORDER BY sku;
 |---|---|
 | `run_string(SqliteDatabaseView db, const char* script, const char* title = "SQL Script", bool require_snapshots = true)` | Executes cell-partitioned SQL script from an in-memory string buffer with snapshot validation. |
 | `run_file(SqliteDatabaseView db, const char* filepath, bool require_snapshots = true)` | Reads and executes a `.sql` script file from disk with automatic search fallback resolution. |
+| `run_file_with_init(const char* filepath, InitFn&& init_fn, bool require_snapshots = true)` | Opens an in-memory DB, invokes `init_fn(sqlite3*)`, and runs a `.sql` file. |
+| `run_string_with_init(const char* script, const char* title, InitFn&& init_fn, bool require_snapshots = true)` | Opens an in-memory DB, invokes `init_fn(sqlite3*)`, and runs an in-memory script. |
 | `parse_snapshot_block(const char* text, SqlTableBuffer& out_snap)` | Parses a companion Markdown snapshot table block from SQL comment stream. |
 | `parse_cell_value(const char* str)` | Parses a string token into a typed `SqliteValueOwned` (`NULL`, `INTEGER`, `FLOAT`, or `TEXT`). |
 | `format_value(const SqliteValueOwned& val, char* buf, size_t buf_size)` | Formats an individual SQLite value into display string. |
 | `is_table_divider(const char* line)` | Detects Markdown table separator lines (`|---|:---|`). |
 | `trim_whitespace(char* str)` | In-place trimming of leading and trailing whitespace. |
+
+### Convenience Free Functions & Macros
+
+| Function / Macro | Description |
+|---|---|
+| `sqlite_run_file(db, filepath, require_snapshots = true)` | Free function executing a `.sql` file against a database view. |
+| `sqlite_run_string(db, script, title = "SQL Script", require_snapshots = true)` | Free function executing a SQL script string against a database view. |
+| `SQLITE_RUN_SQL_FILE(db, filepath)` | Macro wrapping `SqliteSqlRunner::run_file(db, filepath)`. |
+| `SQLITE_RUN_SQL_FILE_EX(db, filepath, require_snapshots)` | Macro wrapping `SqliteSqlRunner::run_file` with explicit snapshot flag. |
+| `SQLITE_RUN_SQL_STRING(db, script, title)` | Macro wrapping `SqliteSqlRunner::run_string(db, script, title)`. |
+| `SQLITE_RUN_SQL_FILE_MAIN(filepath)` | Generates a complete standalone `main()` function running `filepath` against an in-memory DB. |
+| `SQLITE_RUN_SQL_EXAMPLE_MAIN(filepath, init_fn)` | Generates a complete standalone `main()` function initializing an extension via `init_fn` and running `filepath`. |
 
 ### `SqlTableBuffer`
 
@@ -184,3 +229,4 @@ Container holding dynamic rows of `SqliteValueVec<8>`.
 | `skip_validation` | `bool` | `true` if `-- @snapshot: skip` was specified. |
 | `add_row(SqliteValueVec<8>&& row)` | `void` | Appends a row vector, dynamically expanding capacity if needed. |
 | `reset()` | `void` | Releases memory and resets counters. |
+
