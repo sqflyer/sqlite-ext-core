@@ -19,14 +19,13 @@ private:
     SqliteStatement(const SqliteStatement&) = delete;
     SqliteStatement& operator=(const SqliteStatement&) = delete;
 
-protected:
+public:
     /**
-     * @brief Protected constructor for derived classes (e.g. SqliteCachedStatement) 
-     * to wrap an existing raw statement handle.
+     * @brief Constructs a statement wrapper adopting an existing raw sqlite3_stmt handle.
+     * @param stmt The raw SQLite prepared statement handle.
      */
     inline explicit SqliteStatement(sqlite3_stmt* stmt) noexcept : m_stmt(stmt) {}
 
-public:
     /**
      * @brief Constructs an empty, unprepared statement wrapper.
      */
@@ -142,6 +141,24 @@ public:
      */
     inline explicit operator bool() const noexcept {
         return m_stmt != nullptr;
+    }
+
+    /**
+     * @brief Returns the raw SQL text used to prepare this statement.
+     * 
+     * @return Pointer to UTF-8 SQL string, or nullptr if unprepared.
+     */
+    inline const char* sql() const noexcept {
+        return m_stmt ? sqlite3_sql(m_stmt) : nullptr;
+    }
+
+    /**
+     * @brief Returns the raw SQL text with bound parameter values expanded.
+     * 
+     * @return Pointer to dynamically allocated UTF-8 SQL string, or nullptr if unprepared.
+     */
+    inline const char* expanded_sql() const noexcept {
+        return m_stmt ? sqlite3_expanded_sql(m_stmt) : nullptr;
     }
 
     // =========================================================================

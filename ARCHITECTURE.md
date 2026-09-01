@@ -88,7 +88,8 @@ For a deeper dive into the specific mechanics and C++ paradigms used in individu
 - [**Tiny Lock**](docs/TINY_LOCK_ARCHITECTURE.md): A blazing-fast 1-byte spinlock fallback on native hardware and 0% CPU futex on WebAssembly.
 - [**Pluggable State Synchronization**](docs/EXT_STATE_ARCHITECTURE.md): Pluggable lock policy architecture across Pure C (`_RW`, `_TINY`, `_MUTEX`) and C++ (`SqliteExtState<T, LockPolicy>`).
 
-### Database Interaction
+### Database Interaction & Test Harness
+- [**Interactive SQL Script Runner & Snapshot Validator (`sqlite3_sql_runner.hpp`)**](docs/SQL_RUNNER_ARCHITECTURE.md): Zero-STD, freestanding cell-partitioned SQL script runner and Markdown snapshot table validator with SBO `SqliteValueVec<8>` storage and automatic CLI pipeline compatibility.
 - [**Database Lifecycle & Event Hooks**](docs/DB_ARCHITECTURE.md): The `Owned`/`View` model for robust connection management, diagnostics, and compile-time template trampolines for `update`, `commit`, `rollback`, `wal`, and `progress` hooks.
 - [**Transactions & Savepoints**](docs/TRANSACTION_ARCHITECTURE.md): Exception-safe RAII rollbacks and hierarchical nested transactions.
 - [**Statements**](docs/STATEMENT_ARCHITECTURE.md): Zero-cost query builders, iterators, and prepared statement caching.
@@ -147,5 +148,7 @@ The test framework is strictly modularized by domain and isolation level:
 - **`tests/cpp_row/`**: Universal row wrappers (`SqliteRowView`, `SqliteRowOwnedWrapper`), multi-column row relational comparisons, and scope-guarded stack execution (`withSqliteRowOwned`).
 - **`tests/cpp_value_containers/`**: Dedicated container verification split into core mechanics (`test_value_containers.cpp`), cross-container relational matrix (`test_value_containers_comparisons.cpp`), and C++14 STL container integration (`test_value_containers_std.cpp`).
 - **`tests/threads/`**: Threading primitives, condition variables, stackful fibers (`SqliteCoroutine`), streaming generators (`SqliteFiberGenerator`), M:N schedulers (`SqliteCoroScheduler`), and multi-database extension pools (`SqliteExtCoroPool`).
+- **`tests/cpp_sql_runner/`**: Zero-STD interactive SQL script runner (`sqlite3_sql_runner.hpp`), cell partitioning (`-- %%`), and Markdown snapshot verification (`-- @snapshot`).
+
 
 

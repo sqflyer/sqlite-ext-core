@@ -25,6 +25,11 @@ public:
     /** @brief Retrieves the underlying raw sqlite3* pointer. */
     inline sqlite3* get() const { return m_db; }
 
+    /** @brief Checks if the database connection handle is valid and open. */
+    inline bool is_valid() const noexcept { return m_db != nullptr; }
+    inline bool is_open() const noexcept { return m_db != nullptr; }
+    inline explicit operator bool() const noexcept { return m_db != nullptr; }
+
     /** @brief Implicit conversion operator to raw sqlite3* pointer for seamless SQLite C-API interoperability. */
     inline operator sqlite3*() const { return m_db; }
 
@@ -330,6 +335,15 @@ public:
         : SqliteDatabaseView(nullptr) 
     {
         sqlite3_open_v2(filename, &m_db, flags, zVfs);
+    }
+
+    /**
+     * @brief Opens a new in-memory SQLite database connection with RAII ownership.
+     * @param flags SQLite open flags (defaults to read-write and create).
+     * @return An opened SqliteDatabaseOwned instance.
+     */
+    static inline SqliteDatabaseOwned open_memory(int flags = SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE) {
+        return SqliteDatabaseOwned(":memory:", flags);
     }
 
     /**

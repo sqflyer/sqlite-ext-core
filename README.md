@@ -381,7 +381,20 @@ Zero-collision, reference-counted extension worker pool registry for process-wid
 - [Extension Coroutine Pool README](docs/CORO_EXT_POOL_README.md)
 - [Extension Coroutine Pool Architecture](docs/CORO_EXT_POOL_ARCHITECTURE.md)
 
-### 22. Unified Umbrella Headers & Entry Points (`sqlite3_ext.h` / `sqlite3_ext.hpp`)
+### 22. Zero-STD Interactive SQL Runner & Snapshot Validator (`sqlite3_sql_runner.hpp`)
+A freestanding C++ test execution harness and interactive SQL script runner for executing cell-partitioned (`-- %% <Title>`) `.sql` test files, pretty-printing ASCII tables, and asserting returned rows against Markdown snapshot tables (`-- @snapshot`).
+
+#### Key Features:
+- **Interactive Cell Protocol (`-- %% <Title>`)**: Partitions scripts into logical blocks with ASCII section banners.
+- **Markdown Snapshot Verification (`-- @snapshot`)**: Automatically verifies row count, column cardinality, and typed cell values against companion Markdown tables.
+- **Snapshot Bypass (`-- @snapshot: skip`)**: Allows non-deterministic queries to execute without strict assertions.
+- **100% SQLite CLI Interchangeable**: All annotations are standard SQL comments (`--`), allowing scripts to pipe directly into `sqlite3 < script.sql`.
+
+#### Documentation:
+- [SQL Runner Quickstart](docs/SQL_RUNNER_README.md)
+- [SQL Runner Architecture](docs/SQL_RUNNER_ARCHITECTURE.md)
+
+### 23. Unified Umbrella Headers & Entry Points (`sqlite3_ext.h` / `sqlite3_ext.hpp`)
 Master umbrella headers providing full subsystem access:
 - **Pure C (`sqlite3_ext.h`)**: Unifies `sqlite3_atomic.h`, `sqlite3_time.h`, `sqlite3_tiny_lock.h`, `sqlite3_rw_lock.h`, `sqlite3_mutex_lock.h`, `sqlite3_smart_ptr.h`, and `sqlite3_ext_state.h`.
 - **C++ (`sqlite3_ext.hpp`)**: Master umbrella header and unified registration facade (`SqliteExt`) providing symmetrical registration across all extension subsystems:
@@ -390,6 +403,7 @@ Master umbrella headers providing full subsystem access:
   - **Table-Valued Functions**: `SqliteExt::define_tvf`, `SqliteExt::define_tvf_with_state`, `SqliteExt::define_tvf_coro`, `SqliteExt::define_tvf_coro_with_state`
   - **Virtual Tables**: `SqliteExt::define_vtab`, `SqliteExt::define_vtab_with_state`
   - **Shared State**: `SqliteExt::init_state`, `SqliteExt::get_state`
+  - **Interactive SQL Runner**: `SqliteSqlRunner::run_string`, `SqliteSqlRunner::run_file`
 
 ## Building and Testing
 
@@ -401,7 +415,7 @@ Master umbrella headers providing full subsystem access:
 Uses `clang` / `clang++` (or `gcc` on Linux) with `-nostdlib++ -fno-exceptions -fno-rtti -fsanitize=address`:
 
 ```bash
-# Clean and run all 19 subsystem integration tests
+# Clean and run all 20 subsystem integration tests
 make clean
 make test
 
@@ -426,6 +440,7 @@ make test-cpp-buffer
 make test-cpp-blob-stream
 make test-cpp-backup
 make test-cpp-vtab
+make test-cpp-sql-runner
 make test-cpp-extension
 make test-ext-state
 
@@ -465,6 +480,7 @@ make.bat test-cpp-buffer
 make.bat test-cpp-blob-stream
 make.bat test-cpp-backup
 make.bat test-cpp-vtab
+make.bat test-cpp-sql-runner
 make.bat test-cpp-extension
 make.bat test-ext-state
 

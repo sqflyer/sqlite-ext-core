@@ -36,6 +36,7 @@ if "%TARGET%"=="test-cpp-buffer" ( call :test_cpp_buffer & goto end )
 if "%TARGET%"=="test-cpp-blob-stream" ( call :test_cpp_blob_stream & goto end )
 if "%TARGET%"=="test-cpp-backup" ( call :test_cpp_backup & goto end )
 if "%TARGET%"=="test-cpp-vtab" ( call :test_cpp_vtab & goto end )
+if "%TARGET%"=="test-cpp-sql-runner" ( call :test_cpp_sql_runner & goto end )
 if "%TARGET%"=="test-cpp-extension" ( call :test_cpp_extension & goto end )
 if "%TARGET%"=="test-threads" ( call :test_threads & goto end )
 if "%TARGET%"=="example-cpp" ( call :example_cpp & goto end )
@@ -86,6 +87,8 @@ if %ERRORLEVEL% neq 0 exit /b %ERRORLEVEL%
 call :test_cpp_backup
 if %ERRORLEVEL% neq 0 exit /b %ERRORLEVEL%
 call :test_cpp_vtab
+if %ERRORLEVEL% neq 0 exit /b %ERRORLEVEL%
+call :test_cpp_sql_runner
 if %ERRORLEVEL% neq 0 exit /b %ERRORLEVEL%
 call :test_cpp_extension
 if %ERRORLEVEL% neq 0 exit /b %ERRORLEVEL%
@@ -212,6 +215,11 @@ echo [Running test-cpp-vtab]
 cd tests\cpp_vtab && call make.bat && cd ..\..
 goto :eof
 
+:test_cpp_sql_runner
+echo [Running test-cpp-sql-runner]
+cd tests\cpp_sql_runner && call make.bat && cd ..\..
+goto :eof
+
 :test_cpp_extension
 echo [Running test-cpp-extension]
 cd tests\cpp_extension && call make.bat && cd ..\..
@@ -261,6 +269,7 @@ cd tests\cpp_buffer && call make.bat clean && cd ..\..
 cd tests\cpp_blob_stream && call make.bat clean && cd ..\..
 cd tests\cpp_backup && call make.bat clean && cd ..\..
 cd tests\cpp_vtab && call make.bat clean && cd ..\..
+cd tests\cpp_sql_runner && call make.bat clean && cd ..\..
 cd tests\cpp_extension && call make.bat clean && cd ..\..
 cd tests\threads && call make.bat clean && cd ..\..
 cd tests\oom_safety && call make.bat clean && cd ..\..
