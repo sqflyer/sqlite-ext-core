@@ -2,6 +2,7 @@
 #define SQLITE_CORE
 #include "../../include/sqlite3_value.hpp"
 #include "../../include/sqlite3_value_containers.hpp"
+#include "../../include/sqlite3_time.hpp"
 #include <stdio.h>
 #include <assert.h>
 #include <string.h>
@@ -620,8 +621,8 @@ void test_as_text_and_as_blob(sqlite3* db) {
 }
 
 void test_subtypes_and_affinities(sqlite3* db) {
-    // 1. Exact 16-byte size guarantee
-    static_assert(sizeof(SqliteValueOwned) == 16, "SqliteValueOwned must be exactly 16 bytes!");
+    // 1. Exact 24-byte size guarantee
+    static_assert(sizeof(SqliteValueOwned) == 24, "SqliteValueOwned must be exactly 24 bytes!");
 
     // 2. Default NULL constructor
     SqliteValueOwned val_null;
@@ -716,8 +717,9 @@ void test_subtypes_and_affinities(sqlite3* db) {
 
     // 11. Dual Representation Struct assertions
     static_assert(sizeof(SqliteOwnedValueTag) == 1, "SqliteOwnedValueTag must be exactly 1 byte!");
-    static_assert(sizeof(SqliteTypeRep) == 16, "SqliteTypeRep must be exactly 16 bytes!");
-    static_assert(sizeof(InlineBufferRep) == 16, "InlineBufferRep must be exactly 16 bytes!");
+    static_assert(sizeof(SqliteTypeRep) == 24, "SqliteTypeRep must be exactly 24 bytes!");
+    static_assert(sizeof(InlineBufferRep) == 24, "InlineBufferRep must be exactly 24 bytes!");
+    static_assert(sizeof(InlineUuidRep) == 24, "InlineUuidRep must be exactly 24 bytes!");
 
     SqliteOwnedValueTag tag_test;
     tag_test.set(SQLITE_TEXT, false, 5);
@@ -973,35 +975,35 @@ void test_from_literal() {
 }
 
 void test_sbo_boundary_and_heap_transitions() {
-    // String SBO exact boundary (13 chars vs 14 chars)
-    const char* str13 = "1234567890123";
-    SqliteValueOwned s13 = SqliteValueOwned::from_text(str13);
-    assert(!s13.is_heap_allocated());
-    assert(s13.inline_length() == 13);
-    assert(s13.tag().len() == 13);
-    assert(!s13.tag().is_heap());
-    assert(s13.as_text() == str13);
+    // String SBO exact boundary (21 chars vs 22 chars)
+    const char* str21 = "123456789012345678901"; // 21 chars -> inline
+    SqliteValueOwned s21 = SqliteValueOwned::from_text(str21);
+    assert(!s21.is_heap_allocated());
+    assert(s21.inline_length() == 21);
+    assert(s21.tag().len() == 21);
+    assert(!s21.tag().is_heap());
+    assert(s21.as_text() == str21);
 
-    const char* str15 = "123456789012345";
-    SqliteValueOwned s15 = SqliteValueOwned::from_text(str15);
-    assert(s15.is_heap_allocated());
-    assert(s15.tag().is_heap());
+    const char* str22 = "1234567890123456789012"; // 22 chars -> heap
+    SqliteValueOwned s22 = SqliteValueOwned::from_text(str22);
+    assert(s22.is_heap_allocated());
+    assert(s22.tag().is_heap());
 
-    // Blob SBO exact boundary (14 bytes vs 15 bytes)
-    uint8_t blob14[14];
-    memset(blob14, 0xAA, 14);
-    SqliteValueOwned b14 = SqliteValueOwned::from_blob(blob14, 14);
-    assert(!b14.is_heap_allocated());
-    assert(b14.inline_length() == 14);
-    assert(b14.tag().len() == 14);
-    assert(!b14.tag().is_heap());
-    assert(b14.as_blob().size() == 14);
+    // Blob SBO exact boundary (22 bytes vs 23 bytes)
+    uint8_t blob22[22];
+    memset(blob22, 0xAA, 22);
+    SqliteValueOwned b22 = SqliteValueOwned::from_blob(blob22, 22);
+    assert(!b22.is_heap_allocated());
+    assert(b22.inline_length() == 22);
+    assert(b22.tag().len() == 22);
+    assert(!b22.tag().is_heap());
+    assert(b22.as_blob().size() == 22);
 
-    uint8_t blob15[15];
-    memset(blob15, 0xBB, 15);
-    SqliteValueOwned b15 = SqliteValueOwned::from_blob(blob15, 15);
-    assert(b15.is_heap_allocated());
-    assert(b15.tag().is_heap());
+    uint8_t blob23[23];
+    memset(blob23, 0xBB, 23);
+    SqliteValueOwned b23 = SqliteValueOwned::from_blob(blob23, 23);
+    assert(b23.is_heap_allocated());
+    assert(b23.tag().is_heap());
 
     // Empty string (0 bytes)
     SqliteValueOwned s0 = SqliteValueOwned::from_text("");
@@ -1044,8 +1046,8 @@ void test_owned_move_and_self_assign_safety(sqlite3* db) {
 
 void test_owned_value_arrays() {
     // 1. Static Key Tuple (Stack, 0 heap allocations)
-    static_assert(sizeof(SqliteValueTuple<3>) == 48, "SqliteValueTuple<3> must be exactly 48 bytes!");
-    static_assert(sizeof(SqliteValueTuple<4>) == 64, "SqliteValueTuple<4> must be exactly 64 bytes!");
+    static_assert(sizeof(SqliteValueTuple<3>) == 72, "SqliteValueTuple<3> must be exactly 72 bytes!");
+    static_assert(sizeof(SqliteValueTuple<4>) == 96, "SqliteValueTuple<4> must be exactly 96 bytes!");
 
     SqliteValueTuple<3> static_tuple;
     assert(static_tuple.size() == 3);
@@ -1201,10 +1203,19 @@ void test_string_blob_view_constructors() {
     assert(from_bv_short.as_blob() == bv_short);
     assert(from_bv_short.as_blob().size() == 3);
 
-    // --- Heap blob (20 bytes, > 14) ---
-    uint8_t big_blob[20];
-    memset(big_blob, 0xCC, 20);
-    SqliteBlobView bv_big(big_blob, 20);
+    // --- Inline blob (20 bytes, <= 22) ---
+    uint8_t mid_blob[20];
+    memset(mid_blob, 0xCC, 20);
+    SqliteBlobView bv_mid(mid_blob, 20);
+    SqliteValueOwned from_bv_mid(bv_mid);
+    assert(from_bv_mid.type() == SQLITE_BLOB);
+    assert(!from_bv_mid.is_heap_allocated());
+    assert(from_bv_mid.as_blob() == bv_mid);
+
+    // --- Heap blob (25 bytes, > 22) ---
+    uint8_t big_blob[25];
+    memset(big_blob, 0xDD, 25);
+    SqliteBlobView bv_big(big_blob, 25);
     SqliteValueOwned from_bv_big(bv_big);
     assert(from_bv_big.type() == SQLITE_BLOB);
     assert(from_bv_big.is_heap_allocated());
@@ -1373,10 +1384,10 @@ void test_set_null_lifecycle() {
     assert(heap_val.is_null());
     assert(!heap_val.is_heap_allocated());
 
-    // 3. set_null on heap blob
-    uint8_t big_blob[20];
-    memset(big_blob, 0xEE, 20);
-    SqliteValueOwned heap_blob = SqliteValueOwned::from_blob(big_blob, 20);
+    // 3. set_null on heap blob (> 22 bytes)
+    uint8_t big_blob[25];
+    memset(big_blob, 0xEE, 25);
+    SqliteValueOwned heap_blob = SqliteValueOwned::from_blob(big_blob, 25);
     assert(heap_blob.is_heap_allocated());
     heap_blob.set_null();
     assert(heap_blob.is_null());
@@ -1408,7 +1419,7 @@ void test_clone_and_deep_copy() {
     assert(cloned_inline.as_text() == orig_inline.as_text());
 
     // 2. Clone heap text → independent allocation
-    SqliteValueOwned orig_heap = SqliteValueOwned::from_text("this is a string longer than 13 chars");
+    SqliteValueOwned orig_heap = SqliteValueOwned::from_text("this is a string longer than 21 chars now");
     SqliteValueOwned cloned_heap = orig_heap.clone();
     assert(cloned_heap == orig_heap);
     assert(cloned_heap.is_heap_allocated());
@@ -1419,17 +1430,17 @@ void test_clone_and_deep_copy() {
     // Nullify original, clone must survive independently
     orig_heap.set_null();
     assert(cloned_heap.is_text());
-    assert(cloned_heap.as_text() == "this is a string longer than 13 chars");
+    assert(cloned_heap.as_text() == "this is a string longer than 21 chars now");
 
-    // 3. Clone heap blob → independent allocation
-    uint8_t big_blob[20];
-    for (int i = 0; i < 20; ++i) big_blob[i] = (uint8_t)i;
-    SqliteValueOwned orig_blob = SqliteValueOwned::from_blob(big_blob, 20);
+    // 3. Clone heap blob (> 22 bytes) → independent allocation
+    uint8_t big_blob[25];
+    for (int i = 0; i < 25; ++i) big_blob[i] = (uint8_t)i;
+    SqliteValueOwned orig_blob = SqliteValueOwned::from_blob(big_blob, 25);
     SqliteValueOwned cloned_blob = orig_blob.clone();
     assert(cloned_blob == orig_blob);
     assert(cloned_blob.is_heap_allocated());
     assert(cloned_blob.heap_value() != orig_blob.heap_value());
-    assert(memcmp(cloned_blob.as_blob().data(), big_blob, 20) == 0);
+    assert(memcmp(cloned_blob.as_blob().data(), big_blob, 25) == 0);
 
     // 4. Copy constructor preserves subtype
     SqliteValueOwned orig_sub = SqliteValueOwned::from_json("{\"key\":\"val\"}");
@@ -1438,13 +1449,13 @@ void test_clone_and_deep_copy() {
     assert(copy_sub.subtype() == SQLITE_SUBTYPE_JSON);
     assert(copy_sub.as_text() == orig_sub.as_text());
 
-    // 5. Copy constructor for 14-byte inline blob (maximum SBO)
-    uint8_t blob14[14];
-    memset(blob14, 0x7F, 14);
-    SqliteValueOwned orig_inl_blob = SqliteValueOwned::from_blob(blob14, 14);
+    // 5. Copy constructor for 22-byte inline blob (maximum SBO)
+    uint8_t blob22[22];
+    memset(blob22, 0x7F, 22);
+    SqliteValueOwned orig_inl_blob = SqliteValueOwned::from_blob(blob22, 22);
     SqliteValueOwned copy_inl_blob(orig_inl_blob);
     assert(!copy_inl_blob.is_heap_allocated());
-    assert(copy_inl_blob.as_blob().size() == 14);
+    assert(copy_inl_blob.as_blob().size() == 22);
     assert(copy_inl_blob == orig_inl_blob);
 }
 
@@ -1553,7 +1564,7 @@ void test_subtype_factory_heap_paths() {
     assert(uuid_text.is_heap_allocated()); // 36 > 13
     assert(uuid_text.as_text() == SqliteStringView(uuid_str, uuid_len));
 
-    // 2. from_uuid binary (16 bytes) → heap BLOB (16 > 14 = MAX_INLINE_BLOB_LEN)
+    // 2. from_uuid binary (16 bytes) → in-situ BLOB (16 <= 22 = MAX_INLINE_BUF_LEN)
     const uint8_t uuid_bin[16] = {
         0x55, 0x0e, 0x84, 0x00, 0xe2, 0x9b, 0x41, 0xd4,
         0xa7, 0x16, 0x44, 0x66, 0x55, 0x44, 0x00, 0x00
@@ -1561,20 +1572,41 @@ void test_subtype_factory_heap_paths() {
     SqliteValueOwned uuid_blob = SqliteValueOwned::from_uuid(uuid_bin);
     assert(uuid_blob.is_uuid());
     assert(uuid_blob.is_blob());
-    assert(uuid_blob.is_heap_allocated()); // 16 > MAX_INLINE_BLOB_LEN (14)
+    assert(!uuid_blob.is_heap_allocated()); // In-situ 16-byte raw UUID with 0 heap allocations!
     assert(uuid_blob.as_blob().size() == 16);
     assert(memcmp(uuid_blob.as_blob().data(), uuid_bin, 16) == 0);
+    assert(uuid_blob.uuid_bytes() != nullptr);
+    assert(memcmp(uuid_blob.uuid_bytes(), uuid_bin, 16) == 0);
 
-    // 3. from_decimal heap path (> 13 chars)
+    char fmt_buf[40];
+    int fmt_len = uuid_blob.format_uuid(fmt_buf, SqliteUuidUtil::UUID_FORMAT_STANDARD);
+    assert(fmt_len == 36);
+    assert(strcmp(fmt_buf, "550e8400-e29b-41d4-a716-446655440000") == 0);
+
+    // 2b. SqliteUuidUtil parser and formatter tests
+    uint8_t parsed_bytes[16];
+    uint8_t flags = 0;
+    assert(SqliteUuidUtil::parse_uuid("550e8400-e29b-41d4-a716-446655440000", 36, parsed_bytes, &flags));
+    assert(memcmp(parsed_bytes, uuid_bin, 16) == 0);
+    assert(flags & SqliteUuidUtil::UUID_FORMAT_HYPHENS);
+
+    assert(SqliteUuidUtil::parse_uuid("550e8400e29b41d4a716446655440000", 32, parsed_bytes, &flags));
+    assert(memcmp(parsed_bytes, uuid_bin, 16) == 0);
+
+    assert(SqliteUuidUtil::parse_uuid("{550e8400-e29b-41d4-a716-446655440000}", 38, parsed_bytes, &flags));
+    assert(memcmp(parsed_bytes, uuid_bin, 16) == 0);
+    assert(flags & SqliteUuidUtil::UUID_FORMAT_BRACED);
+
+    // 3. from_decimal heap path (> 21 chars)
     const char* big_dec = "12345678901234567890.9999999";
     int big_dec_len = (int)strlen(big_dec);
     SqliteValueOwned dec_heap = SqliteValueOwned::from_decimal(big_dec);
     assert(dec_heap.is_decimal());
     assert(dec_heap.is_text());
-    assert(dec_heap.is_heap_allocated()); // > 13 chars
+    assert(dec_heap.is_heap_allocated()); // > 21 chars
     assert(dec_heap.as_text() == SqliteStringView(big_dec, big_dec_len));
 
-    // 4. from_json heap path (> 13 chars)
+    // 4. from_json heap path (> 21 chars)
     const char* big_json = "{\"status\":\"ok\",\"code\":200}";
     int big_json_len = (int)strlen(big_json);
     SqliteValueOwned json_heap = SqliteValueOwned::from_json(big_json);
@@ -1583,44 +1615,44 @@ void test_subtype_factory_heap_paths() {
     assert(json_heap.is_heap_allocated());
     assert(json_heap.as_text() == SqliteStringView(big_json, big_json_len));
 
-    // 5. from_jsonb heap path (> 14 bytes)
-    const uint8_t jsonb[20] = {
+    // 5. from_jsonb heap path (> 22 bytes)
+    const uint8_t jsonb[25] = {
         0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07,
         0x08, 0x09, 0x0A, 0x0B, 0x0C, 0x0D, 0x0E, 0x0F,
-        0x10, 0x11, 0x12, 0x13
+        0x10, 0x11, 0x12, 0x13, 0x14, 0x15, 0x16, 0x17, 0x18
     };
-    SqliteValueOwned jsonb_heap = SqliteValueOwned::from_jsonb(jsonb, 20);
+    SqliteValueOwned jsonb_heap = SqliteValueOwned::from_jsonb(jsonb, 25);
     assert(jsonb_heap.is_json());
     assert(jsonb_heap.is_blob());
     assert(jsonb_heap.is_heap_allocated());
-    assert(jsonb_heap.as_blob().size() == 20);
+    assert(jsonb_heap.as_blob().size() == 25);
 
-    // 6. from_vector heap path (8 floats = 32 bytes > 14)
+    // 6. from_vector heap path (8 floats = 32 bytes > 22)
     const float vec[8] = {0.1f, 0.2f, 0.3f, 0.4f, 0.5f, 0.6f, 0.7f, 0.8f};
     SqliteValueOwned vec_val = SqliteValueOwned::from_vector(vec, (int)sizeof(vec));
     assert(vec_val.is_vector());
     assert(vec_val.is_blob());
-    assert(vec_val.is_heap_allocated()); // 32 bytes > 14
+    assert(vec_val.is_heap_allocated()); // 32 bytes > 22
     assert(vec_val.as_blob().size() == (int)sizeof(vec));
 
-    // 7. from_geometry inline path (8 bytes <= 14)
+    // 7. from_geometry inline path (8 bytes <= 22)
     const uint8_t geo_small[8] = {1, 2, 3, 4, 5, 6, 7, 8};
     SqliteValueOwned geo_inline = SqliteValueOwned::from_geometry(geo_small, 8);
     assert(geo_inline.is_geometry());
     assert(!geo_inline.is_heap_allocated());
     assert(geo_inline.as_blob().size() == 8);
 
-    // 8. from_compressed heap path (20 bytes > 14)
-    const uint8_t compressed[20] = {
+    // 8. from_compressed heap path (25 bytes > 22)
+    const uint8_t compressed[25] = {
         0xFF, 0xFE, 0xFD, 0xFC, 0xFB, 0xFA, 0xF9, 0xF8,
         0xF7, 0xF6, 0xF5, 0xF4, 0xF3, 0xF2, 0xF1, 0xF0,
-        0xEF, 0xEE, 0xED, 0xEC
+        0xEF, 0xEE, 0xED, 0xEC, 0xEB, 0xEA, 0xE9, 0xE8, 0xE7
     };
-    SqliteValueOwned comp_heap = SqliteValueOwned::from_compressed(compressed, 20);
+    SqliteValueOwned comp_heap = SqliteValueOwned::from_compressed(compressed, 25);
     assert(comp_heap.is_compressed());
     assert(comp_heap.is_blob());
     assert(comp_heap.is_heap_allocated());
-    assert(comp_heap.as_blob().size() == 20);
+    assert(comp_heap.as_blob().size() == 25);
 }
 
 /**
@@ -1714,14 +1746,21 @@ void test_copy_assignment() {
     assert(dst.is_text());
 
     // Self-assignment (must be safe)
+#if defined(__clang__)
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wself-assign-overloaded"
+#endif
     dst = dst;
+#if defined(__clang__)
+#pragma clang diagnostic pop
+#endif
     assert(dst.is_text());
     assert(dst.as_text() == "long string that exceeds 13 chars exactly");
 
-    // Heap blob → heap blob
-    uint8_t big_blob[20];
-    memset(big_blob, 0xAB, 20);
-    SqliteValueOwned src_blob = SqliteValueOwned::from_blob(big_blob, 20);
+    // Heap blob → heap blob (> 22 bytes)
+    uint8_t big_blob[25];
+    memset(big_blob, 0xAB, 25);
+    SqliteValueOwned src_blob = SqliteValueOwned::from_blob(big_blob, 25);
     dst = src_blob;
     assert(dst == src_blob);
     assert(dst.is_heap_allocated());
@@ -2266,6 +2305,1028 @@ void test_pointer_passing(sqlite3* db) {
     sqlite3_finalize(stmt);
 }
 
+void test_uuid_functions(sqlite3* db) {
+    // ------------------------------------------------------------------------
+    // 1. SqliteUuidUtil parser and format tests
+    // ------------------------------------------------------------------------
+    const uint8_t expected_bytes[16] = {
+        0x55, 0x0e, 0x84, 0x00, 0xe2, 0x9b, 0x41, 0xd4,
+        0xa7, 0x16, 0x44, 0x66, 0x55, 0x44, 0x00, 0x00
+    };
+
+    // 1a. Standard hyphenated 36-char lowercase
+    uint8_t out[16];
+    uint8_t flags = 0;
+    assert(SqliteUuidUtil::parse_uuid("550e8400-e29b-41d4-a716-446655440000", 36, out, &flags));
+    assert(memcmp(out, expected_bytes, 16) == 0);
+    assert((flags & SqliteUuidUtil::UUID_FORMAT_HYPHENS) != 0);
+    assert((flags & SqliteUuidUtil::UUID_FORMAT_UPPERCASE) == 0);
+    assert((flags & SqliteUuidUtil::UUID_FORMAT_BRACED) == 0);
+
+    // 1b. Standard hyphenated 36-char uppercase
+    flags = 0;
+    assert(SqliteUuidUtil::parse_uuid("550E8400-E29B-41D4-A716-446655440000", 36, out, &flags));
+    assert(memcmp(out, expected_bytes, 16) == 0);
+    assert((flags & SqliteUuidUtil::UUID_FORMAT_UPPERCASE) != 0);
+    assert((flags & SqliteUuidUtil::UUID_FORMAT_HYPHENS) != 0);
+
+    // 1c. Compact 32-char unhyphenated lowercase
+    flags = 0;
+    assert(SqliteUuidUtil::parse_uuid("550e8400e29b41d4a716446655440000", 32, out, &flags));
+    assert(memcmp(out, expected_bytes, 16) == 0);
+    assert((flags & SqliteUuidUtil::UUID_FORMAT_HYPHENS) == 0);
+
+    // 1d. Compact 32-char unhyphenated uppercase
+    flags = 0;
+    assert(SqliteUuidUtil::parse_uuid("550E8400E29B41D4A716446655440000", 32, out, &flags));
+    assert(memcmp(out, expected_bytes, 16) == 0);
+    assert((flags & SqliteUuidUtil::UUID_FORMAT_UPPERCASE) != 0);
+
+    // 1e. Braced 38-char
+    flags = 0;
+    assert(SqliteUuidUtil::parse_uuid("{550e8400-e29b-41d4-a716-446655440000}", 38, out, &flags));
+    assert(memcmp(out, expected_bytes, 16) == 0);
+    assert((flags & SqliteUuidUtil::UUID_FORMAT_BRACED) != 0);
+    assert((flags & SqliteUuidUtil::UUID_FORMAT_HYPHENS) != 0);
+
+    // 1f. Auto-length (len = -1)
+    assert(SqliteUuidUtil::parse_uuid("550e8400-e29b-41d4-a716-446655440000", -1, out, &flags));
+    assert(memcmp(out, expected_bytes, 16) == 0);
+
+    // 1g. Nil UUID & Max UUID
+    const uint8_t nil_expected[16] = {0};
+    assert(SqliteUuidUtil::parse_uuid("00000000-0000-0000-0000-000000000000", 36, out, nullptr));
+    assert(memcmp(out, nil_expected, 16) == 0);
+
+    uint8_t max_expected[16];
+    memset(max_expected, 0xFF, 16);
+    assert(SqliteUuidUtil::parse_uuid("ffffffff-ffff-ffff-ffff-ffffffffffff", 36, out, nullptr));
+    assert(memcmp(out, max_expected, 16) == 0);
+
+    // 1h. Invalid input rejections
+    assert(!SqliteUuidUtil::parse_uuid(nullptr, 36, out));
+    assert(!SqliteUuidUtil::parse_uuid("550e8400", 8, out)); // too short
+    assert(!SqliteUuidUtil::parse_uuid("550e8400-e29b-41d4-a716-44665544000", 35, out)); // 35 chars
+    assert(!SqliteUuidUtil::parse_uuid("550e8400-e29b-41d4-a716-4466554400000", 37, out)); // 37 chars
+    assert(!SqliteUuidUtil::parse_uuid("550e8400-e29b-41d4-a716-44665544000g", 36, out)); // 'g'
+    assert(!SqliteUuidUtil::parse_uuid("550e8400-e29b-41d4-a716-44665544000!", 36, out)); // '!'
+    assert(!SqliteUuidUtil::parse_uuid("550e840-0e29b-41d4-a716-446655440000", 36, out)); // misplaced hyphen
+    assert(!SqliteUuidUtil::parse_uuid("{550e8400-e29b-41d4-a716-446655440000", 37, out)); // unclosed brace
+    assert(!SqliteUuidUtil::parse_uuid("550e8400-e29b-41d4-a716-446655440000}", 37, out)); // unopen brace
+    assert(!SqliteUuidUtil::parse_uuid("{550e8400-e29b-41d4-a716-446655440000]", 38, out)); // wrong closing bracket
+
+    // 1i. SqliteUuidUtil::format_uuid and roundtrip
+    char fmt[40];
+    assert(SqliteUuidUtil::format_uuid(nullptr, 0, fmt) == 0);
+    assert(SqliteUuidUtil::format_uuid(expected_bytes, 0, nullptr) == 0);
+
+    // standard lowercase
+    int n = SqliteUuidUtil::format_uuid(expected_bytes, SqliteUuidUtil::UUID_FORMAT_STANDARD, fmt);
+    assert(n == 36);
+    assert(strcmp(fmt, "550e8400-e29b-41d4-a716-446655440000") == 0);
+    assert(SqliteUuidUtil::parse_uuid(fmt, n, out));
+    assert(memcmp(out, expected_bytes, 16) == 0);
+
+    // standard uppercase (hyphenated)
+    n = SqliteUuidUtil::format_uuid(expected_bytes, SqliteUuidUtil::UUID_FORMAT_STANDARD | SqliteUuidUtil::UUID_FORMAT_UPPERCASE, fmt);
+    assert(n == 36);
+    assert(strcmp(fmt, "550E8400-E29B-41D4-A716-446655440000") == 0);
+    assert(SqliteUuidUtil::parse_uuid(fmt, n, out));
+    assert(memcmp(out, expected_bytes, 16) == 0);
+
+    // compact uppercase (32 chars, no hyphens)
+    n = SqliteUuidUtil::format_uuid(expected_bytes, SqliteUuidUtil::UUID_FORMAT_UPPERCASE, fmt);
+    assert(n == 32);
+    assert(strcmp(fmt, "550E8400E29B41D4A716446655440000") == 0);
+    assert(SqliteUuidUtil::parse_uuid(fmt, n, out));
+    assert(memcmp(out, expected_bytes, 16) == 0);
+
+    // standard braced lowercase (38 chars)
+    n = SqliteUuidUtil::format_uuid(expected_bytes, SqliteUuidUtil::UUID_FORMAT_STANDARD | SqliteUuidUtil::UUID_FORMAT_BRACED, fmt);
+    assert(n == 38);
+    assert(strcmp(fmt, "{550e8400-e29b-41d4-a716-446655440000}") == 0);
+    assert(SqliteUuidUtil::parse_uuid(fmt, n, out));
+    assert(memcmp(out, expected_bytes, 16) == 0);
+
+    // standard braced uppercase (38 chars)
+    n = SqliteUuidUtil::format_uuid(expected_bytes, SqliteUuidUtil::UUID_FORMAT_STANDARD | SqliteUuidUtil::UUID_FORMAT_BRACED | SqliteUuidUtil::UUID_FORMAT_UPPERCASE, fmt);
+    assert(n == 38);
+    assert(strcmp(fmt, "{550E8400-E29B-41D4-A716-446655440000}") == 0);
+    assert(SqliteUuidUtil::parse_uuid(fmt, n, out));
+    assert(memcmp(out, expected_bytes, 16) == 0);
+
+    // compact braced lowercase (34 chars)
+    n = SqliteUuidUtil::format_uuid(expected_bytes, SqliteUuidUtil::UUID_FORMAT_BRACED, fmt);
+    assert(n == 34);
+    assert(strcmp(fmt, "{550e8400e29b41d4a716446655440000}") == 0);
+    assert(SqliteUuidUtil::parse_uuid(fmt, n, out));
+    assert(memcmp(out, expected_bytes, 16) == 0);
+
+    // compact braced uppercase (34 chars)
+    n = SqliteUuidUtil::format_uuid(expected_bytes, SqliteUuidUtil::UUID_FORMAT_BRACED | SqliteUuidUtil::UUID_FORMAT_UPPERCASE, fmt);
+    assert(n == 34);
+    assert(strcmp(fmt, "{550E8400E29B41D4A716446655440000}") == 0);
+    assert(SqliteUuidUtil::parse_uuid(fmt, n, out));
+    assert(memcmp(out, expected_bytes, 16) == 0);
+
+    // unhyphenated blob format (32 chars)
+    n = SqliteUuidUtil::format_uuid(expected_bytes, SqliteUuidUtil::UUID_FORMAT_BLOB, fmt);
+    assert(n == 32);
+    assert(strcmp(fmt, "550e8400e29b41d4a716446655440000") == 0);
+    assert(SqliteUuidUtil::parse_uuid(fmt, n, out));
+    assert(memcmp(out, expected_bytes, 16) == 0);
+
+    // ------------------------------------------------------------------------
+    // 2. SqliteValueOwned::from_uuid in-situ binary representation
+    // ------------------------------------------------------------------------
+    SqliteValueOwned u_bin = SqliteValueOwned::from_uuid(expected_bytes);
+    assert(sizeof(u_bin) == 24);
+    assert(u_bin.is_uuid());
+    assert(u_bin.is_blob());
+    assert(!u_bin.is_text());
+    assert(!u_bin.is_null());
+    assert(!u_bin.is_heap_allocated()); // Zero heap allocations!
+    assert(u_bin.type() == SQLITE_BLOB);
+    assert(u_bin.subtype() == SQLITE_SUBTYPE_UUID); // 'U' / 85
+    assert(u_bin.tag().is_uuid());
+    assert(u_bin.tag().type() == SQLITE_BLOB);
+    assert(u_bin.tag().is_active());
+    assert(!u_bin.is_immutable());
+
+    // Byte retrieval
+    assert(u_bin.uuid_bytes() != nullptr);
+    assert(memcmp(u_bin.uuid_bytes(), expected_bytes, 16) == 0);
+    assert(u_bin.as_blob().size() == 16);
+    assert(memcmp(u_bin.as_blob().data(), expected_bytes, 16) == 0);
+
+    // format_uuid member function
+    char mem_fmt[40];
+    int mem_n = u_bin.format_uuid(mem_fmt);
+    assert(mem_n == 36);
+    assert(strcmp(mem_fmt, "550e8400-e29b-41d4-a716-446655440000") == 0);
+
+    // Immutability flag
+    SqliteValueOwned u_imm = SqliteValueOwned::from_uuid(expected_bytes, true);
+    assert(u_imm.is_immutable());
+    assert(u_imm.is_uuid());
+    u_imm.set_null(); // mutator guarded!
+    assert(u_imm.is_immutable());
+    assert(u_imm.is_uuid()); // stays UUID because mutator is ignored
+
+    // Copy, clone, move
+    SqliteValueOwned u_cloned = u_bin.clone();
+    assert(u_cloned.is_uuid());
+    assert(!u_cloned.is_heap_allocated());
+    assert(memcmp(u_cloned.uuid_bytes(), expected_bytes, 16) == 0);
+    assert(u_cloned == u_bin);
+
+    SqliteValueOwned u_assigned;
+    u_assigned = u_bin;
+    assert(u_assigned.is_uuid());
+    assert(!u_assigned.is_heap_allocated());
+    assert(u_assigned == u_bin);
+
+    SqliteValueOwned u_move_src = SqliteValueOwned::from_uuid(expected_bytes);
+    SqliteValueOwned u_moved = sqlite_move(u_move_src);
+    assert(u_moved.is_uuid());
+    assert(!u_moved.is_heap_allocated());
+    assert(u_move_src.is_null());
+
+    // set_null on mutable
+    u_assigned.set_null();
+    assert(u_assigned.is_null());
+    assert(!u_assigned.is_uuid());
+
+    // ------------------------------------------------------------------------
+    // 3. SqliteValueOwned::from_uuid text variant
+    // ------------------------------------------------------------------------
+    const char* u_text_str = "550e8400-e29b-41d4-a716-446655440000";
+    SqliteValueOwned u_text = SqliteValueOwned::from_uuid(u_text_str);
+    assert(u_text.is_uuid());
+    assert(u_text.is_text());
+    assert(!u_text.is_blob());
+    assert(u_text.type() == SQLITE_TEXT);
+    assert(u_text.subtype() == SQLITE_SUBTYPE_UUID);
+    assert(u_text.is_heap_allocated()); // 36 chars > 21 inline limit
+    assert(u_text.as_text() == SqliteStringView(u_text_str, 36));
+
+    // ------------------------------------------------------------------------
+    // 4. Relational comparisons & hashing (Format-aware zero-copy equality)
+    // ------------------------------------------------------------------------
+    const uint8_t other_bytes[16] = {
+        0x55, 0x0e, 0x84, 0x00, 0xe2, 0x9b, 0x41, 0xd4,
+        0xa7, 0x16, 0x44, 0x66, 0x55, 0x44, 0x00, 0x01
+    };
+    SqliteValueOwned u_bin2 = SqliteValueOwned::from_uuid(expected_bytes);
+    SqliteValueOwned u_other = SqliteValueOwned::from_uuid(other_bytes);
+
+    assert(u_bin == u_bin2);
+    assert(u_bin != u_other);
+    assert(u_bin < u_other);
+    assert(!(u_other < u_bin));
+    assert(u_bin.hash() == u_bin2.hash());
+    assert(u_bin.hash() != u_other.hash());
+
+    // Format-aware equality between binary and text representations
+    SqliteValueOwned u_bin_std = SqliteValueOwned::from_uuid(expected_bytes, SqliteUuidUtil::UUID_FORMAT_STANDARD);
+    SqliteValueOwned u_bin_upper_std = SqliteValueOwned::from_uuid(expected_bytes, static_cast<SqliteUuidUtil::UuidFormatFlags>(SqliteUuidUtil::UUID_FORMAT_STANDARD | SqliteUuidUtil::UUID_FORMAT_UPPERCASE));
+    SqliteValueOwned u_bin_upper_compact = SqliteValueOwned::from_uuid(expected_bytes, SqliteUuidUtil::UUID_FORMAT_UPPERCASE);
+    SqliteValueOwned u_bin_braced_std = SqliteValueOwned::from_uuid(expected_bytes, static_cast<SqliteUuidUtil::UuidFormatFlags>(SqliteUuidUtil::UUID_FORMAT_STANDARD | SqliteUuidUtil::UUID_FORMAT_BRACED));
+    SqliteValueOwned u_bin_braced_compact = SqliteValueOwned::from_uuid(expected_bytes, SqliteUuidUtil::UUID_FORMAT_BRACED);
+    SqliteValueOwned u_bin_blob = SqliteValueOwned::from_uuid(expected_bytes, SqliteUuidUtil::UUID_FORMAT_BLOB);
+
+    SqliteValueOwned u_text_std = SqliteValueOwned::from_uuid("550e8400-e29b-41d4-a716-446655440000");
+    SqliteValueOwned u_text_upper_std = SqliteValueOwned::from_uuid("550E8400-E29B-41D4-A716-446655440000");
+    SqliteValueOwned u_text_upper_compact = SqliteValueOwned::from_uuid("550E8400E29B41D4A716446655440000");
+    SqliteValueOwned u_text_braced_std = SqliteValueOwned::from_uuid("{550e8400-e29b-41d4-a716-446655440000}");
+    SqliteValueOwned u_text_braced_compact = SqliteValueOwned::from_uuid("{550e8400e29b41d4a716446655440000}");
+    SqliteValueOwned u_text_blob = SqliteValueOwned::from_uuid("550e8400e29b41d4a716446655440000");
+
+    // 4a. 6x6 Pairwise cross-format equality and hash matrix
+    SqliteValueOwned bin_arr[6] = {
+        u_bin_std, u_bin_upper_std, u_bin_upper_compact,
+        u_bin_braced_std, u_bin_braced_compact, u_bin_blob
+    };
+    SqliteValueOwned text_arr[6] = {
+        u_text_std, u_text_upper_std, u_text_upper_compact,
+        u_text_braced_std, u_text_braced_compact, u_text_blob
+    };
+
+    for (int i = 0; i < 6; ++i) {
+        // Binary matches its corresponding text representation
+        assert(bin_arr[i] == text_arr[i]);
+        assert(text_arr[i] == bin_arr[i]);
+        assert(!(bin_arr[i] != text_arr[i]));
+        assert(bin_arr[i].hash() == text_arr[i].hash());
+
+        // Binary matches identical binary representation
+        assert(bin_arr[i] == bin_arr[i]);
+
+        for (int j = 0; j < 6; ++j) {
+            // All representations of the same UUID compare equal under format-agnostic equality
+            assert(bin_arr[i] == text_arr[j]);
+            assert(bin_arr[i] == bin_arr[j]);
+            assert(text_arr[i] == text_arr[j]);
+            assert(bin_arr[i].hash() == text_arr[j].hash());
+        }
+    }
+
+    // 4b. Zero-copy canonical_uuid_ptr verification
+    char scratch[39];
+    const char* str_ptr = nullptr;
+
+    // Binary with standard format formats to scratch (pointer == scratch)
+    int ptr_len = u_bin_std.canonical_uuid_ptr(str_ptr, scratch);
+    assert(ptr_len == 36);
+    assert(str_ptr == scratch);
+    assert(strcmp(scratch, "550e8400-e29b-41d4-a716-446655440000") == 0);
+
+    // Text representation returns direct data pointer (pointer != scratch, zero copy!)
+    ptr_len = u_text_std.canonical_uuid_ptr(str_ptr, scratch);
+    assert(ptr_len == 36);
+    assert(str_ptr != scratch);
+    assert(memcmp(str_ptr, "550e8400-e29b-41d4-a716-446655440000", 36) == 0);
+
+    // Non-UUID returns 0
+    SqliteValueOwned non_uuid_val(42LL);
+    assert(non_uuid_val.canonical_uuid_ptr(str_ptr, scratch) == 0);
+
+    // 4c. Direct SqliteUuidUtil::uuid_equal verification
+    assert(SqliteUuidUtil::uuid_equal("550e8400", 8, "550e8400", 8));
+    assert(!SqliteUuidUtil::uuid_equal("550e8400", 8, "550e8401", 8));
+    assert(!SqliteUuidUtil::uuid_equal("550e8400", 8, "550e8400", 7));
+    assert(!SqliteUuidUtil::uuid_equal(nullptr, 8, "550e8400", 8));
+    assert(!SqliteUuidUtil::uuid_equal("550e8400", 0, "550e8400", 0));
+
+    // ------------------------------------------------------------------------
+    // 5. Statement binding & UDF roundtrip with SQLite
+    // ------------------------------------------------------------------------
+    sqlite3_stmt* stmt = nullptr;
+    assert(sqlite3_prepare_v2(db, "SELECT ?1;", -1, &stmt, nullptr) == SQLITE_OK);
+    u_bin.bind(stmt, 1);
+    assert(sqlite3_step(stmt) == SQLITE_ROW);
+    SqliteValueView view_col(sqlite3_column_value(stmt, 0));
+    assert(view_col.type() == SQLITE_BLOB);
+    assert(view_col.as_blob().size() == 16);
+    assert(memcmp(view_col.as_blob().data(), expected_bytes, 16) == 0);
+    sqlite3_finalize(stmt);
+
+    // Register UDF producing UUID and consumer UDF inspecting UUID view
+    sqlite3_create_function_v2(db, "test_make_uuid_udf", 0, SQLITE_UTF8, nullptr,
+        [](sqlite3_context* ctx, int, sqlite3_value**) {
+            const uint8_t raw[16] = {
+                0x12, 0x34, 0x56, 0x78, 0x9a, 0xbc, 0xde, 0xf0,
+                0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77, 0x88
+            };
+            SqliteValueOwned u = SqliteValueOwned::from_uuid(raw);
+            u.result(ctx);
+        }, nullptr, nullptr, nullptr);
+
+    static bool s_udf_uuid_verified = false;
+    sqlite3_create_function_v2(db, "test_check_uuid_udf", 1, SQLITE_UTF8, nullptr,
+        [](sqlite3_context* ctx, int argc, sqlite3_value** argv) {
+            if (argc > 0) {
+                SqliteValueView v(argv[0]);
+                const uint8_t raw[16] = {
+                    0x12, 0x34, 0x56, 0x78, 0x9a, 0xbc, 0xde, 0xf0,
+                    0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77, 0x88
+                };
+                if (v.is_uuid() && v.subtype() == SQLITE_SUBTYPE_UUID &&
+                    v.is_blob() && v.as_blob().size() == 16 &&
+                    memcmp(v.as_blob().data(), raw, 16) == 0) {
+                    SqliteValueOwned roundtrip = v.to_owned();
+                    if (roundtrip.is_uuid() && !roundtrip.is_heap_allocated() &&
+                        roundtrip.uuid_bytes() && memcmp(roundtrip.uuid_bytes(), raw, 16) == 0) {
+                        s_udf_uuid_verified = true;
+                        sqlite3_result_int(ctx, 1);
+                        return;
+                    }
+                }
+            }
+            s_udf_uuid_verified = false;
+            sqlite3_result_int(ctx, 0);
+        }, nullptr, nullptr, nullptr);
+
+    stmt = nullptr;
+    assert(sqlite3_prepare_v2(db, "SELECT test_check_uuid_udf(test_make_uuid_udf());", -1, &stmt, nullptr) == SQLITE_OK);
+    assert(sqlite3_step(stmt) == SQLITE_ROW);
+    assert(sqlite3_column_int(stmt, 0) == 1);
+    assert(s_udf_uuid_verified == true);
+    sqlite3_finalize(stmt);
+
+    // ------------------------------------------------------------------------
+    // 6. Containers integration (Tuple & Vector)
+    // ------------------------------------------------------------------------
+    SqliteValueTuple<3> tuple;
+    tuple[0] = u_bin;
+    tuple[1] = u_text;
+    tuple[2] = 42LL;
+    assert(tuple[0].is_uuid());
+    assert(tuple[0].is_blob());
+    assert(!tuple[0].is_heap_allocated());
+    assert(tuple[1].is_uuid());
+    assert(tuple[1].is_text());
+    assert(tuple.subtype(0) == SQLITE_SUBTYPE_UUID);
+    assert(tuple.subtype(1) == SQLITE_SUBTYPE_UUID);
+
+    SqliteValueVec<2> vec;
+    vec.push_back(u_bin);
+    vec.push_back(u_text);
+    assert(vec[0].is_uuid());
+    assert(vec[1].is_uuid());
+    assert(!vec.is_heap()); // In-situ SBO
+
+    // Force heap spill
+    vec.resize(5);
+    assert(vec.is_heap());
+    assert(vec[0].is_uuid());
+    assert(vec[0].is_blob());
+    assert(!vec[0].is_heap_allocated()); // Inner UUID representation remains in-situ!
+    assert(memcmp(vec[0].uuid_bytes(), expected_bytes, 16) == 0);
+    assert(vec.subtype(0) == SQLITE_SUBTYPE_UUID);
+    assert(vec[1].is_uuid());
+    assert(vec[1].is_text());
+}
+
+void test_datetime_functions(sqlite3* db) {
+    // ------------------------------------------------------------------------
+    // 1. SqliteValueOwned::from_datetime primitives & metadata
+    // ------------------------------------------------------------------------
+    const sqlite3_int64 test_ts = 1725450000123LL; // modern epoch ms
+    SqliteValueOwned dt = SqliteValueOwned::from_datetime(test_ts);
+    assert(sizeof(dt) == 24);
+    assert(dt.is_datetime());
+    assert(dt.is_integer());
+    assert(dt.is_numeric());
+    assert(!dt.is_text());
+    assert(!dt.is_blob());
+    assert(!dt.is_null());
+    assert(!dt.is_uuid());
+    assert(!dt.is_heap_allocated());
+    assert(dt.inline_length() == 0);
+    assert(dt.type() == SQLITE_INTEGER);
+    assert(dt.subtype() == SQLITE_SUBTYPE_DATETIME); // 'T' / 84
+    assert(dt.affinity() == SQLITE_AFF_INTEGER);
+    assert(dt.tag().type() == SQLITE_INTEGER);
+    assert(dt.tag().is_active());
+    assert(!dt.is_immutable());
+
+    // Numeric accessors
+    assert(dt.as_int64() == test_ts);
+    assert(dt.as_int() == static_cast<int>(test_ts));
+    assert(dt.as_double() == static_cast<double>(test_ts));
+    assert(dt.as_bool() == true);
+
+    // Immutability flag
+    SqliteValueOwned dt_imm = SqliteValueOwned::from_datetime(test_ts, true);
+    assert(dt_imm.is_immutable());
+    assert(dt_imm.is_datetime());
+    dt_imm.set_null(); // mutator guarded!
+    assert(dt_imm.is_immutable());
+    assert(dt_imm.is_datetime());
+    assert(dt_imm.as_int64() == test_ts);
+
+    // ------------------------------------------------------------------------
+    // 2. Epoch boundary edge cases
+    // ------------------------------------------------------------------------
+    // 2a. Zero (Unix epoch 1970-01-01 00:00:00 UTC)
+    SqliteValueOwned dt_zero = SqliteValueOwned::from_datetime(0LL);
+    assert(dt_zero.is_datetime());
+    assert(dt_zero.as_int64() == 0LL);
+    assert(dt_zero.as_bool() == false);
+    assert(dt_zero.subtype() == SQLITE_SUBTYPE_DATETIME);
+
+    // 2b. Negative timestamp (pre-1970)
+    const sqlite3_int64 pre_1970 = -2208988800000LL; // Jan 1 1900
+    SqliteValueOwned dt_pre = SqliteValueOwned::from_datetime(pre_1970);
+    assert(dt_pre.is_datetime());
+    assert(dt_pre.as_int64() == pre_1970);
+    assert(dt_pre.as_bool() == true);
+
+    // 2c. Extreme integer limits
+    SqliteValueOwned dt_max = SqliteValueOwned::from_datetime(0x7fffffffffffffffLL);
+    assert(dt_max.is_datetime());
+    assert(dt_max.as_int64() == 0x7fffffffffffffffLL);
+
+    SqliteValueOwned dt_min = SqliteValueOwned::from_datetime(-0x7fffffffffffffffLL - 1LL);
+    assert(dt_min.is_datetime());
+    assert(dt_min.as_int64() == (-0x7fffffffffffffffLL - 1LL));
+
+    // ------------------------------------------------------------------------
+    // 3. Move, copy, clone lifecycle
+    // ------------------------------------------------------------------------
+    SqliteValueOwned dt_src = SqliteValueOwned::from_datetime(test_ts);
+    SqliteValueOwned dt_moved = sqlite_move(dt_src);
+    assert(dt_moved.is_datetime());
+    assert(dt_moved.as_int64() == test_ts);
+    assert(dt_src.is_null());
+    assert(!dt_src.is_datetime());
+
+    SqliteValueOwned dt_cloned = dt_moved.clone();
+    assert(dt_cloned.is_datetime());
+    assert(dt_cloned.as_int64() == test_ts);
+    assert(dt_cloned == dt_moved);
+
+    SqliteValueOwned dt_copy;
+    dt_copy = dt_moved;
+    assert(dt_copy.is_datetime());
+    assert(dt_copy.as_int64() == test_ts);
+    assert(dt_copy == dt_moved);
+
+    dt_copy.set_null();
+    assert(dt_copy.is_null());
+    assert(!dt_copy.is_datetime());
+    assert(dt_moved.is_datetime());
+
+    // ------------------------------------------------------------------------
+    // 4. Relational comparisons & hashing
+    // ------------------------------------------------------------------------
+    SqliteValueOwned dt1 = SqliteValueOwned::from_datetime(1000LL);
+    SqliteValueOwned dt2 = SqliteValueOwned::from_datetime(1000LL);
+    SqliteValueOwned dt3 = SqliteValueOwned::from_datetime(2000LL);
+
+    assert(dt1 == dt2);
+    assert(dt1 != dt3);
+    assert(dt1 < dt3);
+    assert(!(dt3 < dt1));
+    assert(dt1 <= dt2);
+    assert(dt1 >= dt2);
+    assert(dt3 > dt1);
+    assert(dt1.hash() == dt2.hash());
+    assert(dt1.hash() != dt3.hash());
+
+    // Comparison with ordinary integers (SQLite collation: numbers sort and compare by numeric value)
+    SqliteValueOwned plain_int(1000LL);
+    assert(dt1 == plain_int);
+    assert(!(dt1 < plain_int) && !(plain_int < dt1));
+
+    // ------------------------------------------------------------------------
+    // 5. SqliteClock & SqliteStopwatch integration
+    // ------------------------------------------------------------------------
+    int64_t clock_now_sec = SqliteClock::now_sec();
+    int64_t clock_now_ms = SqliteClock::now_ms();
+    assert(clock_now_sec > 1700000000LL); // Valid Unix epoch
+    assert(clock_now_ms > 1700000000000LL);
+
+    // Verify SqliteValueOwned constructs cleanly from live clock
+    SqliteValueOwned dt_live = SqliteValueOwned::from_datetime(clock_now_ms);
+    assert(dt_live.is_datetime());
+    assert(dt_live.as_int64() == clock_now_ms);
+    // Allow for up to 1 second rollover difference between now_sec and now_ms
+    int64_t sec_from_ms = dt_live.as_int64() / 1000LL;
+    assert(sec_from_ms == clock_now_sec || sec_from_ms == clock_now_sec + 1 || sec_from_ms == clock_now_sec - 1);
+
+    // Monotonic clock consistency
+    uint64_t ns1 = SqliteClock::monotonic_ns();
+    uint64_t us1 = SqliteClock::monotonic_us();
+    uint64_t ms1 = SqliteClock::monotonic_ms();
+    assert(ns1 > 0 && us1 > 0 && ms1 > 0);
+
+    uint64_t ns2 = SqliteClock::monotonic_ns();
+    assert(ns2 >= ns1); // Monotonically non-decreasing
+
+    // Stopwatch RAII timing
+    SqliteStopwatch sw;
+    SqliteClock::sleep_for_ms(15);
+    uint64_t elapsed_ms = sw.elapsed_ms();
+    uint64_t elapsed_us = sw.elapsed_us();
+    uint64_t elapsed_ns = sw.elapsed_ns();
+    double elapsed_sec = sw.elapsed_sec();
+    assert(elapsed_ms >= 10);
+    assert(elapsed_us >= 10000);
+    assert(elapsed_ns >= 10000000);
+    assert(elapsed_sec >= 0.010);
+
+    sw.restart();
+    assert(sw.elapsed_ms() < 10);
+
+    // Timezone decomposition consistency
+    long tz_sec = SqliteTimezone::offset_seconds();
+    int tz_h = SqliteTimezone::offset_hours();
+    int tz_m = SqliteTimezone::offset_minutes();
+    assert(tz_sec >= -43200L && tz_sec <= 50400L);
+    assert(tz_m >= 0 && tz_m < 60);
+    long reconstructed = (long)tz_h * 3600L + (long)(tz_sec >= 0 ? tz_m : -tz_m) * 60L;
+    assert(reconstructed == tz_sec);
+
+    // ------------------------------------------------------------------------
+    // 6. SQLite Statement binding & UDF roundtrip
+    // ------------------------------------------------------------------------
+    sqlite3_stmt* stmt = nullptr;
+    assert(sqlite3_prepare_v2(db, "SELECT ?1;", -1, &stmt, nullptr) == SQLITE_OK);
+    dt.bind(stmt, 1);
+    assert(sqlite3_step(stmt) == SQLITE_ROW);
+    SqliteValueView view_col(sqlite3_column_value(stmt, 0));
+    assert(view_col.type() == SQLITE_INTEGER);
+    assert(view_col.as_int64() == test_ts);
+    sqlite3_finalize(stmt);
+
+    // Register UDF producing Datetime and consumer UDF inspecting Datetime view
+    sqlite3_create_function_v2(db, "test_make_datetime_udf", 0, SQLITE_UTF8, nullptr,
+        [](sqlite3_context* ctx, int, sqlite3_value**) {
+            SqliteValueOwned val = SqliteValueOwned::from_datetime(1725450000999LL);
+            val.result(ctx);
+        }, nullptr, nullptr, nullptr);
+
+    static bool s_udf_dt_verified = false;
+    sqlite3_create_function_v2(db, "test_check_datetime_udf", 1, SQLITE_UTF8, nullptr,
+        [](sqlite3_context* ctx, int argc, sqlite3_value** argv) {
+            if (argc > 0) {
+                SqliteValueView v(argv[0]);
+                if (v.is_datetime() && v.subtype() == SQLITE_SUBTYPE_DATETIME &&
+                    v.is_integer() && v.as_int64() == 1725450000999LL) {
+                    SqliteValueOwned roundtrip = v.to_owned();
+                    if (roundtrip.is_datetime() && !roundtrip.is_heap_allocated() &&
+                        roundtrip.as_int64() == 1725450000999LL &&
+                        roundtrip.subtype() == SQLITE_SUBTYPE_DATETIME) {
+                        s_udf_dt_verified = true;
+                        sqlite3_result_int(ctx, 1);
+                        return;
+                    }
+                }
+            }
+            s_udf_dt_verified = false;
+            sqlite3_result_int(ctx, 0);
+        }, nullptr, nullptr, nullptr);
+
+    stmt = nullptr;
+    assert(sqlite3_prepare_v2(db, "SELECT test_check_datetime_udf(test_make_datetime_udf());", -1, &stmt, nullptr) == SQLITE_OK);
+    assert(sqlite3_step(stmt) == SQLITE_ROW);
+    assert(sqlite3_column_int(stmt, 0) == 1);
+    assert(s_udf_dt_verified == true);
+    sqlite3_finalize(stmt);
+
+    // ------------------------------------------------------------------------
+    // 7. Containers integration (Tuple & Vector)
+    // ------------------------------------------------------------------------
+    SqliteValueTuple<3> tuple;
+    tuple[0] = dt;
+    tuple[1] = SqliteValueOwned::from_datetime(0LL);
+    tuple[2] = 3.1415;
+    assert(tuple[0].is_datetime());
+    assert(tuple[0].is_integer());
+    assert(!tuple[0].is_heap_allocated());
+    assert(tuple[0].as_int64() == test_ts);
+    assert(tuple[1].is_datetime());
+    assert(tuple[1].as_int64() == 0LL);
+    assert(tuple.subtype(0) == SQLITE_SUBTYPE_DATETIME);
+    assert(tuple.subtype(1) == SQLITE_SUBTYPE_DATETIME);
+
+    SqliteValueVec<2> vec;
+    vec.push_back(dt);
+    vec.push_back(SqliteValueOwned::from_datetime(12345LL));
+    assert(vec[0].is_datetime());
+    assert(vec[1].is_datetime());
+    assert(!vec.is_heap()); // In-situ SBO
+    assert(vec.as_int64(0) == test_ts);
+    assert(vec.as_int64(1) == 12345LL);
+
+    // Force heap spill
+    vec.resize(6);
+    assert(vec.is_heap());
+    assert(vec[0].is_datetime());
+    assert(!vec[0].is_heap_allocated());
+    assert(vec[0].as_int64() == test_ts);
+    assert(vec.subtype(0) == SQLITE_SUBTYPE_DATETIME);
+    assert(vec[1].is_datetime());
+    assert(vec[1].as_int64() == 12345LL);
+    assert(vec.subtype(1) == SQLITE_SUBTYPE_DATETIME);
+}
+
+void test_uuid_exhaustive_suite(sqlite3* db) {
+    // ------------------------------------------------------------------------
+    // 1. Bitmask flag combinations for format_uuid
+    // ------------------------------------------------------------------------
+    const uint8_t sample_bytes[16] = {
+        0x01, 0x23, 0x45, 0x67, 0x89, 0xab, 0xcd, 0xef,
+        0xfe, 0xdc, 0xba, 0x98, 0x76, 0x54, 0x32, 0x10
+    };
+    char buf[64];
+
+    // Standard RFC 4122 (TEXT | HYPHENS)
+    SqliteUuidUtil::format_uuid(sample_bytes, buf, SqliteUuidUtil::UUID_FORMAT_STANDARD);
+    assert(strcmp(buf, "01234567-89ab-cdef-fedc-ba9876543210") == 0);
+
+    // Standard Uppercase (STANDARD | UPPERCASE)
+    SqliteUuidUtil::format_uuid(sample_bytes, buf, static_cast<SqliteUuidUtil::UuidFormatFlags>(SqliteUuidUtil::UUID_FORMAT_STANDARD | SqliteUuidUtil::UUID_FORMAT_UPPERCASE));
+    assert(strcmp(buf, "01234567-89AB-CDEF-FEDC-BA9876543210") == 0);
+
+    // Compact lowercase (TEXT)
+    SqliteUuidUtil::format_uuid(sample_bytes, buf, SqliteUuidUtil::UUID_FORMAT_TEXT);
+    assert(strcmp(buf, "0123456789abcdeffedcba9876543210") == 0);
+
+    // Compact uppercase (TEXT | UPPERCASE)
+    SqliteUuidUtil::format_uuid(sample_bytes, buf, static_cast<SqliteUuidUtil::UuidFormatFlags>(SqliteUuidUtil::UUID_FORMAT_TEXT | SqliteUuidUtil::UUID_FORMAT_UPPERCASE));
+    assert(strcmp(buf, "0123456789ABCDEFFEDCBA9876543210") == 0);
+
+    // Braced standard lowercase (BRACED | STANDARD)
+    SqliteUuidUtil::format_uuid(sample_bytes, buf, static_cast<SqliteUuidUtil::UuidFormatFlags>(SqliteUuidUtil::UUID_FORMAT_BRACED | SqliteUuidUtil::UUID_FORMAT_STANDARD));
+    assert(strcmp(buf, "{01234567-89ab-cdef-fedc-ba9876543210}") == 0);
+
+    // Braced standard uppercase (BRACED | STANDARD | UPPERCASE)
+    SqliteUuidUtil::format_uuid(sample_bytes, buf, static_cast<SqliteUuidUtil::UuidFormatFlags>(SqliteUuidUtil::UUID_FORMAT_BRACED | SqliteUuidUtil::UUID_FORMAT_STANDARD | SqliteUuidUtil::UUID_FORMAT_UPPERCASE));
+    assert(strcmp(buf, "{01234567-89AB-CDEF-FEDC-BA9876543210}") == 0);
+
+    // Braced compact lowercase (BRACED | TEXT)
+    SqliteUuidUtil::format_uuid(sample_bytes, buf, static_cast<SqliteUuidUtil::UuidFormatFlags>(SqliteUuidUtil::UUID_FORMAT_BRACED | SqliteUuidUtil::UUID_FORMAT_TEXT));
+    assert(strcmp(buf, "{0123456789abcdeffedcba9876543210}") == 0);
+
+    // Braced compact uppercase (BRACED | TEXT | UPPERCASE)
+    SqliteUuidUtil::format_uuid(sample_bytes, buf, static_cast<SqliteUuidUtil::UuidFormatFlags>(SqliteUuidUtil::UUID_FORMAT_BRACED | SqliteUuidUtil::UUID_FORMAT_TEXT | SqliteUuidUtil::UUID_FORMAT_UPPERCASE));
+    assert(strcmp(buf, "{0123456789ABCDEFFEDCBA9876543210}") == 0);
+
+    // ------------------------------------------------------------------------
+    // 2. Parse UUID across all text layouts and flag detection
+    // ------------------------------------------------------------------------
+    uint8_t parsed[16];
+    uint8_t flags = 0;
+    
+    // Standard hyphenated
+    assert(SqliteUuidUtil::parse_uuid("01234567-89ab-cdef-fedc-ba9876543210", 36, parsed, &flags));
+    assert(memcmp(parsed, sample_bytes, 16) == 0);
+    assert((flags & SqliteUuidUtil::UUID_FORMAT_HYPHENS) != 0);
+
+    // Compact
+    assert(SqliteUuidUtil::parse_uuid("0123456789abcdeffedcba9876543210", 32, parsed, &flags));
+    assert(memcmp(parsed, sample_bytes, 16) == 0);
+    assert((flags & SqliteUuidUtil::UUID_FORMAT_HYPHENS) == 0);
+
+    // Braced standard
+    assert(SqliteUuidUtil::parse_uuid("{01234567-89ab-cdef-fedc-ba9876543210}", 38, parsed, &flags));
+    assert(memcmp(parsed, sample_bytes, 16) == 0);
+    assert((flags & SqliteUuidUtil::UUID_FORMAT_BRACED) != 0);
+    assert((flags & SqliteUuidUtil::UUID_FORMAT_HYPHENS) != 0);
+
+    // Braced compact
+    assert(SqliteUuidUtil::parse_uuid("{0123456789abcdeffedcba9876543210}", 34, parsed, &flags));
+    assert(memcmp(parsed, sample_bytes, 16) == 0);
+    assert((flags & SqliteUuidUtil::UUID_FORMAT_BRACED) != 0);
+    assert((flags & SqliteUuidUtil::UUID_FORMAT_HYPHENS) == 0);
+
+    // Nil UUID & Max UUID
+    const uint8_t nil_bytes[16] = {0};
+    assert(SqliteUuidUtil::parse_uuid("00000000-0000-0000-0000-000000000000", 36, parsed));
+    assert(memcmp(parsed, nil_bytes, 16) == 0);
+
+    const uint8_t max_bytes[16] = {
+        0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+        0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff
+    };
+    assert(SqliteUuidUtil::parse_uuid("ffffffff-ffff-ffff-ffff-ffffffffffff", 36, parsed));
+    assert(memcmp(parsed, max_bytes, 16) == 0);
+
+    // ------------------------------------------------------------------------
+    // 3. Malformed and edge cases
+    // ------------------------------------------------------------------------
+    assert(!SqliteUuidUtil::parse_uuid(nullptr, 0, parsed));
+    assert(!SqliteUuidUtil::parse_uuid("01234567-89ab-cdef-fedc-ba9876543210", 35, parsed)); // truncated
+    assert(!SqliteUuidUtil::parse_uuid("01234567-89ab-cdef-fedc-ba9876543210", 37, parsed)); // oversized
+    assert(!SqliteUuidUtil::parse_uuid("01234567-89ab-cdef-fedc-ba987654321g", 36, parsed)); // non-hex 'g'
+    assert(!SqliteUuidUtil::parse_uuid("{01234567-89ab-cdef-fedc-ba9876543210", 37, parsed)); // missing close brace
+    assert(!SqliteUuidUtil::parse_uuid("01234567-89ab-cdef-fedc-ba9876543210}", 37, parsed)); // missing open brace
+    assert(!SqliteUuidUtil::parse_uuid("01234567_89ab_cdef_fedc_ba9876543210", 36, parsed)); // underscores
+    assert(!SqliteUuidUtil::parse_uuid("", 0, parsed));
+
+    // ------------------------------------------------------------------------
+    // 4. 10x10 Pairwise Cross-Format Equality & Hash Matrix
+    // ------------------------------------------------------------------------
+    SqliteValueOwned u_forms[10] = {
+        SqliteValueOwned::from_uuid(sample_bytes, SqliteUuidUtil::UUID_FORMAT_BLOB),
+        SqliteValueOwned::from_uuid(sample_bytes, SqliteUuidUtil::UUID_FORMAT_STANDARD),
+        SqliteValueOwned::from_uuid(sample_bytes, static_cast<SqliteUuidUtil::UuidFormatFlags>(SqliteUuidUtil::UUID_FORMAT_STANDARD | SqliteUuidUtil::UUID_FORMAT_UPPERCASE)),
+        SqliteValueOwned::from_uuid(sample_bytes, SqliteUuidUtil::UUID_FORMAT_TEXT),
+        SqliteValueOwned::from_uuid(sample_bytes, static_cast<SqliteUuidUtil::UuidFormatFlags>(SqliteUuidUtil::UUID_FORMAT_TEXT | SqliteUuidUtil::UUID_FORMAT_UPPERCASE)),
+        SqliteValueOwned::from_uuid(sample_bytes, static_cast<SqliteUuidUtil::UuidFormatFlags>(SqliteUuidUtil::UUID_FORMAT_BRACED | SqliteUuidUtil::UUID_FORMAT_STANDARD)),
+        SqliteValueOwned::from_uuid(sample_bytes, static_cast<SqliteUuidUtil::UuidFormatFlags>(SqliteUuidUtil::UUID_FORMAT_BRACED | SqliteUuidUtil::UUID_FORMAT_STANDARD | SqliteUuidUtil::UUID_FORMAT_UPPERCASE)),
+        SqliteValueOwned::from_uuid(sample_bytes, static_cast<SqliteUuidUtil::UuidFormatFlags>(SqliteUuidUtil::UUID_FORMAT_BRACED | SqliteUuidUtil::UUID_FORMAT_TEXT)),
+        SqliteValueOwned::from_uuid(sample_bytes, static_cast<SqliteUuidUtil::UuidFormatFlags>(SqliteUuidUtil::UUID_FORMAT_BRACED | SqliteUuidUtil::UUID_FORMAT_TEXT | SqliteUuidUtil::UUID_FORMAT_UPPERCASE)),
+        SqliteValueOwned::from_uuid("01234567-89ab-cdef-fedc-ba9876543210") // text constructor
+    };
+
+    unsigned long long expected_hash = u_forms[0].hash();
+    for (int i = 0; i < 10; ++i) {
+        assert(u_forms[i].is_uuid());
+        assert(u_forms[i].subtype() == SQLITE_SUBTYPE_UUID);
+        assert(u_forms[i].hash() == expected_hash);
+        for (int j = 0; j < 10; ++j) {
+            assert(u_forms[i] == u_forms[j]);
+            assert(!(u_forms[i] != u_forms[j]));
+        }
+    }
+
+    // Different UUID must not equal any of the forms
+    const uint8_t diff_bytes[16] = {
+        0x01, 0x23, 0x45, 0x67, 0x89, 0xab, 0xcd, 0xef,
+        0xfe, 0xdc, 0xba, 0x98, 0x76, 0x54, 0x32, 0x11 // differs at last byte
+    };
+    SqliteValueOwned diff_u = SqliteValueOwned::from_uuid(diff_bytes);
+    for (int i = 0; i < 10; ++i) {
+        assert(diff_u != u_forms[i]);
+        assert(diff_u.hash() != u_forms[i].hash());
+    }
+
+    // ------------------------------------------------------------------------
+    // 5. Zero-Copy pointer validation
+    // ------------------------------------------------------------------------
+    // In-situ binary UUIDs (InlineUuidRep) format into scratch buffer with their respective flags:
+    for (int i = 0; i < 9; ++i) {
+        const char* str_ptr = nullptr;
+        char scratch[39];
+        int n = u_forms[i].canonical_uuid_ptr(str_ptr, scratch);
+        assert(str_ptr == scratch);
+        assert(n == 32 || n == 34 || n == 36 || n == 38);
+    }
+
+    // Text-backed UUIDs return direct zero-copy pointer:
+    {
+        const char* str_ptr = nullptr;
+        char scratch[39];
+        int n = u_forms[9].canonical_uuid_ptr(str_ptr, scratch);
+        assert(str_ptr != nullptr);
+        assert(str_ptr != scratch); // ZERO-COPY: direct pointer into text buffer!
+        assert(n == 36);
+    }
+
+    // 6. Cross-Representation Relational Operators with SQLite Views and UDFs
+    // Plain SQLite text column: parse via from_uuid() and verify equality with all forms
+    sqlite3_stmt* stmt = nullptr;
+    assert(sqlite3_prepare_v2(db, "SELECT '01234567-89ab-cdef-fedc-ba9876543210';", -1, &stmt, nullptr) == SQLITE_OK);
+    assert(sqlite3_step(stmt) == SQLITE_ROW);
+    SqliteValueView v_plain(sqlite3_column_value(stmt, 0));
+    assert(v_plain.is_text());
+    SqliteValueOwned u_from_view = SqliteValueOwned::from_uuid(v_plain.as_text().data());
+    assert(u_from_view == u_forms[0]);
+    assert(u_from_view == u_forms[1]);
+    sqlite3_finalize(stmt);
+
+    // Subtyped UUID inside UDF callback: verify SqliteValueView vs SqliteValueOwned across all 10 representations
+    static const SqliteValueOwned* s_u_forms_ptr = u_forms;
+    static bool s_udf_exhaustive_verified = false;
+    sqlite3_create_function_v2(db, "test_make_exhaustive_uuid_udf", 1, SQLITE_UTF8, nullptr,
+        [](sqlite3_context* ctx, int argc, sqlite3_value** argv) {
+            if (argc > 0) {
+                int idx = sqlite3_value_int(argv[0]);
+                if (idx >= 0 && idx < 10) {
+                    s_u_forms_ptr[idx].result(ctx);
+                    return;
+                }
+            }
+            sqlite3_result_null(ctx);
+        }, nullptr, nullptr, nullptr);
+
+    sqlite3_create_function_v2(db, "test_check_uuid_exhaustive_udf", 1, SQLITE_UTF8, nullptr,
+        [](sqlite3_context* ctx, int argc, sqlite3_value** argv) {
+            if (argc > 0) {
+                SqliteValueView v(argv[0]);
+                if (v.is_uuid() && v.subtype() == SQLITE_SUBTYPE_UUID) {
+                    bool all_match = true;
+                    for (int k = 0; k < 10; ++k) {
+                        if (!(v == s_u_forms_ptr[k]) || !(s_u_forms_ptr[k] == v)) {
+                            all_match = false;
+                            break;
+                        }
+                    }
+                    if (all_match) {
+                        s_udf_exhaustive_verified = true;
+                        sqlite3_result_int(ctx, 1);
+                        return;
+                    }
+                }
+            }
+            s_udf_exhaustive_verified = false;
+            sqlite3_result_int(ctx, 0);
+        }, nullptr, nullptr, nullptr);
+
+    // Call UDF for all 10 generated representations
+    for (int k = 0; k < 10; ++k) {
+        char sql[128];
+        snprintf(sql, sizeof(sql), "SELECT test_check_uuid_exhaustive_udf(test_make_exhaustive_uuid_udf(%d));", k);
+        sqlite3_stmt* s = nullptr;
+        assert(sqlite3_prepare_v2(db, sql, -1, &s, nullptr) == SQLITE_OK);
+        assert(sqlite3_step(s) == SQLITE_ROW);
+        assert(sqlite3_column_int(s, 0) == 1);
+        assert(s_udf_exhaustive_verified);
+        sqlite3_finalize(s);
+    }
+}
+
+void test_datetime_exhaustive_suite(sqlite3* db) {
+    // ------------------------------------------------------------------------
+    // 1. Integer Epoch Timestamp Tests (various epochs & boundaries)
+    // ------------------------------------------------------------------------
+    const sqlite3_int64 epoch_ms_1970 = 0LL;
+    const sqlite3_int64 epoch_ms_2000 = 946684800000LL;  // 2000-01-01 00:00:00 UTC
+    const sqlite3_int64 epoch_ms_2026 = 1788500000000LL; // 2026
+    const sqlite3_int64 epoch_ms_2038 = 2147483647000LL; // 2038-01-19 (32-bit overflow boundary)
+    const sqlite3_int64 epoch_ms_pre  = -1000000000LL;   // Pre-1970
+
+    SqliteValueOwned dt_1970 = SqliteValueOwned::from_datetime(epoch_ms_1970);
+    SqliteValueOwned dt_2000 = SqliteValueOwned::from_datetime(epoch_ms_2000);
+    SqliteValueOwned dt_2026 = SqliteValueOwned::from_datetime(epoch_ms_2026);
+    SqliteValueOwned dt_2038 = SqliteValueOwned::from_datetime(epoch_ms_2038);
+    SqliteValueOwned dt_pre  = SqliteValueOwned::from_datetime(epoch_ms_pre);
+
+    assert(dt_1970.is_datetime() && dt_1970.as_int64() == 0LL && !dt_1970.as_bool());
+    assert(dt_2000.is_datetime() && dt_2000.as_int64() == epoch_ms_2000 && dt_2000.as_bool());
+    assert(dt_2026.is_datetime() && dt_2026.as_int64() == epoch_ms_2026);
+    assert(dt_2038.is_datetime() && dt_2038.as_int64() == epoch_ms_2038);
+    assert(dt_pre.is_datetime() && dt_pre.as_int64() == epoch_ms_pre);
+
+    // Relational ordering across datetime integers
+    assert(dt_pre < dt_1970);
+    assert(dt_1970 < dt_2000);
+    assert(dt_2000 < dt_2026);
+    assert(dt_2026 < dt_2038);
+
+    // Numeric equality against raw integer values
+    assert(dt_2000 == SqliteValueOwned(epoch_ms_2000));
+    assert(dt_2000 == epoch_ms_2000);
+    assert(epoch_ms_2000 == dt_2000);
+
+    // ------------------------------------------------------------------------
+    // 2. ISO-8601 String Datetime Tests (Complete Timestamps, Precisions & Offsets)
+    // ------------------------------------------------------------------------
+    const char* iso_date           = "2026-09-04";                           // 10 chars -> SBO
+    const char* iso_min            = "2026-09-04T17:20";                     // 16 chars -> SBO
+    const char* iso_std_space      = "2026-09-04 17:20:00";                  // 19 chars -> SBO
+    const char* iso_std_t          = "2026-09-04T17:20:00";                  // 19 chars -> SBO
+    const char* iso_utc_z          = "2026-09-04T17:20:00Z";                 // 20 chars -> SBO
+    const char* iso_ms_space       = "2026-09-04 17:20:00.000";              // 23 chars -> Heap
+    const char* iso_ms_z           = "2026-09-04T17:20:00.123Z";             // 24 chars -> Heap
+    const char* iso_micro_z        = "2026-09-04T17:20:00.123456Z";          // 27 chars -> Heap
+    const char* iso_nano_z         = "2026-09-04T17:20:00.123456789Z";       // 30 chars -> Heap
+    const char* iso_offset_pos     = "2026-09-04T17:20:00+05:30";            // 25 chars -> Heap
+    const char* iso_offset_neg     = "2026-09-04T17:20:00-08:00";            // 25 chars -> Heap
+    const char* iso_full_ms_offset = "2026-09-04T17:20:00.999+05:30";        // 29 chars -> Heap
+    const char* iso_full_micro_tz  = "2026-09-04T17:20:00.123456-07:00";     // 32 chars -> Heap
+    const char* iso_past           = "1999-12-31T23:59:59.999Z";             // 24 chars -> Heap
+
+    // Verify SBO (< 22 chars) vs Heap (>= 22 chars) allocation boundaries
+    SqliteValueOwned dt_date           = SqliteValueOwned::from_datetime(iso_date);
+    SqliteValueOwned dt_min            = SqliteValueOwned::from_datetime(iso_min);
+    SqliteValueOwned dt_std_space      = SqliteValueOwned::from_datetime(iso_std_space);
+    SqliteValueOwned dt_std_t          = SqliteValueOwned::from_datetime(iso_std_t);
+    SqliteValueOwned dt_utc_z          = SqliteValueOwned::from_datetime(iso_utc_z);
+    SqliteValueOwned dt_ms_space       = SqliteValueOwned::from_datetime(iso_ms_space);
+    SqliteValueOwned dt_ms_z           = SqliteValueOwned::from_datetime(iso_ms_z);
+    SqliteValueOwned dt_micro_z        = SqliteValueOwned::from_datetime(iso_micro_z);
+    SqliteValueOwned dt_nano_z         = SqliteValueOwned::from_datetime(iso_nano_z);
+    SqliteValueOwned dt_offset_pos     = SqliteValueOwned::from_datetime(iso_offset_pos);
+    SqliteValueOwned dt_offset_neg     = SqliteValueOwned::from_datetime(iso_offset_neg);
+    SqliteValueOwned dt_full_ms_offset = SqliteValueOwned::from_datetime(iso_full_ms_offset, -1, true); // immutable
+    SqliteValueOwned dt_full_micro_tz  = SqliteValueOwned::from_datetime(iso_full_micro_tz);
+    SqliteValueOwned dt_past           = SqliteValueOwned::from_datetime(iso_past);
+
+    // SBO validation: <= 21 chars in-situ without heap
+    assert(!dt_date.is_heap_allocated() && dt_date.as_text() == iso_date);
+    assert(!dt_min.is_heap_allocated() && dt_min.as_text() == iso_min);
+    assert(!dt_std_space.is_heap_allocated() && dt_std_space.as_text() == iso_std_space);
+    assert(!dt_std_t.is_heap_allocated() && dt_std_t.as_text() == iso_std_t);
+    assert(!dt_utc_z.is_heap_allocated() && dt_utc_z.as_text() == iso_utc_z);
+
+    // Heap validation: >= 22 chars dynamically allocated
+    assert(dt_ms_space.is_heap_allocated() && dt_ms_space.as_text() == iso_ms_space);
+    assert(dt_ms_z.is_heap_allocated() && dt_ms_z.as_text() == iso_ms_z);
+    assert(dt_micro_z.is_heap_allocated() && dt_micro_z.as_text() == iso_micro_z);
+    assert(dt_nano_z.is_heap_allocated() && dt_nano_z.as_text() == iso_nano_z);
+    assert(dt_offset_pos.is_heap_allocated() && dt_offset_pos.as_text() == iso_offset_pos);
+    assert(dt_offset_neg.is_heap_allocated() && dt_offset_neg.as_text() == iso_offset_neg);
+    assert(dt_full_ms_offset.is_heap_allocated() && dt_full_ms_offset.as_text() == iso_full_ms_offset);
+    assert(dt_full_ms_offset.is_immutable());
+    assert(dt_full_micro_tz.is_heap_allocated() && dt_full_micro_tz.as_text() == iso_full_micro_tz);
+
+    // Type and subtype invariants across all formats
+    SqliteValueOwned all_dts[] = {
+        dt_date, dt_min, dt_std_space, dt_std_t, dt_utc_z,
+        dt_ms_space, dt_ms_z, dt_micro_z, dt_nano_z,
+        dt_offset_pos, dt_offset_neg, dt_full_ms_offset, dt_full_micro_tz, dt_past
+    };
+    for (const auto& d : all_dts) {
+        assert(d.is_datetime());
+        assert(d.is_text());
+        assert(d.subtype() == SQLITE_SUBTYPE_DATETIME);
+        assert(d.affinity() == SQLITE_AFF_TEXT);
+        assert(d.as_bool()); // non-empty string is true
+    }
+
+    // SqliteStringView overload and equality
+    SqliteValueOwned dt_from_sv = SqliteValueOwned::from_datetime(SqliteStringView(iso_nano_z, strlen(iso_nano_z)));
+    assert(dt_from_sv == dt_nano_z);
+    assert(!(dt_from_sv != dt_nano_z));
+
+    // Lexicographical ordering across complete ISO-8601 timestamps
+    assert(dt_past < dt_std_t);
+    assert(dt_std_space < dt_ms_space); // "2026-09-04 17:20:00" < "2026-09-04 17:20:00.000"
+    assert(dt_std_t < dt_utc_z);        // "2026-09-04T17:20:00" < "2026-09-04T17:20:00Z"
+    assert(dt_ms_z < dt_utc_z);         // '.' (ASCII 46) < 'Z' (ASCII 90)
+    assert(SqliteValueOwned::from_datetime("2026-09-04T17:20:00.100Z") < SqliteValueOwned::from_datetime("2026-09-04T17:20:00.200Z"));
+    assert(SqliteValueOwned::from_datetime("2026-09-04T17:20:00.100000Z") < SqliteValueOwned::from_datetime("2026-09-04T17:20:00.200000Z"));
+
+    // Copy, Move, and Clone lifecycle safety on heap ISO-8601 values
+    {
+        SqliteValueOwned copied = dt_full_micro_tz;
+        assert(copied.is_heap_allocated());
+        assert(copied.as_text() == iso_full_micro_tz);
+        assert(copied == dt_full_micro_tz);
+
+        SqliteValueOwned moved = sqlite_move(copied);
+        assert(moved.is_heap_allocated());
+        assert(moved.as_text() == iso_full_micro_tz);
+        assert(moved == dt_full_micro_tz);
+
+        SqliteValueOwned cloned = dt_full_micro_tz.clone();
+        assert(cloned.is_heap_allocated());
+        assert(cloned.as_text() == iso_full_micro_tz);
+    }
+
+    // ------------------------------------------------------------------------
+    // 3. Statement binding, UDF evaluation & SQLite roundtrip
+    // ------------------------------------------------------------------------
+    sqlite3_stmt* stmt = nullptr;
+    assert(sqlite3_prepare_v2(db, "SELECT ?1, ?2, ?3;", -1, &stmt, nullptr) == SQLITE_OK);
+    dt_2026.bind(stmt, 1);
+    dt_utc_z.bind(stmt, 2);
+    dt_full_micro_tz.bind(stmt, 3);
+    assert(sqlite3_step(stmt) == SQLITE_ROW);
+    
+    SqliteValueView v1(sqlite3_column_value(stmt, 0));
+    SqliteValueView v2(sqlite3_column_value(stmt, 1));
+    SqliteValueView v3(sqlite3_column_value(stmt, 2));
+    assert(v1.is_integer() && v1.as_int64() == epoch_ms_2026);
+    assert(v2.is_text() && v2.as_text() == iso_utc_z);
+    assert(v3.is_text() && v3.as_text() == iso_full_micro_tz);
+    sqlite3_finalize(stmt);
+
+    // UDF roundtrip with complete ISO-8601 timestamp
+    static bool s_udf_dt_iso_verified = false;
+    sqlite3_create_function_v2(db, "test_make_dt_iso_udf", 0, SQLITE_UTF8, nullptr,
+        [](sqlite3_context* ctx, int, sqlite3_value**) {
+            SqliteValueOwned dt = SqliteValueOwned::from_datetime("2026-09-04T17:20:00.123456Z");
+            dt.result(ctx);
+        }, nullptr, nullptr, nullptr);
+
+    sqlite3_create_function_v2(db, "test_check_dt_iso_udf", 1, SQLITE_UTF8, nullptr,
+        [](sqlite3_context* ctx, int argc, sqlite3_value** argv) {
+            if (argc > 0) {
+                SqliteValueView v(argv[0]);
+                if (v.is_datetime() && v.subtype() == SQLITE_SUBTYPE_DATETIME &&
+                    v.is_text() && v.as_text() == "2026-09-04T17:20:00.123456Z") {
+                    s_udf_dt_iso_verified = true;
+                    sqlite3_result_int(ctx, 1);
+                    return;
+                }
+            }
+            s_udf_dt_iso_verified = false;
+            sqlite3_result_int(ctx, 0);
+        }, nullptr, nullptr, nullptr);
+
+    assert(sqlite3_prepare_v2(db, "SELECT test_check_dt_iso_udf(test_make_dt_iso_udf());", -1, &stmt, nullptr) == SQLITE_OK);
+    assert(sqlite3_step(stmt) == SQLITE_ROW);
+    assert(sqlite3_column_int(stmt, 0) == 1);
+    assert(s_udf_dt_iso_verified);
+    sqlite3_finalize(stmt);
+}
+
 int main() {
     sqlite3_initialize();
     
@@ -2391,6 +3452,18 @@ int main() {
 
     printf("Testing SqliteValueView & SqliteValueOwned Template Pointer Passing...\n");
     test_pointer_passing(db);
+
+    printf("Testing Comprehensive UUID Functions (Parsing, Formatting, Subtype, UDF)...\n");
+    test_uuid_functions(db);
+
+    printf("Testing Comprehensive Datetime Functions (Epoch MS, Clock, Subtype, UDF)...\n");
+    test_datetime_functions(db);
+
+    printf("Testing Exhaustive UUID Permutations & Cross-Format Equivalence Matrix...\n");
+    test_uuid_exhaustive_suite(db);
+
+    printf("Testing Exhaustive Datetime Suite (Epochs, ISO-8601, Containers, SQL Bind)...\n");
+    test_datetime_exhaustive_suite(db);
 
     sqlite3_close(db);
     sqlite3_shutdown();

@@ -16,6 +16,20 @@ void test_sqlite_clock() {
     assert(sec > 1700000000LL);
     assert(now_ms > 0);
 
+    // Verify monotonic non-decreasing across rapid calls
+    uint64_t prev_ns = ns;
+    for (int i = 0; i < 100; ++i) {
+        uint64_t curr_ns = SqliteClock::monotonic_ns();
+        assert(curr_ns >= prev_ns);
+        prev_ns = curr_ns;
+    }
+
+    // Microsecond sleep
+    SqliteClock::sleep_for_us(5000);
+    uint64_t us2 = SqliteClock::monotonic_us();
+    assert(us2 >= us + 3000);
+
+    // Millisecond sleep
     SqliteClock::sleep_for_ms(15);
     uint64_t ms2 = SqliteClock::monotonic_ms();
     assert(ms2 >= ms + 10);
@@ -53,6 +67,11 @@ void test_sqlite_timezone() {
 
     assert(sec >= -43200L && sec <= 50400L);
     assert(mins >= 0 && mins < 60);
+
+    // Verify exact decomposition
+    long reconstructed = (long)hours * 3600L + (long)(sec >= 0 ? mins : -mins) * 60L;
+    assert(reconstructed == sec);
+
     printf("   [PASS] System Timezone: %+d:%02d (%ld seconds)\n", hours, mins, sec);
 }
 

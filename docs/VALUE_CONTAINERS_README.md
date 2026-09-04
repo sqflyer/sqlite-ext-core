@@ -11,7 +11,7 @@
 ```cpp
 #include "sqlite3_value_containers.hpp"
 
-// Stack-allocated composite key (2 columns = exact 32 bytes, 0 mallocs)
+// Stack-allocated composite key (2 columns = exact 48 bytes, 0 mallocs)
 SqliteValueTuple<2> pk(1001LL, "sensor_alpha");
 
 // Standard element accessors & capacity
@@ -38,7 +38,7 @@ SqliteRowOwnedWrapper span = pk.view();
 ```cpp
 #include "sqlite3_value_containers.hpp"
 
-// SBO stack buffer holding up to 4 elements (64 bytes = 1 L1 cache line)
+// SBO stack buffer holding up to 4 elements (4 x 24B = 96 bytes on stack)
 SqliteValueVec<4> row;
 
 // 1. Dynamic appending with primitive overloads (0 allocations on stack)
@@ -117,7 +117,7 @@ SQLITE_WITH_KEY_VAL_OWNED_8X8(key, val, pk_cnt, val_cnt, {
 | :--- | :---: | :---: | :---: | :---: |
 | **Ownership** | Owning (RAII) | Owning (RAII) | Non-Owning (Span) | Non-Owning (Multi-Source View) |
 | **Standard Alignment** | `std::array` | `std::vector` | `std::array` | `std::array` |
-| **Stack SBO Limit** | Exact $N \times 16\text{B}$ ($N \le 8$) | $N \times 16\text{B}$ in-situ ($N \le 8$) | 16 Bytes (Pointer + Len) | 16 Bytes (Tagged Union + Len) |
+| **Stack SBO Limit** | Exact $N \times 24\text{B}$ ($N \le 8$) | $N \times 24\text{B}$ in-situ ($N \le 8$) | 16 Bytes (Pointer + Len) | 16 Bytes (Tagged Union + Len) |
 | **Heap Model** | $N = 0$ (`SqliteValueTuple<>`) | Dynamic Spill ($> N$) / $N = 0$ | N/A | N/A |
 | **Default Creation** | $N$ active `SQLITE_NULL` elements ($N \in [1..8]$) | 0 active elements (`empty() == true`) | 0 length span | 0 length view |
 | **Element Access** | `front`, `back`, `at`, `[]`, `data` | `front`, `back`, `at`, `[]`, `data` | `front`, `back`, `at`, `[]`, `data` | `front`, `back`, `at`, `[]`, `data` |
@@ -196,6 +196,7 @@ auto it_lb = index.lower_bound(100);
 - `size_type capacity() const noexcept`: Returns current allocated capacity.
 - `bool empty() const noexcept`: Returns true if active size is 0.
 - `bool is_inline() const noexcept`: Returns true if operating in stack SBO storage.
+- `bool is_heap() const noexcept` / `bool is_heap_allocated() const noexcept`: Returns true if dynamically allocated on heap.
 - `reference front() noexcept` / `const_reference front() const noexcept`: Accesses first element.
 - `reference back() noexcept` / `const_reference back() const noexcept`: Accesses last element.
 - `reference at(size_type pos) noexcept`: Bounds-checked column reference.

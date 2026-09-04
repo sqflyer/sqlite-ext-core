@@ -7,16 +7,16 @@
  * templates:
  *
  * 1. `SqliteValueTuple<size_t N = 0>`:
- *    - Specialization $N \in [1..8]$: Exact $N \times 16\text{B}$ in-situ stack
- * array. Zero heap allocations, zero capacity overhead, exact L1 cache line
- * alignment (16B, 32B, 48B, 64B, 128B). Designed for compile-time fixed-arity
+ *    - Specialization $N \in [1..8]$: Exact $N \times 24\text{B}$ in-situ stack
+ * array. Zero heap allocations, zero capacity overhead, deterministic
+ * alignment (24B, 48B, 72B, 96B, 192B). Designed for compile-time fixed-arity
  * Primary Keys, Composite Index Keys, and Fixed Records.
  *    - Specialization $N = 0$ (default `SqliteValueTuple<>`): Direct dynamic heap tuple
  * with runtime-sized buffer via `sqlite3_malloc64`.
  *
  * 2. `SqliteValueVec<size_t N = 0>`:
  *    - Specialization $N \in [1..8]$: Small Buffer Optimized (SBO) dynamic
- * vector with $N \times 16\text{B}$ in-situ stack storage. Seamlessly spills to
+ * vector with $N \times 24\text{B}$ in-situ stack storage. Seamlessly spills to
  * heap (`sqlite3_malloc64`) when resized $> N$, and safely returns to stack
  * when shrunk back $\le N$.
  *    - Specialization $N = 0$ (default `SqliteValueVec<>`): Direct dynamic heap vector with 0 stack SBO overhead.
@@ -1137,26 +1137,21 @@ private:
     SqliteValueOwned *ptr; ///< 8 Bytes: Heap pointer (Offset 0..7).
     uint32_t size;         ///< 4 Bytes: Active element count (Offset 8..11).
     uint16_t capacity;     ///< 2 Bytes: Allocated capacity (Offset 12..13).
-    uint8_t reserved;      ///< 1 Byte:  Reserved padding (Offset 14).
+    uint8_t reserved[9];   ///< 9 Bytes: Reserved padding (Offset 14..22).
     SqliteOwnedValueTag
-        tag; ///< 1 Byte:  Tag discriminator (Offset 15, tag.raw == 0x00).
-    uint8_t pad[(N * 16) > 16 ? (N * 16) - 16
-                              : 0]; ///< Padding to match N * 16 bytes.
+        tag; ///< 1 Byte:  Tag discriminator (Offset 23, tag.raw == 0x00).
+    uint8_t pad[(N * 24) > 24 ? (N * 24) - 24
+                              : 0]; ///< Padding to match N * 24 bytes.
   };
-  static_assert(sizeof(HeapRep) == N * 16,
+  static_assert(sizeof(HeapRep) == N * 24,
                 "HeapRep must match union buffer size");
 
   union {
     SqliteValueOwned
-        m_inline[N];  ///< Exact N * 16 Bytes: In-situ stack storage.
-    HeapRep m_heap;   ///< Exact N * 16 Bytes: Dynamic heap control block.
+        m_inline[N];  ///< Exact N * 24 Bytes: In-situ stack storage.
+    HeapRep m_heap;   ///< Exact N * 24 Bytes: Dynamic heap control block.
     uint64_t m_align; ///< 8-byte alignment guarantee.
   };
-
-  /** @brief Checks if the container currently holds heap-allocated storage. */
-  inline bool is_heap() const noexcept {
-    return m_heap.tag.is_heap_container(m_heap.ptr);
-  }
 
   /** @brief Initializes the union to an empty, zero-initialized stack state. */
   inline void init_empty() noexcept {
@@ -1202,6 +1197,16 @@ private:
   }
 
 public:
+  /** @brief Checks if the container currently holds heap-allocated storage. */
+  inline bool is_heap() const noexcept {
+    return m_heap.tag.is_heap_container(m_heap.ptr);
+  }
+
+  /** @brief Checks if the container currently holds heap-allocated storage (alias). */
+  inline bool is_heap_allocated() const noexcept {
+    return is_heap();
+  }
+
   /**
    * @brief Default constructor. Constructs an empty vector (size = 0) on the
    * stack.
@@ -2157,27 +2162,31 @@ static_assert(sizeof(SqliteValueTuple<0>) == 16,
               "SqliteValueTuple<0> must be 16 bytes (ptr + size + capacity)!");
 static_assert(sizeof(SqliteValueTuple<>) == 16,
               "SqliteValueTuple<> must be 16 bytes (default pure heap)!");
-static_assert(sizeof(SqliteValueTuple<1>) == 16,
-              "SqliteValueTuple<1> must be 16 bytes!");
-static_assert(sizeof(SqliteValueTuple<2>) == 32,
-              "SqliteValueTuple<2> must be 32 bytes!");
-static_assert(sizeof(SqliteValueTuple<4>) == 64,
-              "SqliteValueTuple<4> must be 64 bytes (1 L1 Line)!");
-static_assert(sizeof(SqliteValueTuple<8>) == 128,
-              "SqliteValueTuple<8> must be 128 bytes (2 L1 Lines)!");
+static_assert(sizeof(SqliteValueTuple<1>) == 24,
+              "SqliteValueTuple<1> must be 24 bytes!");
+static_assert(sizeof(SqliteValueTuple<2>) == 48,
+              "SqliteValueTuple<2> must be 48 bytes!");
+static_assert(sizeof(SqliteValueTuple<3>) == 72,
+              "SqliteValueTuple<3> must be 72 bytes!");
+static_assert(sizeof(SqliteValueTuple<4>) == 96,
+              "SqliteValueTuple<4> must be 96 bytes!");
+static_assert(sizeof(SqliteValueTuple<8>) == 192,
+              "SqliteValueTuple<8> must be 192 bytes (3 L1 Lines)!");
 
 static_assert(sizeof(SqliteValueVec<0>) == 16,
               "SqliteValueVec<0> must be 16 bytes (ptr + size + capacity)!");
 static_assert(sizeof(SqliteValueVec<>) == 16,
               "SqliteValueVec<> must be 16 bytes (default pure heap)!");
-static_assert(sizeof(SqliteValueVec<1>) == 16,
-              "SqliteValueVec<1> must be 16 bytes!");
-static_assert(sizeof(SqliteValueVec<2>) == 32,
-              "SqliteValueVec<2> must be 32 bytes!");
-static_assert(sizeof(SqliteValueVec<4>) == 64,
-              "SqliteValueVec<4> must be 64 bytes (1 L1 Line)!");
-static_assert(sizeof(SqliteValueVec<8>) == 128,
-              "SqliteValueVec<8> must be 128 bytes (2 L1 Lines)!");
+static_assert(sizeof(SqliteValueVec<1>) == 24,
+              "SqliteValueVec<1> must be 24 bytes!");
+static_assert(sizeof(SqliteValueVec<2>) == 48,
+              "SqliteValueVec<2> must be 48 bytes!");
+static_assert(sizeof(SqliteValueVec<3>) == 72,
+              "SqliteValueVec<3> must be 72 bytes!");
+static_assert(sizeof(SqliteValueVec<4>) == 96,
+              "SqliteValueVec<4> must be 96 bytes!");
+static_assert(sizeof(SqliteValueVec<8>) == 192,
+              "SqliteValueVec<8> must be 192 bytes (3 L1 Lines)!");
 
 // ============================================================================
 // PART 4: 1D Generic Compile-Time Dispatcher (1..8 + Default Heap Fallback N = 0 / <>)

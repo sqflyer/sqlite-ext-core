@@ -6,6 +6,7 @@
 #include <cstring>
 #include <map>
 #include <unordered_map>
+#include <string>
 
 // ============================================================================
 // Transparent Hashing & std::map Heterogeneous Lookup Tests
@@ -283,6 +284,181 @@ void test_sqlite_value_equal_functor(sqlite3* db) {
     sqlite3_finalize(stmt);
 }
 
+/**
+ * @brief Tests std::unordered_map and std::map heterogeneous lookups with UUIDs.
+ */
+void test_uuid_std_heterogeneous_lookup(sqlite3* db) {
+    printf("Testing UUID Heterogeneous STL Lookup (std::unordered_map & std::map)...\n");
+
+    const uint8_t raw_uuid1[16] = {
+        0x55, 0x0e, 0x84, 0x00, 0xe2, 0x9b, 0x41, 0xd4,
+        0xa7, 0x16, 0x44, 0x66, 0x55, 0x44, 0x00, 0x00
+    };
+    const uint8_t raw_uuid2[16] = {
+        0x12, 0x34, 0x56, 0x78, 0x9a, 0xbc, 0xde, 0xf0,
+        0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77, 0x88
+    };
+
+    SqliteValueOwned u_bin_std = SqliteValueOwned::from_uuid(raw_uuid1, SqliteUuidUtil::UUID_FORMAT_STANDARD);
+    SqliteValueOwned u_bin_upper = SqliteValueOwned::from_uuid(raw_uuid1, static_cast<SqliteUuidUtil::UuidFormatFlags>(SqliteUuidUtil::UUID_FORMAT_STANDARD | SqliteUuidUtil::UUID_FORMAT_UPPERCASE));
+    SqliteValueOwned u_bin_blob = SqliteValueOwned::from_uuid(raw_uuid1, SqliteUuidUtil::UUID_FORMAT_BLOB);
+
+    SqliteValueOwned u_bin2 = SqliteValueOwned::from_uuid(raw_uuid2, SqliteUuidUtil::UUID_FORMAT_STANDARD);
+
+    // 1. std::unordered_map with heterogeneous lookup
+    std::unordered_map<SqliteValueOwned, std::string, SqliteValueHash, SqliteValueEqual> uuid_map;
+    uuid_map[u_bin_std] = "uuid1_entity";
+    uuid_map[u_bin2] = "uuid2_entity";
+
+    assert(uuid_map.size() == 2);
+
+    // Look up uuid1 via different representations of the same UUID
+    SqliteValueOwned q_text_std = SqliteValueOwned::from_uuid("550e8400-e29b-41d4-a716-446655440000");
+    SqliteValueOwned q_text_upper = SqliteValueOwned::from_uuid("550E8400-E29B-41D4-A716-446655440000");
+    SqliteValueOwned q_text_blob = SqliteValueOwned::from_uuid("550e8400e29b41d4a716446655440000");
+
+    assert(uuid_map.find(q_text_std) != uuid_map.end());
+    assert(uuid_map.find(q_text_std)->second == "uuid1_entity");
+
+    assert(uuid_map.find(q_text_upper) != uuid_map.end());
+    assert(uuid_map.find(q_text_upper)->second == "uuid1_entity");
+
+    assert(uuid_map.find(q_text_blob) != uuid_map.end());
+    assert(uuid_map.find(q_text_blob)->second == "uuid1_entity");
+
+    assert(uuid_map.find(u_bin_blob) != uuid_map.end());
+    assert(uuid_map.find(u_bin_blob)->second == "uuid1_entity");
+
+    assert(uuid_map.find(u_bin_upper) != uuid_map.end());
+    assert(uuid_map.find(u_bin_upper)->second == "uuid1_entity");
+
+    // Look up via SqliteValueView from database column
+    sqlite3_stmt* stmt = nullptr;
+    assert(sqlite3_prepare_v2(db, "SELECT '550e8400-e29b-41d4-a716-446655440000', '550E8400-E29B-41D4-A716-446655440000';", -1, &stmt, nullptr) == SQLITE_OK);
+    assert(sqlite3_step(stmt) == SQLITE_ROW);
+    SqliteValueView view_std = SqliteValueView::from_column(stmt, 0);
+    SqliteValueView view_upper = SqliteValueView::from_column(stmt, 1);
+
+    assert(view_std.as_text() == "550e8400-e29b-41d4-a716-446655440000");
+    assert(view_upper.as_text() == "550E8400-E29B-41D4-A716-446655440000");
+
+    SqliteValueOwned owned_from_view_std = SqliteValueOwned::from_uuid(view_std.as_text().data());
+    SqliteValueOwned owned_from_view_upper = SqliteValueOwned::from_uuid(view_upper.as_text().data());
+
+    assert(uuid_map.find(owned_from_view_std) != uuid_map.end());
+    assert(uuid_map.find(owned_from_view_std)->second == "uuid1_entity");
+    assert(uuid_map.find(owned_from_view_upper) != uuid_map.end());
+    assert(uuid_map.find(owned_from_view_upper)->second == "uuid1_entity");
+
+    sqlite3_finalize(stmt);
+}
+
+void test_datetime_std_heterogeneous_lookup(sqlite3* db) {
+    printf("Testing Datetime STL Heterogeneous Lookup (std::unordered_map & std::map)...\n");
+
+    const sqlite3_int64 epoch1 = 1725450000000LL;
+    const sqlite3_int64 epoch2 = 1788500000000LL;
+    const char* iso_ts_std = "2026-09-04 17:20:00.000";
+    const char* iso_ts_full = "2026-09-04T17:20:00.123456Z";
+    const char* iso_ts_tz = "2026-09-04T17:20:00+05:30";
+
+    SqliteValueOwned dt1 = SqliteValueOwned::from_datetime(epoch1);
+    SqliteValueOwned dt2 = SqliteValueOwned::from_datetime(epoch2);
+    SqliteValueOwned dt_text = SqliteValueOwned::from_datetime(iso_ts_std);
+    SqliteValueOwned dt_full = SqliteValueOwned::from_datetime(iso_ts_full);
+    SqliteValueOwned dt_tz = SqliteValueOwned::from_datetime(iso_ts_tz);
+
+    // 1. Verify Direct Transparent Hasher & Equality
+    SqliteValueHash hasher;
+    SqliteValueEqual eq;
+    assert(hasher(dt1) == hasher(epoch1));
+    assert(eq(dt1, epoch1));
+    assert(hasher(dt_text) == hasher(iso_ts_std));
+    assert(eq(dt_text, iso_ts_std));
+    assert(hasher(dt_full) == hasher(iso_ts_full));
+    assert(eq(dt_full, iso_ts_full));
+    assert(hasher(dt_tz) == hasher(iso_ts_tz));
+    assert(eq(dt_tz, iso_ts_tz));
+
+    // 2. std::unordered_map with SqliteValueHash and SqliteValueEqual
+    std::unordered_map<SqliteValueOwned, std::string, SqliteValueHash, SqliteValueEqual> dt_map;
+    dt_map[dt1] = "session_start";
+    dt_map[dt2] = "session_future";
+    dt_map[dt_text] = "session_iso";
+    dt_map[dt_full] = "session_full_iso";
+    dt_map[dt_tz] = "session_tz_iso";
+
+    assert(dt_map.size() == 5);
+
+    // Lookup using SqliteValueOwned
+    assert(dt_map.find(SqliteValueOwned(epoch1)) != dt_map.end());
+    assert(dt_map.find(SqliteValueOwned(epoch1))->second == "session_start");
+
+    assert(dt_map.find(SqliteValueOwned(epoch2)) != dt_map.end());
+    assert(dt_map.find(SqliteValueOwned(epoch2))->second == "session_future");
+
+    assert(dt_map.find(SqliteValueOwned::from_text(iso_ts_std)) != dt_map.end());
+    assert(dt_map.find(SqliteValueOwned::from_text(iso_ts_std))->second == "session_iso");
+
+    assert(dt_map.find(SqliteValueOwned::from_datetime(iso_ts_full)) != dt_map.end());
+    assert(dt_map.find(SqliteValueOwned::from_datetime(iso_ts_full))->second == "session_full_iso");
+
+    assert(dt_map.find(SqliteValueOwned::from_datetime(iso_ts_tz)) != dt_map.end());
+    assert(dt_map.find(SqliteValueOwned::from_datetime(iso_ts_tz))->second == "session_tz_iso");
+
+#if __cplusplus >= 202002L
+    // C++20 Heterogeneous unordered_map lookup
+    assert(dt_map.find(epoch1) != dt_map.end());
+    assert(dt_map.find(epoch1)->second == "session_start");
+    assert(dt_map.find(SqliteStringView(iso_ts_std, strlen(iso_ts_std))) != dt_map.end());
+#endif
+
+    // 3. std::map with std::less<> (C++14 Heterogeneous Lookup)
+    std::map<SqliteValueOwned, std::string, std::less<>> dt_ordered;
+    dt_ordered[dt1] = "start";
+    dt_ordered[dt2] = "future";
+    dt_ordered[dt_text] = "text_date";
+    dt_ordered[dt_full] = "full_date";
+    dt_ordered[dt_tz] = "tz_date";
+
+    // Heterogeneous Lookup via primitive and string view in std::map (C++14 standard)
+    SqliteStringView sv_std(iso_ts_std, strlen(iso_ts_std));
+    SqliteStringView sv_full(iso_ts_full, strlen(iso_ts_full));
+    SqliteStringView sv_tz(iso_ts_tz, strlen(iso_ts_tz));
+    assert(dt_ordered.find(epoch1) != dt_ordered.end());
+    assert(dt_ordered.find(epoch1)->second == "start");
+    assert(dt_ordered.find(sv_std) != dt_ordered.end());
+    assert(dt_ordered.find(sv_std)->second == "text_date");
+    assert(dt_ordered.find(sv_full) != dt_ordered.end());
+    assert(dt_ordered.find(sv_full)->second == "full_date");
+    assert(dt_ordered.find(sv_tz) != dt_ordered.end());
+    assert(dt_ordered.find(sv_tz)->second == "tz_date");
+
+    // Range queries
+    auto it_lb = dt_ordered.lower_bound(epoch1);
+    assert(it_lb != dt_ordered.end());
+    assert(it_lb->first.as_int64() == epoch1);
+
+    // 4. Database column view lookup with std::map
+    sqlite3_stmt* stmt = nullptr;
+    assert(sqlite3_prepare_v2(db, "SELECT 1725450000000, '2026-09-04 17:20:00.000', '2026-09-04T17:20:00.123456Z';", -1, &stmt, nullptr) == SQLITE_OK);
+    assert(sqlite3_step(stmt) == SQLITE_ROW);
+    SqliteValueView v_epoch = SqliteValueView::from_column(stmt, 0);
+    SqliteValueView v_text = SqliteValueView::from_column(stmt, 1);
+    SqliteValueView v_full = SqliteValueView::from_column(stmt, 2);
+
+    assert(dt_ordered.find(v_epoch) != dt_ordered.end());
+    assert(dt_ordered.find(v_epoch)->second == "start");
+
+    assert(dt_ordered.find(v_text) != dt_ordered.end());
+    assert(dt_ordered.find(v_text)->second == "text_date");
+
+    assert(dt_ordered.find(v_full) != dt_ordered.end());
+    assert(dt_ordered.find(v_full)->second == "full_date");
+
+    sqlite3_finalize(stmt);
+}
+
 int main() {
     printf("================================================================\n");
     printf("RUNNING SQLITE VALUE STD TESTS (Transparent Hashing & STL Map)\n");
@@ -299,6 +475,8 @@ int main() {
     test_unordered_map_heterogeneous(db);
     test_sqlite_value_less_functor();
     test_sqlite_value_equal_functor(db);
+    test_uuid_std_heterogeneous_lookup(db);
+    test_datetime_std_heterogeneous_lookup(db);
 
     sqlite3_close(db);
     sqlite3_shutdown();

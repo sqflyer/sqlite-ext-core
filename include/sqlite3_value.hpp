@@ -1121,6 +1121,8 @@ private:
     inline sqlite3_value* val_mut() const noexcept { return const_cast<sqlite3_value*>(m_val); }
 
 public:
+    inline int canonical_uuid_ptr(const char*& out_ptr, char* buf) const noexcept;
+
     /** @brief Computes the polymorphic hash. */
     unsigned long long hash() const {
         return SqliteValueUtil::hash(m_val);
@@ -1142,95 +1144,307 @@ public:
     bool operator==(const SqliteValueOwned& other) const;
     bool operator!=(const SqliteValueOwned& other) const;
     bool operator<(const SqliteValueOwned& other) const;
+    inline bool operator>(const SqliteValueOwned& other) const noexcept;
+    inline bool operator<=(const SqliteValueOwned& other) const noexcept;
+    inline bool operator>=(const SqliteValueOwned& other) const noexcept;
 };
 
 // ============================================================================
-// DUAL-REPRESENTATION 16-BYTE MEMORY MODEL ARCHITECTURE
+// 12. 24-BYTE UNIFIED SMALL BUFFER OPTIMIZATION (SBO) & HYBRID MEMORY MODEL
 // ============================================================================
 //
-// SqliteValueOwned uses a tagged union of two 16-byte structs to achieve:
+// SqliteValueOwned uses a tagged union of three 24-byte structs to achieve:
 //
-// 1. EXACT 16-BYTE FOOTPRINT (128 BITS):
-//    Fits comfortably across two 64-bit CPU registers or a single 128-bit
-//    SIMD register, optimizing cache line density (4 values per 64B cache line).
+// 1. EXACT 24-BYTE FOOTPRINT (192 BITS):
+//    Fits comfortably across three 64-bit CPU registers or SIMD vectors,
+//    enabling in-situ storage of 128-bit (16-byte) raw UUIDs and SBO strings/blobs.
 //
 // 2. ZERO-ALLOCATION SMALL BUFFER OPTIMIZATION (SBO):
-//    - Short strings (<= 14 bytes) and blobs (<= 14 bytes) are stored
-//      directly inline without ever invoking sqlite3_malloc.
-//    - Primitives (64-bit int, 64-bit double, Null) are stored inline in registers.
-//    - Large text/blobs (> 14 bytes) store a raw byte buffer (pData) on the heap.
+//    - Short strings (<= 21 bytes) are stored inline with guaranteed null-terminator at buf[len].
+//    - Blobs (<= 22 bytes) are stored directly inline without ever invoking sqlite3_malloc.
+//    - 16-byte raw binary UUIDs are stored in-situ without heap allocation.
+//    - Primitives (64-bit int, 64-bit double, Null, Opaque Pointer) are stored inline in registers.
+//    - Large text (> 21 bytes) / blobs (> 22 bytes) store a raw byte buffer (pData) on the heap.
 //
-// 3. ZERO-BRANCH SHARED METADATA TAIL (OFFSETS 14 & 15):
-//    Both Struct 1 and Struct 2 align their control metadata at the exact same offsets:
-//    - Offset 14 (subtype): Direct access to the 8-bit SQLite subtype ('J', 'D', 'U', etc.)
-//      without branching on type or heap allocation flags. Enables inline JSON/decimals.
-//    - Offset 15 (tag): Bit-packed control byte encoding type, heap flag, and inline length.
+// 3. ZERO-BRANCH SHARED CONTROL TAIL (OFFSETS 22 & 23):
+//    All three structs align their control metadata at the exact same trailing offsets:
+//    - Offset 22 (subtag): Direct access to the 8-bit SQLite subtype ('J', 'D', 'U', etc.)
+//      and immutability flag (bit 7) without branching on type or heap allocation flags.
+//    - Offset 23 (tag): High-density control byte encoding 3-bit state/type and 5-bit length/flag.
 //
 // ============================================================================
-// BITFIELD SPECIFICATION: THE CONTROL TAG BYTE (OFFSET 15)
+// BITFIELD SPECIFICATION: THE CONTROL TAG BYTE (OFFSET 23)
 // ============================================================================
 //
-// The single byte at Offset 15 acts as a high-density, multi-purpose control
-// register shared by both representation structs:
+// The single byte at Offset 23 acts as a high-density, multi-purpose control
+// register shared by all representation structs:
 //
 //   Bit:     7       6       5       4       3       2       1       0
 //        ┌───────┬───────┬───────┬───────┬───────┬───────┬───────┬───────┐
-//        │      DATA TYPE        │ HEAP  │     INLINE PAYLOAD LENGTH     │
-//        │  (0x01 .. 0x05)       │ FLAG  │         (0 .. 14)             │
+//        │      STATE / TYPE     │          INLINE LENGTH / HEAP TYPE    │
+//        │  (0x00 .. 0x07)       │         (0 .. 22 / 3=TEXT, 4=BLOB)    │
 //        └───────┴───────┴───────┴───────┴───────┴───────┴───────┴───────┘
 //
-// 1. DATA TYPE (Bits 7..5, Mask: 0xE0, Shift: >> 5):
-//    Stores the 3-bit SQLite storage class enum:
-//    - 001 (1) : SQLITE_INTEGER
-//    - 010 (2) : SQLITE_FLOAT
-//    - 011 (3) : SQLITE_TEXT
-//    - 100 (4) : SQLITE_BLOB
-//    - 101 (5) : SQLITE_NULL
-//    Extracted via: `type() = static_cast<int>(raw >> 5);` (1 CPU instruction, branchless)
-//
-// 2. HEAP ALLOCATION FLAG (Bit 4, Mask: 0x10):
-//    Indicates whether the payload is heap-managed or stored in-situ:
-//    - 0 : In-situ / Inline representation (Struct 2 `buf` or primitive `iValue`/`dValue`)
-//    - 1 : Heap representation (Struct 1 `payload.pData` points to dynamically allocated buffer)
-//    Extracted via: `is_heap() = (raw & 0x10) != 0;`
-//
-// 3. INLINE PAYLOAD LENGTH (Bits 3..0, Mask: 0x0F):
-//    Encodes the byte length of the inline buffer (0 to 14 bytes):
-//    - For SQLITE_TEXT: exact string length (0..14 chars)
-//    - For SQLITE_BLOB: exact binary blob size (0..14 raw bytes)
-//    - For primitives (INTEGER/FLOAT/NULL): unused (set to 0)
-//    Extracted via: `len() = raw & 0x0F;`
+// State Encoding (Bits 7..5, Mask: 0xE0, Shift: >> 5):
+//   - 000 (0) : STATE_EMPTY   (0x00) - Uninitialized / Cleared / Heap Container marker
+//   - 001 (1) : SQLITE_INTEGER(0x20)
+//   - 010 (2) : SQLITE_FLOAT  (0x40)
+//   - 011 (3) : SQLITE_TEXT   (0x60, inline length 0..21 in bits 4..0)
+//   - 100 (4) : SQLITE_BLOB   (0x80, inline length 0..22 in bits 4..0)
+//   - 101 (5) : SQLITE_NULL   (0xA0)
+//   - 110 (6) : STATE_UUID    (0xC0, bit 0: 0=BLOB, 1=TEXT)
+//   - 111 (7) : STATE_HEAP    (0xE0, type code in bits 4..0: 3=SQLITE_TEXT, 4=SQLITE_BLOB)
 //
 // ============================================================================
 
 /**
- * @brief 1-Byte bitfield control tag shared by all 16-byte value representations.
+ * @namespace SqliteUuidUtil
+ * @brief Zero-allocation utilities for 128-bit UUID parsing, formatting, and hashing.
+ *
+ * NOTE FOR USERS:
+ * When storing UUIDs in SQLite, passing the standard SQLite subtype
+ * SQLITE_SUBTYPE_UUID ('U' = 85) is strongly recommended. This informs
+ * the query engine, extensions, and SqliteValueOwned of the UUID semantic
+ * without heuristic guessing or parsing overhead.
+ */
+namespace SqliteUuidUtil {
+    enum UuidFormatFlags : uint8_t {
+        UUID_FORMAT_BLOB        = 0x00, ///< Raw 16-byte binary
+        UUID_FORMAT_TEXT        = 0x01, ///< Formatted text representation
+        UUID_FORMAT_HYPHENS     = 0x02, ///< Hyphenated (8-4-4-4-12)
+        UUID_FORMAT_UPPERCASE   = 0x04, ///< Uppercase hex characters
+        UUID_FORMAT_BRACED      = 0x08, ///< Enclosed in curly braces { ... }
+        UUID_FORMAT_STANDARD    = 0x03  ///< Standard format: xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx (36 chars)
+    };
+
+    /** @brief Parses a single hexadecimal character. Returns -1 on invalid char. */
+    inline int parse_hex_digit(char c) noexcept {
+        if (c >= '0' && c <= '9') return c - '0';
+        if (c >= 'a' && c <= 'f') return c - 'a' + 10;
+        if (c >= 'A' && c <= 'F') return c - 'A' + 10;
+        return -1;
+    }
+
+    /**
+     * @brief Parses a 32-char (raw hex), 36-char (hyphenated), or 38-char (braced) UUID string into 16 raw bytes.
+     * @param str Pointer to UUID text string.
+     * @param len Length in bytes (or -1 for auto-length).
+     * @param out_bytes Output buffer of at least 16 bytes.
+     * @param out_flags Optional output pointer receiving detected UuidFormatFlags.
+     * @return true if successfully parsed into 16 bytes, false otherwise.
+     */
+    inline bool parse_uuid(const char* str, int len, uint8_t out_bytes[16], uint8_t* out_flags = nullptr) noexcept {
+        if (!str) return false;
+        if (len < 0) len = SqliteStringUtil::sqlite_strlen(str);
+
+        uint8_t flags = UUID_FORMAT_TEXT;
+        const char* p = str;
+        int remaining = len;
+
+        if (remaining > 2 && p[0] == '{' && ((remaining == 38 && p[37] == '}') || (remaining == 34 && p[33] == '}'))) {
+            flags |= UUID_FORMAT_BRACED;
+            p++;
+            remaining -= 2;
+        }
+
+        if (remaining == 36) {
+            // Standard hyphenated format: 8-4-4-4-12
+            if (p[8] != '-' || p[13] != '-' || p[18] != '-' || p[23] != '-') {
+                return false;
+            }
+            flags |= UUID_FORMAT_HYPHENS;
+            int byte_idx = 0;
+            for (int i = 0; i < 36; ++i) {
+                if (i == 8 || i == 13 || i == 18 || i == 23) continue;
+                int hi = parse_hex_digit(p[i]);
+                int lo = parse_hex_digit(p[++i]);
+                if (hi < 0 || lo < 0) return false;
+                if ((p[i - 1] >= 'A' && p[i - 1] <= 'F') || (p[i] >= 'A' && p[i] <= 'F')) {
+                    flags |= UUID_FORMAT_UPPERCASE;
+                }
+                out_bytes[byte_idx++] = static_cast<uint8_t>((hi << 4) | lo);
+            }
+            if (out_flags) *out_flags = flags;
+            return byte_idx == 16;
+        } else if (remaining == 32) {
+            // Unhyphenated 32-hex
+            int byte_idx = 0;
+            for (int i = 0; i < 32; i += 2) {
+                int hi = parse_hex_digit(p[i]);
+                int lo = parse_hex_digit(p[i + 1]);
+                if (hi < 0 || lo < 0) return false;
+                if ((p[i] >= 'A' && p[i] <= 'F') || (p[i + 1] >= 'A' && p[i + 1] <= 'F')) {
+                    flags |= UUID_FORMAT_UPPERCASE;
+                }
+                out_bytes[byte_idx++] = static_cast<uint8_t>((hi << 4) | lo);
+            }
+            if (out_flags) *out_flags = flags;
+            return byte_idx == 16;
+        }
+        return false;
+    }
+
+    /**
+     * @brief Formats 16 raw UUID bytes into a character buffer.
+     * @param bytes Pointer to 16 raw UUID bytes.
+     * @param flags Formatting flags (hyphens, uppercase, braces).
+     * @param out_str Output buffer with capacity of at least 39 bytes.
+     * @return Number of characters written (not including trailing '\0').
+     */
+    inline int format_uuid(const uint8_t bytes[16], uint8_t flags, char* out_str) noexcept {
+        if (!bytes || !out_str) return 0;
+        static const char hex_lower[] = "0123456789abcdef";
+        static const char hex_upper[] = "0123456789ABCDEF";
+        const char* hex = (flags & UUID_FORMAT_UPPERCASE) ? hex_upper : hex_lower;
+
+        char* p = out_str;
+        bool braced  = (flags & UUID_FORMAT_BRACED)  != 0;
+        bool hyphens = (flags & UUID_FORMAT_HYPHENS) != 0;
+
+        if (braced) *p++ = '{';
+        for (int i = 0; i < 16; ++i) {
+            if (hyphens && (i == 4 || i == 6 || i == 8 || i == 10)) {
+                *p++ = '-';
+            }
+            *p++ = hex[(bytes[i] >> 4) & 0x0F];
+            *p++ = hex[bytes[i] & 0x0F];
+        }
+        if (braced) *p++ = '}';
+        *p = '\0';
+        return static_cast<int>(p - out_str);
+    }
+
+    /**
+     * @brief Formats 16 raw UUID bytes into a character buffer.
+     * @param bytes Pointer to 16 raw UUID bytes.
+     * @param out_str Output buffer with capacity of at least 39 bytes.
+     * @param flags Formatting flags (hyphens, uppercase, braces). Default: UUID_FORMAT_STANDARD.
+     * @return Number of characters written (not including trailing '\0').
+     */
+    inline int format_uuid(const uint8_t bytes[16], char* out_str, uint8_t flags = UUID_FORMAT_STANDARD) noexcept {
+        return format_uuid(bytes, flags, out_str);
+    }
+
+    /**
+     * @brief Resolves canonical string representation (pointer and length) for a UUID sqlite3_value*.
+     * If the value is a BLOB, it is formatted into @p buf (must be at least 39 bytes).
+     * If the value is TEXT, @p out_ptr points directly to sqlite3_value_text (zero-copy).
+     */
+    inline int canonical_string_ptr(const sqlite3_value* val, const char*& out_ptr, char* buf) noexcept {
+        if (!val || !buf) return 0;
+        sqlite3_value* mv = const_cast<sqlite3_value*>(val);
+        if (static_cast<uint8_t>(sqlite3_value_subtype(mv)) != SQLITE_SUBTYPE_UUID) return 0;
+        int t = sqlite3_value_type(mv);
+        if (t == SQLITE_BLOB) {
+            int sz = sqlite3_value_bytes(mv);
+            if (sz != 16) return 0;
+            const void* d = sqlite3_value_blob(mv);
+            if (!d) return 0;
+            int n = format_uuid(reinterpret_cast<const uint8_t*>(d), UUID_FORMAT_STANDARD, buf);
+            if (n > 0) { out_ptr = buf; return n; }
+            return 0;
+        }
+        if (t == SQLITE_TEXT) {
+            const char* text = reinterpret_cast<const char*>(sqlite3_value_text(mv));
+            int len = sqlite3_value_bytes(mv);
+            if (!text || len <= 0 || len > 38) return 0;
+            out_ptr = text;
+            return len;
+        }
+        return 0;
+    }
+
+    /**
+     * @brief Gets the canonical string representation of a UUID sqlite3_value*.
+     *
+     * - BLOB (exactly 16 bytes + UUID subtype): formatted with UUID_FORMAT_STANDARD.
+     * - TEXT (UUID subtype): copied as-is; the stored string IS the canonical form.
+     *
+     * This is the reference implementation used by SqliteValueView equality and hashing.
+     * @param val  A sqlite3_value* carrying SQLITE_SUBTYPE_UUID.
+     * @param out  Output buffer of at least 39 bytes (null-terminated on success).
+     * @return Number of characters written (0 on failure).
+     */
+    inline int canonical_string_view(const sqlite3_value* val, char* out) noexcept {
+        if (!val || !out) return 0;
+        const char* ptr = nullptr;
+        int n = canonical_string_ptr(val, ptr, out);
+        if (n > 0 && ptr != out) {
+            memcpy(out, ptr, n);
+            out[n] = '\0';
+        }
+        return n;
+    }
+
+    /**
+     * @brief Direct zero-copy equality comparison of two canonical UUID strings.
+     * Fast-paths exact byte comparisons, and falls back to semantic 16-byte decoded byte comparison
+     * for cross-format permutations (e.g. compact vs hyphenated vs braced vs uppercase).
+     */
+    inline bool uuid_equal(const char* s1, int n1, const char* s2, int n2) noexcept {
+        if (n1 <= 0 || n2 <= 0 || !s1 || !s2) return false;
+        if (n1 == n2 && memcmp(s1, s2, n1) == 0) return true;
+        uint8_t b1[16], b2[16];
+        if (parse_uuid(s1, n1, b1) && parse_uuid(s2, n2, b2)) {
+            return memcmp(b1, b2, 16) == 0;
+        }
+        return false;
+    }
+}
+
+/**
+ * @brief Resolves canonical string pointer and length for this UUID view.
+ */
+inline int SqliteValueView::canonical_uuid_ptr(const char*& out_ptr, char* buf) const noexcept {
+    return SqliteUuidUtil::canonical_string_ptr(m_val, out_ptr, buf);
+}
+
+/**
+ * @brief 1-Byte bitfield control tag shared by all 24-byte value representations (Offset 23).
  */
 struct SqliteOwnedValueTag {
     uint8_t raw;
 
     /** @brief Packs type, heap flag, and inline length into the single tag byte. */
     inline void set(uint8_t type, bool is_heap, uint8_t len = 0) noexcept {
-        raw = static_cast<uint8_t>(
-            ((type & 0x07) << 5) |
-            ((is_heap ? 1 : 0) << 4) |
-            (len & 0x0F)
-        );
+        if (is_heap) {
+            raw = static_cast<uint8_t>(0xE0 | (type & 0x1F));
+        } else {
+            raw = static_cast<uint8_t>(((type & 0x07) << 5) | (len & 0x1F));
+        }
+    }
+
+    /** @brief Sets UUID tag state (STATE_UUID = 0xC0). */
+    inline void set_uuid(bool as_text = false) noexcept {
+        raw = static_cast<uint8_t>(0xC0 | (as_text ? 0x01 : 0x00));
     }
 
     /** @brief Returns the SQLite storage class datatype (e.g. SQLITE_INTEGER..SQLITE_NULL). */
     inline int type() const noexcept {
-        return static_cast<int>(raw >> 5);
+        uint8_t st = static_cast<uint8_t>(raw >> 5);
+        if (st <= 5) return static_cast<int>(st);
+        if (st == 6) {
+            return (raw & 0x01) ? SQLITE_TEXT : SQLITE_BLOB;
+        }
+        // st == 7: STATE_HEAP
+        return static_cast<int>(raw & 0x1F);
     }
 
     /** @brief Checks if the value holds a heap-allocated buffer. */
     inline bool is_heap() const noexcept {
-        return (raw & 0x10) != 0;
+        return (raw >> 5) == 7;
     }
 
-    /** @brief Returns the byte length of inline text or blob payload (0..14). */
+    /** @brief Checks if the value holds an in-situ UUID. */
+    inline bool is_uuid() const noexcept {
+        return (raw >> 5) == 6;
+    }
+
+    /** @brief Returns the byte length of inline text or blob payload (0..22). */
     inline uint8_t len() const noexcept {
-        return static_cast<uint8_t>(raw & 0x0F);
+        if ((raw >> 5) == 6) return 16; // UUID raw bytes
+        if (is_heap()) return 0;
+        return static_cast<uint8_t>(raw & 0x1F);
     }
 
     /** @brief Resets/clears the tag byte to 0x00 (uninitialized / empty). */
@@ -1242,18 +1456,20 @@ struct SqliteOwnedValueTag {
      * @brief Checks if the tag represents an active, initialized SQLite value (raw >= 0x20).
      * 
      * ### Bitfield Encoding & 0x20 Threshold Mechanics:
-     * SQLite data types (SQLITE_INTEGER=1, SQLITE_FLOAT=2, SQLITE_TEXT=3, SQLITE_BLOB=4, SQLITE_NULL=5)
-     * are encoded in the high 3 bits (bits 5..7) via `type << 5`:
-     * - `SQLITE_INTEGER` (1): `0b001_00000 = 0x20` (32)
-     * - `SQLITE_FLOAT`   (2): `0b010_00000 = 0x40` (64)
-     * - `SQLITE_TEXT`    (3): `0b011_00000 = 0x60` (96)
-     * - `SQLITE_BLOB`    (4): `0b100_00000 = 0x80` (128)
-     * - `SQLITE_NULL`    (5): `0b101_00000 = 0xA0` (160)
+     * SQLite data types (SQLITE_INTEGER=1..SQLITE_NULL=5, UUID=6, HEAP=7)
+     * are encoded in the high 3 bits via `state << 5`:
+     * - `SQLITE_INTEGER` (1): `0b001_00000 = 0x20`
+     * - `SQLITE_FLOAT`   (2): `0b010_00000 = 0x40`
+     * - `SQLITE_TEXT`    (3): `0b011_00000 = 0x60`
+     * - `SQLITE_BLOB`    (4): `0b100_00000 = 0x80`
+     * - `SQLITE_NULL`    (5): `0b101_00000 = 0xA0`
+     * - `STATE_UUID`     (6): `0b110_00000 = 0xC0`
+     * - `STATE_HEAP`     (7): `0b111_00000 = 0xE0`
      * 
-     * Every valid, initialized SQLite value has a type in [1..5], guaranteeing its tag is `raw >= 0x20`.
-     * Uninitialized slots, cleared elements, and row container markers have `type == 0` (`raw == 0x00 < 0x20`).
+     * Every valid, initialized SQLite value has a state in [1..7], guaranteeing its tag is `raw >= 0x20`.
+     * Uninitialized slots, cleared elements, and row container markers have `state == 0` (`raw == 0x00 < 0x20`).
      * 
-     * @return True if tag represents an active SQLite value (type != 0).
+     * @return True if tag represents an active SQLite value (state != 0).
      */
     inline bool is_active() const noexcept {
         return raw >= 0x20;
@@ -1278,21 +1494,21 @@ struct SqliteOwnedValueTag {
     }
 
     /**
-     * @brief Checks if a container at the given base pointer is in heap mode (byte 15 == 0x00 && heap_ptr != nullptr).
+     * @brief Checks if a container at the given base pointer is in heap mode (byte 23 == 0x00 && heap_ptr != nullptr).
      * @param container_this Pointer to the container (e.g. SqliteValueVec).
      * @param heap_ptr The container's heap buffer pointer.
-     * @return True if byte 15 is 0x00 and heap_ptr != nullptr.
+     * @return True if byte 23 is 0x00 and heap_ptr != nullptr.
      */
     static inline bool is_container_heap(const void* container_this, const void* heap_ptr) noexcept {
         if (!container_this || !heap_ptr) return false;
         const uint8_t* raw_bytes = static_cast<const uint8_t*>(container_this);
-        return raw_bytes[15] == 0x00;
+        return raw_bytes[23] == 0x00;
     }
 };
 static_assert(sizeof(SqliteOwnedValueTag) == 1, "SqliteOwnedValueTag must be exactly 1 byte!");
 
 /**
- * @brief 1-Byte bitfield sub-tag control byte (Offset 14) shared by all 16-byte value representations.
+ * @brief 1-Byte bitfield sub-tag control byte (Offset 22) shared by all 24-byte value representations.
  * 
  * ### Bit Allocation:
  * - Bit 7 (0x80)     : Immutability flag (1 = immutable, 0 = mutable)
@@ -1345,15 +1561,15 @@ struct SqliteOwnedValueSubTag {
 static_assert(sizeof(SqliteOwnedValueSubTag) == 1, "SqliteOwnedValueSubTag must be exactly 1 byte!");
 
 /**
- * @brief Representation 1: Numbers, Nulls, and Large Heap-Allocated Payloads (16 Bytes).
+ * @brief Representation 1: Numbers, Nulls, Pointers, and Large Heap-Allocated Payloads (24 Bytes).
  * 
  * Layout:
- * - Bytes  0..7  (Offset 0..7)  : 8-byte aligned primitive union (iValue, dValue, pData)
+ * - Bytes  0..7  (Offset 0..7)  : 8-byte aligned primitive union (iValue, dValue, pData, ptrVal)
  * - Bytes  8..11 (Offset 8..11) : 4-byte heap payload length (heap_len)
  * - Byte   12    (Offset 12)    : 1-byte Native SQLite Affinity character ('@', 'A'..'F')
- * - Byte   13    (Offset 13)    : 1-byte reserved for future ABI extensions (reserved)
- * - Byte   14    (Offset 14)    : 1-byte Sub-Tag Byte: Subtype + Immutability (SHARED WITH INLINE STRUCT)
- * - Byte   15    (Offset 15)    : 1-byte Control Tag (SHARED WITH INLINE STRUCT)
+ * - Bytes  13..21(Offset 13..21): 9-byte reserved padding for ABI extensions
+ * - Byte   22    (Offset 22)    : 1-byte Sub-Tag Byte: Subtype + Immutability (SHARED AT OFFSET 22)
+ * - Byte   23    (Offset 23)    : 1-byte Control Tag (SHARED AT OFFSET 23)
  */
 struct SqliteTypeRep {
     union {
@@ -1363,43 +1579,64 @@ struct SqliteTypeRep {
         void*          ptrVal;   // 8 bytes (Offset 0..7: Opaque typed C/C++ pointer)
     } payload;
     
-    int32_t                 heap_len; // 4 bytes (Offset 8..11: Byte length for heap text/blob)
-    char                    affinity; // 1 byte  (Offset 12: Native SQLite affinity '@', 'A'..'F')
-    uint8_t                 reserved; // 1 byte  (Offset 13: Reserved for future ABI extensions)
-    SqliteOwnedValueSubTag  subtag;   // 1 byte  (Offset 14: Shared Sub-Tag: Subtype + Immutability)
-    SqliteOwnedValueTag     tag;      // 1 byte  (Offset 15: Bit-packed Type + Heap Flag + Length)
+    int32_t                 heap_len;    // 4 bytes (Offset 8..11: Byte length for heap text/blob)
+    char                    affinity;    // 1 byte  (Offset 12: Native SQLite affinity '@', 'A'..'F')
+    uint8_t                 reserved[9]; // 9 bytes (Offset 13..21: Reserved for future ABI extensions)
+    SqliteOwnedValueSubTag  subtag;      // 1 byte  (Offset 22: Shared Sub-Tag: Subtype + Immutability)
+    SqliteOwnedValueTag     tag;         // 1 byte  (Offset 23: Bit-packed State + Length / Flags)
 };
-static_assert(sizeof(SqliteTypeRep) == 16, "SqliteTypeRep must be exactly 16 bytes!");
+static_assert(sizeof(SqliteTypeRep) == 24, "SqliteTypeRep must be exactly 24 bytes!");
 
 /**
- * @brief Representation 2: Inline Buffer for Strings & Binary Blobs (16 Bytes).
+ * @brief Representation 2: Inline Buffer for Strings & Binary Blobs (24 Bytes).
  * 
  * Layout:
- * - Bytes  0..13 (Offset 0..13) : 14-byte inline buffer (14 text chars OR 14 raw blob bytes)
- * - Byte   14    (Offset 14)    : 1-byte Sub-Tag Byte: Subtype + Immutability (SHARED WITH TYPE STRUCT)
- * - Byte   15    (Offset 15)    : 1-byte Control Tag (SHARED WITH TYPE STRUCT)
+ * - Bytes  0..21 (Offset 0..21) : 22-byte inline buffer (up to 21 chars + '\0', or 22 raw blob bytes)
+ * - Byte   22    (Offset 22)    : 1-byte Sub-Tag Byte: Subtype + Immutability (SHARED AT OFFSET 22)
+ * - Byte   23    (Offset 23)    : 1-byte Control Tag (SHARED AT OFFSET 23)
  */
 struct InlineBufferRep {
-    char                    buf[14];  // 14 bytes (Offset 0..13: 14 chars OR 14 raw blob bytes)
-    SqliteOwnedValueSubTag  subtag;   // 1 byte   (Offset 14: Shared Sub-Tag: Subtype + Immutability)
-    SqliteOwnedValueTag     tag;      // 1 byte   (Offset 15: Bit-packed Type + Heap Flag + Length)
+    char                    buf[22];     // 22 bytes (Offset 0..21: up to 21 chars + '\0' or 22 blob bytes)
+    SqliteOwnedValueSubTag  subtag;      // 1 byte   (Offset 22: Shared Sub-Tag: Subtype + Immutability)
+    SqliteOwnedValueTag     tag;         // 1 byte   (Offset 23: Bit-packed State + Length / Flags)
 };
-static_assert(sizeof(InlineBufferRep) == 16, "InlineBufferRep must be exactly 16 bytes!");
+static_assert(sizeof(InlineBufferRep) == 24, "InlineBufferRep must be exactly 24 bytes!");
+
+/**
+ * @brief Representation 3: In-situ 128-bit Raw UUID (24 Bytes).
+ *
+ * Layout:
+ * - Bytes  0..15 (Offset 0..15) : 16-byte raw UUID binary data
+ * - Byte   16    (Offset 16)    : 1-byte SqliteUuidUtil::UuidFormatFlags
+ * - Bytes  17..21(Offset 17..21): 5-byte reserved padding
+ * - Byte   22    (Offset 22)    : 1-byte Sub-Tag Byte: SQLITE_SUBTYPE_UUID + Immutability (SHARED AT OFFSET 22)
+ * - Byte   23    (Offset 23)    : 1-byte Control Tag: STATE_UUID (SHARED AT OFFSET 23)
+ */
+struct InlineUuidRep {
+    uint8_t                 bytes[16];   // 16 bytes (Offset 0..15: raw 128-bit UUID)
+    uint8_t                 flags;       // 1 byte   (Offset 16: formatting flags)
+    uint8_t                 reserved[5]; // 5 bytes  (Offset 17..21: reserved)
+    SqliteOwnedValueSubTag  subtag;      // 1 byte   (Offset 22: Shared Sub-Tag: SQLITE_SUBTYPE_UUID)
+    SqliteOwnedValueTag     tag;         // 1 byte   (Offset 23: STATE_UUID)
+};
+static_assert(sizeof(InlineUuidRep) == 24, "InlineUuidRep must be exactly 24 bytes!");
 
 /**
  * @brief Heavy, memory-managed polymorphic C++ RAII wrapper for `sqlite3_value`.
  * 
- * Implements a dual-representation 16-byte value layout that transparently handles
- * primitives, inline short strings/blobs (<= 14 bytes), and heap-managed buffers.
- * Features full support for SQLite data affinities and the complete SQLite subtype registry.
+ * Implements a 24-byte value layout that transparently handles primitives,
+ * inline strings (<= 21 chars), inline blobs (<= 22 bytes), in-situ 16-byte UUIDs,
+ * and heap-managed buffers. Features full support for SQLite data affinities,
+ * pointer-passing traits, and the complete SQLite subtype registry.
  */
 class SqliteValueOwned {
 private:
-    static const int MAX_INLINE_BUF_LEN = 14;
+    static const int MAX_INLINE_BUF_LEN = 22;
 
     union {
         SqliteTypeRep   m_sqlite;  // Struct 1 (Primitives & Heap values)
         InlineBufferRep m_inline;  // Struct 2 (Inline Strings & Blobs)
+        InlineUuidRep   m_uuid;    // Struct 3 (In-situ 16-byte UUID)
         uint64_t        m_align;   // Forces 8-byte alignment
     };
 
@@ -1409,6 +1646,7 @@ private:
     inline void free_heap() noexcept {
         if (is_heap_allocated() && m_sqlite.payload.pData) {
             sqlite3_free(m_sqlite.payload.pData);
+            m_sqlite.payload.pData = nullptr;
         }
     }
 
@@ -1416,7 +1654,7 @@ private:
      * @brief Packs type, heap flag, and inline length into the single shared tag byte.
      * @param type The SQLite storage class (SQLITE_INTEGER..SQLITE_NULL).
      * @param is_heap True if payload is a heap-allocated buffer.
-     * @param len Inline payload length (0..14 bytes).
+     * @param len Inline payload length (0..22 bytes).
      */
     inline void set_tag(uint8_t type, bool is_heap, uint8_t len = 0) noexcept {
         m_sqlite.tag.set(type, is_heap, len);
@@ -1427,7 +1665,7 @@ private:
         m_sqlite.payload.pData = nullptr;
         m_sqlite.heap_len = 0;
         m_sqlite.affinity = SQLITE_AFF_NONE;
-        m_sqlite.reserved = 0;
+        memset(m_sqlite.reserved, 0, sizeof(m_sqlite.reserved));
         m_sqlite.subtag.set(SQLITE_SUBTYPE_NONE, is_imm);
         set_tag(SQLITE_NULL, false, 0);
     }
@@ -1442,7 +1680,7 @@ private:
         m_sqlite.payload.iValue = i;
         m_sqlite.heap_len = 0;
         m_sqlite.affinity = aff;
-        m_sqlite.reserved = 0;
+        memset(m_sqlite.reserved, 0, sizeof(m_sqlite.reserved));
         m_sqlite.subtag.set(sub, is_imm);
         set_tag(SQLITE_INTEGER, false, 0);
     }
@@ -1457,7 +1695,7 @@ private:
         m_sqlite.payload.dValue = d;
         m_sqlite.heap_len = 0;
         m_sqlite.affinity = aff;
-        m_sqlite.reserved = 0;
+        memset(m_sqlite.reserved, 0, sizeof(m_sqlite.reserved));
         m_sqlite.subtag.set(sub, is_imm);
         set_tag(SQLITE_FLOAT, false, 0);
     }
@@ -1465,7 +1703,7 @@ private:
     /**
      * @brief Unified buffer initializer for Strings, Blobs, and Custom buffer payloads.
      * 
-     * Handles both SBO (<= 14 bytes) and exact heap allocations without extra '\0' overhead.
+     * Handles both SBO (strings <= 21 chars, blobs <= 22 bytes) and exact heap allocations.
      *
      * @param data Pointer to raw byte payload.
      * @param len Length in bytes (or -1 for auto-calculating null-terminated text strings).
@@ -1486,9 +1724,13 @@ private:
             return;
         }
 
-        if (n <= MAX_INLINE_BUF_LEN) {
+        int max_inline = (type == SQLITE_TEXT) ? 21 : 22;
+        if (n <= max_inline) {
             if (n > 0) {
                 memcpy(m_inline.buf, data, n);
+            }
+            if (n < MAX_INLINE_BUF_LEN) {
+                m_inline.buf[n] = '\0';
             }
             m_inline.subtag.set(sub, is_imm);
             set_tag(type, false, static_cast<uint8_t>(n));
@@ -1500,34 +1742,55 @@ private:
             m_sqlite.payload.pData = buf;
             m_sqlite.heap_len = n;
             m_sqlite.affinity = aff;
-            m_sqlite.reserved = 0;
+            memset(m_sqlite.reserved, 0, sizeof(m_sqlite.reserved));
             m_sqlite.subtag.set(sub, is_imm);
             set_tag(type, true, 0);
         }
     }
 
-    /** @brief Initializes text string with SBO (<= 14 chars) or exact-sized heap duplication from sqlite3_value. */
+    /** @brief Initializes in-situ 16-byte raw UUID. */
+    inline void init_uuid(const void* raw_16_bytes, uint8_t flags = SqliteUuidUtil::UUID_FORMAT_BLOB, bool is_imm = false) noexcept {
+        if (!raw_16_bytes) {
+            init_null(is_imm);
+            return;
+        }
+        memcpy(m_uuid.bytes, raw_16_bytes, 16);
+        m_uuid.flags = flags;
+        memset(m_uuid.reserved, 0, sizeof(m_uuid.reserved));
+        m_uuid.subtag.set(SQLITE_SUBTYPE_UUID, is_imm);
+        m_uuid.tag.set_uuid(flags & SqliteUuidUtil::UUID_FORMAT_TEXT);
+    }
+
+    /** @brief Initializes text string with SBO (<= 21 chars) or exact-sized heap duplication from sqlite3_value. */
     inline void init_text(const sqlite3_value* val, uint8_t sub, bool is_imm = false) {
         const char* text = reinterpret_cast<const char*>(sqlite3_value_text(const_cast<sqlite3_value*>(val)));
         int len = text ? sqlite3_value_bytes(const_cast<sqlite3_value*>(val)) : 0;
         init_buffer(text, len, SQLITE_TEXT, SQLITE_AFF_TEXT, sub, is_imm);
     }
 
-    /** @brief Initializes text string with SBO (<= 14 chars) or exact-sized heap duplication directly. */
+    /** @brief Initializes text string with SBO (<= 21 chars) or exact-sized heap duplication directly. */
     inline void init_text(const char* text, int len = -1, uint8_t sub = SQLITE_SUBTYPE_NONE, bool is_imm = false) {
         init_buffer(text, len, SQLITE_TEXT, SQLITE_AFF_TEXT, sub, is_imm);
     }
 
-    /** @brief Initializes binary blob with SBO (<= 14 bytes) or exact-sized heap duplication from sqlite3_value. */
+    /** @brief Initializes binary blob with SBO (<= 22 bytes) or exact-sized heap duplication from sqlite3_value. */
     inline void init_blob(const sqlite3_value* val, uint8_t sub, bool is_imm = false) {
         const void* blob = sqlite3_value_blob(const_cast<sqlite3_value*>(val));
         int len = blob ? sqlite3_value_bytes(const_cast<sqlite3_value*>(val)) : 0;
-        init_buffer(blob, len, SQLITE_BLOB, SQLITE_AFF_BLOB, sub, is_imm);
+        if (sub == SQLITE_SUBTYPE_UUID && len == 16 && blob) {
+            init_uuid(blob, SqliteUuidUtil::UUID_FORMAT_BLOB, is_imm);
+        } else {
+            init_buffer(blob, len, SQLITE_BLOB, SQLITE_AFF_BLOB, sub, is_imm);
+        }
     }
 
-    /** @brief Initializes binary blob with SBO (<= 14 bytes) or exact-sized heap duplication directly. */
+    /** @brief Initializes binary blob with SBO (<= 22 bytes) or exact-sized heap duplication directly. */
     inline void init_blob(const void* data, int len, uint8_t sub = SQLITE_SUBTYPE_NONE, bool is_imm = false) {
-        init_buffer(data, len, SQLITE_BLOB, SQLITE_AFF_BLOB, sub, is_imm);
+        if (sub == SQLITE_SUBTYPE_UUID && len == 16 && data) {
+            init_uuid(data, SqliteUuidUtil::UUID_FORMAT_BLOB, is_imm);
+        } else {
+            init_buffer(data, len, SQLITE_BLOB, SQLITE_AFF_BLOB, sub, is_imm);
+        }
     }
 
     /** 
@@ -1583,6 +1846,17 @@ public:
      * @brief Sets this object as the return result of a SQLite UDF context. 
      */
     inline void result(sqlite3_context* ctx) const {
+        if (m_sqlite.tag.is_uuid()) {
+            if (type() == SQLITE_TEXT) {
+                char buf[39];
+                int n = SqliteUuidUtil::format_uuid(m_uuid.bytes, buf, m_uuid.flags);
+                sqlite3_result_text(ctx, buf, n, SQLITE_TRANSIENT);
+            } else {
+                sqlite3_result_blob(ctx, m_uuid.bytes, 16, SQLITE_TRANSIENT);
+            }
+            sqlite3_result_subtype(ctx, SQLITE_SUBTYPE_UUID);
+            return;
+        }
         switch (type()) {
             case SQLITE_TEXT: {
                 SqliteStringView sv = as_text();
@@ -1633,6 +1907,15 @@ public:
      * @brief Binds this object to a prepared SQLite statement at the given 1-based column index. 
      */
     inline int bind(sqlite3_stmt* stmt, int col) const {
+        if (m_sqlite.tag.is_uuid()) {
+            if (type() == SQLITE_TEXT) {
+                char buf[39];
+                int n = SqliteUuidUtil::format_uuid(m_uuid.bytes, buf, m_uuid.flags);
+                return sqlite3_bind_text(stmt, col, buf, n, SQLITE_TRANSIENT);
+            } else {
+                return sqlite3_bind_blob(stmt, col, m_uuid.bytes, 16, SQLITE_TRANSIENT);
+            }
+        }
         switch (type()) {
             case SQLITE_TEXT: {
                 SqliteStringView sv = as_text();
@@ -1767,9 +2050,19 @@ public:
         return SqliteValueOwned(val, SQLITE_SUBTYPE_BOOL, SQLITE_AFF_INTEGER, is_immutable);
     }
 
-    /** @brief Constructs a datetime integer timestamp tagged with SQLITE_SUBTYPE_DATETIME. */
+    /** @brief Constructs a datetime integer timestamp (epoch milliseconds) tagged with SQLITE_SUBTYPE_DATETIME ('T'). */
     static SqliteValueOwned from_datetime(sqlite3_int64 epoch_ms, bool is_immutable = false) noexcept {
         return SqliteValueOwned(epoch_ms, SQLITE_SUBTYPE_DATETIME, SQLITE_AFF_INTEGER, is_immutable);
+    }
+
+    /** @brief Constructs a datetime ISO-8601 text value tagged with SQLITE_SUBTYPE_DATETIME ('T'). */
+    static SqliteValueOwned from_datetime(const char* iso8601_str, int len = -1, bool is_immutable = false) {
+        return from_text(iso8601_str, len, SQLITE_SUBTYPE_DATETIME, is_immutable);
+    }
+
+    /** @brief Constructs a datetime ISO-8601 text value from a SqliteStringView tagged with SQLITE_SUBTYPE_DATETIME ('T'). */
+    static SqliteValueOwned from_datetime(SqliteStringView str, bool is_immutable = false) {
+        return from_text(str.data(), str.length(), SQLITE_SUBTYPE_DATETIME, is_immutable);
     }
 
     /** @brief Constructs an inline or heap-backed string value. */
@@ -1801,14 +2094,39 @@ public:
         return from_text(decimal_str, len, SQLITE_SUBTYPE_DECIMAL, is_immutable);
     }
 
-    /** @brief Constructs a UUID text or blob value with SQLITE_SUBTYPE_UUID ('U'). */
+    /**
+     * @brief Constructs a UUID text value with SQLITE_SUBTYPE_UUID ('U').
+     *
+     * NOTE FOR USERS:
+     * When operating with UUIDs, ensuring the SQLITE_SUBTYPE_UUID ('U' = 85)
+     * subtype is properly passed is strongly recommended so downstream consumers
+     * can distinguish UUID values without heuristic string/blob inspection.
+     */
     static SqliteValueOwned from_uuid(const char* uuid_str, int len = -1, bool is_immutable = false) {
         return from_text(uuid_str, len, SQLITE_SUBTYPE_UUID, is_immutable);
     }
 
-    /** @brief Constructs a UUID binary value with SQLITE_SUBTYPE_UUID ('U'). */
+    /**
+     * @brief Constructs an in-situ 16-byte raw UUID binary value with SQLITE_SUBTYPE_UUID ('U') and default BLOB formatting.
+     */
     static SqliteValueOwned from_uuid(const void* uuid_16_bytes, bool is_immutable = false) {
-        return from_blob(uuid_16_bytes, 16, SQLITE_SUBTYPE_UUID, is_immutable);
+        SqliteValueOwned val;
+        val.init_uuid(uuid_16_bytes, SqliteUuidUtil::UUID_FORMAT_BLOB, is_immutable);
+        return val;
+    }
+
+    /**
+     * @brief Constructs an in-situ 16-byte raw UUID binary value with explicit format flags.
+     * @param uuid_16_bytes Pointer to 16 raw binary UUID bytes.
+     * @param format_flags Bitmask of SqliteUuidUtil::UuidFormatFlags controlling canonical string formatting.
+     * @param is_immutable Whether the value is marked immutable.
+     */
+    static SqliteValueOwned from_uuid(const void* uuid_16_bytes,
+                                      SqliteUuidUtil::UuidFormatFlags format_flags,
+                                      bool is_immutable = false) {
+        SqliteValueOwned val;
+        val.init_uuid(uuid_16_bytes, static_cast<uint8_t>(format_flags), is_immutable);
+        return val;
     }
 
     /** @brief Constructs a binary AI Vector embedding with SQLITE_SUBTYPE_VECTOR ('V'). */
@@ -1826,14 +2144,14 @@ public:
         return from_blob(compressed_data, byte_len, SQLITE_SUBTYPE_COMPRESSED, is_immutable);
     }
 
-    /** @brief Constructs an owned 16-byte value wrapping an opaque pointer with optional immutability. */
+    /** @brief Constructs an owned 24-byte value wrapping an opaque pointer with optional immutability. */
     template <typename T>
     static inline SqliteValueOwned from_pointer(T* ptr, bool is_immutable = false) noexcept {
         SqliteValueOwned val;
         val.m_sqlite.payload.ptrVal = const_cast<void*>(static_cast<const void*>(ptr));
         val.m_sqlite.heap_len = 0;
         val.m_sqlite.affinity = SQLITE_AFF_NONE;
-        val.m_sqlite.reserved = 0;
+        memset(val.m_sqlite.reserved, 0, sizeof(val.m_sqlite.reserved));
         val.m_sqlite.subtag.set(SQLITE_SUBTYPE_POINTER, is_immutable);
         val.set_tag(SQLITE_NULL, false, 0);
         return val;
@@ -2080,7 +2398,7 @@ public:
         m_sqlite.payload.ptrVal = const_cast<void*>(static_cast<const void*>(ptr));
         m_sqlite.heap_len = 0;
         m_sqlite.affinity = SQLITE_AFF_NONE;
-        m_sqlite.reserved = 0;
+        memset(m_sqlite.reserved, 0, sizeof(m_sqlite.reserved));
         m_sqlite.subtag.set(SQLITE_SUBTYPE_POINTER, false);
         set_tag(SQLITE_NULL, false, 0);
     }
@@ -2199,12 +2517,12 @@ public:
         return m_sqlite.tag.is_active();
     }
 
-    /** @brief Returns the 7-bit SQLite subtype (zero-branch shared offset 14). */
+    /** @brief Returns the 7-bit SQLite subtype (zero-branch shared offset 22). */
     inline uint8_t subtype() const noexcept {
         return m_sqlite.subtag.subtype();
     }
 
-    /** @brief Sets the 7-bit SQLite subtype (zero-branch shared offset 14). */
+    /** @brief Sets the 7-bit SQLite subtype (zero-branch shared offset 22). */
     inline void set_subtype(uint8_t sub) noexcept {
         if (is_immutable()) return;
         m_sqlite.subtag.set_subtype(sub);
@@ -2275,7 +2593,6 @@ public:
     inline bool is_text()    const noexcept { return type() == SQLITE_TEXT; }
     inline bool is_blob()    const noexcept { return type() == SQLITE_BLOB; }
     inline bool is_numeric() const noexcept { return sqlite3IsNumericAffinity(affinity()); }
-    inline bool as_bool()    const noexcept { return as_int64() != 0; }
 
     /** @brief Subtype query predicates. */
     inline bool is_json()       const noexcept { return subtype() == SQLITE_SUBTYPE_JSON; }
@@ -2308,14 +2625,29 @@ public:
         return is_heap_allocated() ? m_sqlite.payload.pData : nullptr;
     }
 
-    /** @brief Internal helper to access SBO integer for heterogeneous lookups. */
-    sqlite3_int64 as_int64() const noexcept { return m_sqlite.payload.iValue; }
+    /** @brief Access value as 64-bit integer. */
+    inline sqlite3_int64 as_int64() const noexcept {
+        if (type() == SQLITE_FLOAT) return static_cast<sqlite3_int64>(m_sqlite.payload.dValue);
+        return m_sqlite.payload.iValue;
+    }
 
     /** @brief Access SBO integer as 32-bit signed int. */
     inline int as_int() const noexcept { return static_cast<int>(as_int64()); }
 
-    /** @brief Internal helper to access SBO double for heterogeneous lookups. */
-    double as_double() const noexcept { return m_sqlite.payload.dValue; }
+    /** @brief Access value as 64-bit floating point double. */
+    inline double as_double() const noexcept {
+        if (type() == SQLITE_INTEGER) return static_cast<double>(m_sqlite.payload.iValue);
+        return m_sqlite.payload.dValue;
+    }
+
+    /** @brief Access value as boolean. */
+    inline bool as_bool() const noexcept {
+        if (type() == SQLITE_INTEGER) return m_sqlite.payload.iValue != 0;
+        if (type() == SQLITE_FLOAT) return m_sqlite.payload.dValue != 0.0;
+        if (type() == SQLITE_TEXT) return as_text().length() > 0;
+        if (type() == SQLITE_BLOB) return as_blob().size() > 0;
+        return false;
+    }
     
     /** @brief Access string data as a zero-allocation SqliteStringView. */
     SqliteStringView as_text() const {
@@ -2329,10 +2661,52 @@ public:
     /** @brief Access binary data as a zero-allocation SqliteBlobView. */
     SqliteBlobView as_blob() const {
         if (type() != SQLITE_BLOB) return SqliteBlobView(nullptr, 0);
+        if (m_sqlite.tag.is_uuid()) {
+            return SqliteBlobView(m_uuid.bytes, 16);
+        }
         if (!is_heap_allocated()) {
             return SqliteBlobView(m_inline.buf, inline_length());
         }
         return SqliteBlobView(m_sqlite.payload.pData, m_sqlite.heap_len);
+    }
+
+    /**
+     * @brief Returns pointer to the 16 raw UUID bytes if this is a binary UUID, or nullptr otherwise.
+     */
+    inline const uint8_t* uuid_bytes() const noexcept {
+        if (!is_uuid()) return nullptr;
+        if (m_sqlite.tag.is_uuid()) {
+            return m_uuid.bytes;
+        }
+        if (type() == SQLITE_BLOB) {
+            SqliteBlobView bv = as_blob();
+            if (bv.size() == 16) return reinterpret_cast<const uint8_t*>(bv.data());
+        }
+        return nullptr;
+    }
+
+    /**
+     * @brief Formats this UUID value into the provided 37+ byte character buffer.
+     * @param out_str Output buffer with capacity of at least 37 bytes (39 for braced).
+     * @param flags Formatting flags (hyphenated, uppercase, braced).
+     * @return Number of characters written (32, 36, or 38).
+     */
+    inline int format_uuid(char* out_str, uint8_t flags = SqliteUuidUtil::UUID_FORMAT_STANDARD) const noexcept {
+        if (!is_uuid() || !out_str) return 0;
+        if (type() == SQLITE_TEXT) {
+            SqliteStringView sv = as_text();
+            int n = sv.length();
+            if (n > 0) {
+                memcpy(out_str, sv.data(), n);
+                out_str[n] = '\0';
+            }
+            return n;
+        }
+        const uint8_t* ubytes = uuid_bytes();
+        if (ubytes) {
+            return SqliteUuidUtil::format_uuid(ubytes, flags, out_str);
+        }
+        return 0;
     }
 
     /**
@@ -2353,10 +2727,47 @@ public:
         return as_pointer<T>(type_name);
     }
 
+    /**
+     * @brief Resolves canonical string pointer and length for this UUID value.
+     * Zero-copy for text representations, formats into @p buf for in-situ binary UUID.
+     * @param out_ptr Reference receiving the pointer to the string data.
+     * @param buf Scratch buffer of at least 39 bytes.
+     * @return String length (0 if not UUID or invalid).
+     */
+    inline int canonical_uuid_ptr(const char*& out_ptr, char* buf) const noexcept {
+        if (!is_uuid()) return 0;
+        if (m_sqlite.tag.is_uuid()) {
+            int n = SqliteUuidUtil::format_uuid(m_uuid.bytes, buf, m_uuid.flags);
+            if (n > 0) { out_ptr = buf; return n; }
+            return 0;
+        }
+        if (type() == SQLITE_TEXT) {
+            SqliteStringView sv = as_text();
+            out_ptr = sv.data();
+            return sv.length();
+        }
+        return 0;
+    }
+
     /** 
      * @brief Computes a polymorphic 64-bit MurmurHash2 of the value.
      */
     unsigned long long hash() const {
+        if (is_uuid()) {
+            char buf[39];
+            if (m_sqlite.tag.is_uuid()) {
+                int n = SqliteUuidUtil::format_uuid(m_uuid.bytes, buf, SqliteUuidUtil::UUID_FORMAT_STANDARD);
+                if (n > 0) return SqliteHashUtil::hash(buf, n);
+            } else if (type() == SQLITE_TEXT) {
+                SqliteStringView sv = as_text();
+                uint8_t raw[16];
+                if (SqliteUuidUtil::parse_uuid(sv.data(), sv.length(), raw)) {
+                    int n = SqliteUuidUtil::format_uuid(raw, buf, SqliteUuidUtil::UUID_FORMAT_STANDARD);
+                    if (n > 0) return SqliteHashUtil::hash(buf, n);
+                }
+                return SqliteHashUtil::hash(sv.data(), sv.length());
+            }
+        }
         switch (type()) {
             case SQLITE_INTEGER:
                 return SqliteHashUtil::mix(SqliteHashUtil::DEFAULT_SEED, &m_sqlite.payload.iValue, sizeof(m_sqlite.payload.iValue));
@@ -2385,6 +2796,14 @@ public:
      * @brief Performs a strict polymorphic equality check against another owned value.
      */
     bool operator==(const SqliteValueOwned& other) const {
+        // UUID: format-based canonical string comparison (flags-aware, zero-copy for text)
+        if (is_uuid() && other.is_uuid()) {
+            char c1[39], c2[39];
+            const char *s1 = nullptr, *s2 = nullptr;
+            int n1 = canonical_uuid_ptr(s1, c1);
+            int n2 = other.canonical_uuid_ptr(s2, c2);
+            return SqliteUuidUtil::uuid_equal(s1, n1, s2, n2);
+        }
         int t1 = type();
         int t2 = other.type();
         if (t1 != t2) return false;
@@ -2462,13 +2881,20 @@ public:
         return false;
     }
 
+    inline bool operator>(const SqliteValueOwned& other) const noexcept { return other < *this; }
+    inline bool operator<=(const SqliteValueOwned& other) const noexcept { return !(other < *this); }
+    inline bool operator>=(const SqliteValueOwned& other) const noexcept { return !(*this < other); }
+
     // Heterogeneous lookups for SqliteValueView
     bool operator==(const SqliteValueView& other) const;
     bool operator!=(const SqliteValueView& other) const;
     bool operator<(const SqliteValueView& other) const;
+    inline bool operator>(const SqliteValueView& other) const noexcept;
+    inline bool operator<=(const SqliteValueView& other) const noexcept;
+    inline bool operator>=(const SqliteValueView& other) const noexcept;
 };
 
-static_assert(sizeof(SqliteValueOwned) == 16, "SqliteValueOwned must be exactly 16 bytes!");
+static_assert(sizeof(SqliteValueOwned) == 24, "SqliteValueOwned must be exactly 24 bytes!");
 
 inline SqliteValueOwned SqliteValueView::to_owned() const {
     return SqliteValueOwned(m_val);
@@ -2476,6 +2902,14 @@ inline SqliteValueOwned SqliteValueView::to_owned() const {
 
 // Complete heterogeneous lookups for SqliteValueOwned
 inline bool SqliteValueOwned::operator==(const SqliteValueView& other) const {
+    // UUID: format-based canonical string comparison across owned (binary) and view (text/blob)
+    if (is_uuid() && other.is_uuid()) {
+        char c1[39], c2[39];
+        const char *s1 = nullptr, *s2 = nullptr;
+        int n1 = canonical_uuid_ptr(s1, c1);
+        int n2 = other.canonical_uuid_ptr(s2, c2);
+        return SqliteUuidUtil::uuid_equal(s1, n1, s2, n2);
+    }
     int o_type = other.type();
     int m_type = type();
     if (m_type != o_type) return false;
@@ -2549,6 +2983,10 @@ inline bool SqliteValueOwned::operator<(const SqliteValueView& other) const {
     return false;
 }
 
+inline bool SqliteValueOwned::operator>(const SqliteValueView& other) const noexcept { return other < *this; }
+inline bool SqliteValueOwned::operator<=(const SqliteValueView& other) const noexcept { return !(other < *this); }
+inline bool SqliteValueOwned::operator>=(const SqliteValueView& other) const noexcept { return !(*this < other); }
+
 // Complete heterogeneous lookups for SqliteValueView
 inline bool SqliteValueView::operator==(const SqliteValueOwned& other) const {
     return other == *this;
@@ -2604,6 +3042,10 @@ inline bool SqliteValueView::operator<(const SqliteValueOwned& other) const {
     }
     return false;
 }
+
+inline bool SqliteValueView::operator>(const SqliteValueOwned& other) const noexcept { return other < *this; }
+inline bool SqliteValueView::operator<=(const SqliteValueOwned& other) const noexcept { return !(other < *this); }
+inline bool SqliteValueView::operator>=(const SqliteValueOwned& other) const noexcept { return !(*this < other); }
 
 // ============================================================================
 // HETEROGENEOUS LOOKUPS: VALUES VS STRINGS/BLOBS

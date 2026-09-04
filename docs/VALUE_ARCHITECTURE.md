@@ -1,6 +1,6 @@
 # C++ Value Types Architecture (`sqlite3_value.hpp`)
 
-This document provides an exhaustive systems-level architectural analysis of `sqlite3_value.hpp`, detailing its **16-byte dual-representation memory model**, **bit-packed control register (`SqliteOwnedValueTag`)**, **zero-branch subtype alignment**, **assembly-level execution characteristics**, and the **144+ heterogeneous relational comparison engine**.
+This document provides an exhaustive systems-level architectural analysis of `sqlite3_value.hpp`, detailing its **24-byte multi-representation memory model**, **bit-packed control registers (`SqliteOwnedValueTag`, `SqliteOwnedValueSubTag`)**, **zero-branch subtype alignment**, **in-situ 16-byte raw UUID representation (`InlineUuidRep`)**, **assembly-level execution characteristics**, and the **144+ heterogeneous relational comparison engine**.
 
 > **API & Usage Guide**: For usage tutorials, examples, and the public API reference, see [`docs/VALUE_README.md`](VALUE_README.md).
 
@@ -14,7 +14,7 @@ When SQLite executes queries or passes arguments to User-Defined Functions (UDFs
 2. **Polymorphic Variant Bloat**: Standard C++ variants (`std::variant<int64_t, double, std::string, ...>`) typically consume $24\text{--}40+$ bytes due to discriminator alignment and non-overlapping sub-objects, reducing L1 cache density.
 3. **Collation & Subtype Incompatibility**: Standard C++ variants lack native awareness of SQLite's strict type sorting hierarchy ($\text{NULL} < \text{NUMERIC} < \text{TEXT} < \text{BLOB}$) and 8-bit SQLite subtype registry (`JSON`, `DECIMAL`, `UUID`, `VECTOR`).
 
-`sqlite3_value.hpp` resolves these challenges through a strict separation between **Zero-Allocation Views** and **16-Byte Small Buffer Optimized (SBO) Owned Containers**:
+`sqlite3_value.hpp` resolves these challenges through a strict separation between **Zero-Allocation Views** and **24-Byte Small Buffer Optimized (SBO) Owned Containers**:
 
 ```
 ┌───────────────────────────────────────────────────────────────────────────────────────┐
@@ -31,25 +31,29 @@ When SQLite executes queries or passes arguments to User-Defined Functions (UDFs
 ┌───────────────────────────────────────────────────────────────────────────────────────┐
 │                                   OWNED TYPES                                         │
 │  - RAII memory ownership & lifecycle management                                       │
-│  - 16-Byte Dual Layout with Small Buffer Optimization (SBO)                           │
+│  - 24-Byte Multi-Layout with Small Buffer Optimization (SBO) & In-Situ Raw UUIDs      │
 │  - Dynamic heap allocation for large Strings & Blobs via SQLite allocators            │
 │                                                                                       │
 │  SqliteValueOwned               SqliteStringOwned              SqliteBlobOwned        │
-│  [Dual 16B Tagged Union]        [sqlite3_str* (8B)]            [void* (8B), len (4B)] │
+│  [Multi 24B Tagged Union]       [sqlite3_str* (8B)]            [void* (8B), len (4B)] │
 └───────────────────────────────────────────────────────────────────────────────────────┘
 ```
 
 ---
 
-## 2. Mathematical Lower Bound & Alignment on 64-Bit Platforms
+## 2. Mathematical Lower Bound & 24-Byte Alignment on 64-Bit Platforms
 
 On modern 64-bit architectures (x86-64, ARM64, RISC-V):
 1. **8-Byte Alignment**: Pointers (`sqlite3_value*`), 64-bit integers (`sqlite3_int64`), and IEEE-754 doubles (`double`) must align to 8-byte boundaries.
-2. **Quantized Footprint**: Any struct enclosing an 8-byte payload plus auxiliary metadata (length, subtype, affinity, tag) has a minimum mathematical size of:
-
-$$\text{sizeof}(\text{Struct}) = \lceil (8 + \text{metadata}) / 8 \rceil \times 8 = 16 \text{ Bytes}$$
-
-An 8-byte struct cannot hold an 8-byte payload *plus* metadata. A 24-byte struct introduces 50% memory bloat. **16 bytes (128 bits) represents the exact mathematical optimum**.
+2. **Quantized Footprint**: Any struct enclosing an 8-byte payload plus auxiliary metadata (length, subtype, affinity, tag) must be quantized to multiples of 8 bytes:
+   $$\text{sizeof}(\text{Struct}) \in \{16, 24, 32, \dots\} \text{ Bytes}$$
+3. **Why 24 Bytes is the Optimal Architecture**:
+   - In a 16-byte layout, subtracting the control bytes leaves only 13 text chars or 14 blob bytes, forcing every 16-byte raw UUID and common identifiers to allocate on the heap.
+   - At **24 bytes (192 bits)**, the inline buffer expands to **22 bytes**:
+     - Short strings $\le 21$ characters fit inline (null-terminated).
+     - Short blobs $\le 22$ bytes fit inline.
+     - **Full 16-byte raw binary UUIDs (`InlineUuidRep`) fit entirely in-situ with 0 heap allocations**.
+     - Offsets 22 and 23 provide a dedicated **2-byte control register bank** (`subtag` and `tag`).
 
 ---
 
@@ -89,52 +93,62 @@ On 64-bit platforms, `struct Mem` is **56 to 64 bytes**. When duplicated via `sq
 
 ### Direct Comparison Table
 
-| Metric | Native SQLite `sqlite3_value` (`struct Mem`) | `SqliteValueOwned` (16B SBO) | Architectural Advantage |
+| Metric | Native SQLite `sqlite3_value` (`struct Mem`) | `SqliteValueOwned` (24B SBO) | Architectural Advantage |
 | :--- | :--- | :--- | :--- |
-| **Memory Footprint** | **56 – 64 Bytes** | **16 Bytes (Exact)** | **$3.5\times\text{--}4\times$ Smaller** |
+| **Memory Footprint** | **56 – 64 Bytes** | **24 Bytes (Exact)** | **$2.5\times\text{--}2.7\times$ Smaller** |
 | **Allocation Mechanism** | Always Heap-Allocated (`malloc`) | Stack / Contiguous Array In-Situ | **Zero Heap Fragmentation** |
-| **SBO Inline Strings ($\le 13$B)**| 2 Heap Allocs (`Mem` + buffer) | **0 Heap Allocs (Inline SBO)** | **$50\times\text{--}100\times$ Faster** |
-| **SBO Inline Blobs ($\le 14$B)** | 2 Heap Allocs (`Mem` + buffer) | **0 Heap Allocs (Inline SBO)** | **$50\times\text{--}100\times$ Faster** |
-| **L1 Cache Line Density (64B)**| **1 Value** occupies the full line | **4 Values** fit in a single line | **$4\times$ Higher Cache Hit Ratio** |
-| **CPU Register Delivery** | Memory pointer chasing only | **128-bit SIMD (`XMM0`) or 2 GPRs**| **1-Cycle Move / Copy** |
-| **Subtype Inspection** | Dereference + flags mask | **Shared Offset 14 read** | **1 CPU Instruction** |
+| **SBO Inline Strings ($\le 21$B)**| 2 Heap Allocs (`Mem` + buffer) | **0 Heap Allocs (Inline SBO)** | **$50\times\text{--}100\times$ Faster** |
+| **SBO Inline Blobs ($\le 22$B)** | 2 Heap Allocs (`Mem` + buffer) | **0 Heap Allocs (Inline SBO)** | **$50\times\text{--}100\times$ Faster** |
+| **Raw Binary UUIDs (16B)** | 2 Heap Allocs (`Mem` + buffer) | **0 Heap Allocs (`InlineUuidRep`)** | **Zero Mallocs** |
+| **L1 Cache Line Density (64B)**| **1 Value** occupies the full line | **2+ Values** fit in a single line | **$> 2\times$ Higher Cache Hit Ratio** |
+| **CPU Register Delivery** | Memory pointer chasing only | **GPR / SIMD Register Passing** | **1–2 Cycle Move / Copy** |
+| **Subtype Inspection** | Dereference + flags mask | **Shared Offset 22 read** | **1 CPU Instruction** |
 | **Thread & Memory Isolation** | Tied to `sqlite3* db` connection | **Completely Decoupled & Freestanding**| **Safe In-Memory Table Sharing** |
 
 ---
 
-## 4. The 16-Byte Dual-Representation Layout
+## 4. The 24-Byte Multi-Representation Layout
 
-`SqliteValueOwned` implements a dual-representation 16-byte tagged union:
+`SqliteValueOwned` implements a multi-representation 24-byte tagged union:
 
 ```cpp
 class SqliteValueOwned {
     union {
-        SqliteTypeRep   m_sqlite;  // Struct 1: Primitives & Heap Payloads (16 Bytes)
-        InlineBufferRep m_inline;  // Struct 2: Inline Short Text & Blobs (16 Bytes)
+        SqliteTypeRep   m_sqlite;  // Struct 1: Primitives & Heap Payloads (24 Bytes)
+        InlineBufferRep m_inline;  // Struct 2: Inline Short Text & Blobs (24 Bytes)
+        InlineUuidRep   m_uuid;    // Struct 3: In-Situ Raw 16-Byte UUID (24 Bytes)
         uint64_t        m_align;   // Enforces 8-byte alignment
     };
 };
-static_assert(sizeof(SqliteValueOwned) == 16, "Must be exactly 16 bytes!");
+static_assert(sizeof(SqliteValueOwned) == 24, "Must be exactly 24 bytes!");
 ```
 
 ### Exact Memory Offsets & Byte Alignment
 
 ```
 Struct 1: SqliteTypeRep (Primitives & Large Heap Payloads)
-Byte Offset:  0       4       8      11      12      13      14      15
-              ┌───────────────────────┬───────┬───────┬───────┬───────┬───────┐
-              │ payload union         │heap_  │aff    │res-   │sub-   │tag    │
-              │ (iValue/dValue/pValue)│len    │inity  │erved  │type   │byte   │
-              │ [8 Bytes]             │[4B]   │[1B]   │[1B]   │[1B]   │[1B]   │
-              └───────────────────────┴───────┴───────┴───────┴───────┴───────┘
+Byte Offset:  0       4       8      11  12      13              21  22      23
+              ┌───────────────────────┬───┬───────┬───────────────────┬───────┬───────┐
+              │ payload union         │hp_│aff-   │reserved[9]        │sub-   │tag    │
+              │ (iValue/dValue/pData/ │len│inity  │                   │tag    │byte   │
+              │  ptrVal) [8 Bytes]    │[4]│[1B]   │[9 Bytes]          │[1B]   │[1B]   │
+              └───────────────────────┴───┴───────┴───────────────────┴───────┴───────┘
 
 Struct 2: InlineBufferRep (Short Strings & Blobs - SBO)
-Byte Offset:  0                                       13      14      15
-              ┌───────────────────────────────────────┬───────┬───────┬───────┐
-              │ buf: Inline SBO Data Payload          │buf[13]│sub-   │tag    │
-              │ (13 chars + '\0'  OR  14 blob bytes)  │       │type   │byte   │
-              │ [14 Bytes]                            │       │[1B]   │[1B]   │
-              └───────────────────────────────────────┴───────┴───────┴───────┘
+Byte Offset:  0                                                   21  22      23
+              ┌───────────────────────────────────────────────────────┬───────┬───────┐
+              │ buf: Inline SBO Data Payload                          │sub-   │tag    │
+              │ (21 chars + '\0'  OR  22 blob bytes)                  │tag    │byte   │
+              │ [22 Bytes]                                            │[1B]   │[1B]   │
+              └───────────────────────────────────────────────────────┴───────┴───────┘
+
+Struct 3: InlineUuidRep (In-Situ 16-Byte Raw Binary UUID)
+Byte Offset:  0                               15  16  17          21  22      23
+              ┌───────────────────────────────────┬───┬───────────────┬───────┬───────┐
+              │ bytes: Raw Binary UUID Payload    │fl-│reserved[5]    │sub-   │tag    │
+              │ (16 bytes binary UUID)            │ags│(Zero padding) │tag    │byte   │
+              │ [16 Bytes]                        │[1]│[5 Bytes]      │[1B]   │[1B]   │
+              └───────────────────────────────────┴───┴───────────────┴───────┴───────┘
 ```
 
 ### Struct Field Specifications
@@ -146,60 +160,87 @@ Byte Offset:  0                                       13      14      15
    * `ptrVal` (`void*`): Opaque C/C++ typed pointer passed via `sqlite3_bind_pointer` / `from_pointer<T>()`. By isolating pointers to `ptrVal`, client pointers are strictly decoupled from `pData`, guaranteeing that `free_heap()` never frees client pointers and preventing any heap length contamination.
 2. **`heap_len` (Offset 8..11, 4 Bytes)**: Explicit byte length for heap-allocated text/blob values (set to `0` for primitives and pointers).
 3. **`affinity` (Offset 12, 1 Byte)**: Native SQLite affinity character (`SQLITE_AFF_INTEGER='D'`, `SQLITE_AFF_REAL='E'`, `SQLITE_AFF_TEXT='B'`, `SQLITE_AFF_BLOB='A'`, `SQLITE_AFF_NONE='@'`).
-4. **`reserved` (Offset 13, 1 Byte)**: Reserved for ABI compatibility and future engine flags (always initialized to `0`).
-5. **`subtype` (Offset 14, 1 Byte - SHARED)**: 8-bit SQLite subtype (`'J'`, `'D'`, `'U'`, `'V'`, `'G'`, `'T'`, `'B'`, `'Z'`, `'p'`).
-6. **`tag` (Offset 15, 1 Byte - SHARED)**: Bit-packed control register (`SqliteOwnedValueTag`).
+4. **`reserved[9]` (Offset 13..21, 9 Bytes)**: Reserved for ABI compatibility and future engine flags (always zeroed).
+5. **`flags` (Offset 16 in `InlineUuidRep`, 1 Byte)**: Orthogonal formatting flags (`SqliteUuidUtil::UuidFormatFlags`) controlling canonical string conversion.
+6. **`subtag` (Offset 22, 1 Byte - SHARED)**: Control subtag register (`SqliteOwnedValueSubTag`) holding bit 7 immutability flag and bits 0..6 SQLite subtype (`'J'`, `'D'`, `'U'`, `'V'`, `'G'`, `'T'`, `'B'`, `'Z'`, `'p'`).
+7. **`tag` (Offset 23, 1 Byte - SHARED)**: Bit-packed control register (`SqliteOwnedValueTag`) holding 3-bit state and 5-bit inline length.
 
 ---
 
-## 5. Zero-Branch Subtype & Control Tag Architecture
+## 5. Zero-Branch Subtype & Dual Control Tag Architecture
 
-### Shared Offset 14 Subtype Optimization
+### Shared Offset 22 Subtype Optimization
 In traditional tagged unions, retrieving a metadata property (like a subtype) requires first checking the active union member. 
 
-Because `subtype` is positioned at **Offset 14 in both `SqliteTypeRep` and `InlineBufferRep`**, accessing the subtype requires **zero branching and zero condition checks**:
+Because `subtag` is positioned at **Offset 22 across `SqliteTypeRep`, `InlineBufferRep`, and `InlineUuidRep`**, accessing the subtype requires **zero branching and zero condition checks**:
 
 ```cpp
-// Branchless assembly: movzx eax, byte ptr [rdi + 14]
+// Branchless assembly: movzx eax, byte ptr [rdi + 22]; and al, 127
 inline uint8_t subtype() const noexcept {
-    return m_sqlite.subtype;
+    return m_sqlite.subtag.subtype();
 }
 ```
 
-This allows inline JSON snippets (`{"ok":1}`), decimal strings (`"123.45"`), and UUIDs to preserve their full subtype metadata with zero heap allocation overhead.
+This allows inline JSON snippets (`{"ok":1}`), decimal strings (`"123.45"`), and in-situ UUIDs to preserve their full subtype metadata with zero heap allocation overhead.
 
-### 1-Byte Control Register Bitfield (`SqliteOwnedValueTag`)
-Offset 15 stores a packed bitfield register that eliminates the need for separate boolean flags or 32-bit type enums:
+### Dual Control Register Bank (Offsets 22 and 23)
+
+#### 1. Subtag Register (`SqliteOwnedValueSubTag`, Offset 22)
+Offset 22 manages the SQLite subtype code along with an immutability control flag:
+
+```
+Bit:     7       6       5       4       3       2       1       0
+     ┌───────┬───────────────────────────────────────────────────────┐
+     │ IMMUT │                     SUBTYPE CODE                      │
+     │ FLAG  │                       (0 .. 127)                      │
+     └───────┴───────────────────────────────────────────────────────┘
+```
+
+```cpp
+struct SqliteOwnedValueSubTag {
+    uint8_t raw;
+
+    inline void set_subtype(uint8_t s) noexcept {
+        raw = static_cast<uint8_t>((raw & 0x80) | (s & 0x7F));
+    }
+    inline uint8_t subtype()      const noexcept { return static_cast<uint8_t>(raw & 0x7F); }
+    inline bool    is_immutable() const noexcept { return (raw & 0x80) != 0; }
+    inline void    set_immutable(bool imm) noexcept {
+        raw = imm ? static_cast<uint8_t>(raw | 0x80) : static_cast<uint8_t>(raw & 0x7F);
+    }
+};
+```
+
+#### 2. Tag Register (`SqliteOwnedValueTag`, Offset 23)
+Offset 23 stores a packed 8-bit register containing 3-bit state and 5-bit payload length:
 
 ```
 Bit:     7       6       5       4       3       2       1       0
      ┌───────┬───────┬───────┬───────┬───────┬───────┬───────┬───────┐
-     │      DATA TYPE        │ HEAP  │     INLINE PAYLOAD LENGTH     │
-     │  (0x01 .. 0x05)       │ FLAG  │         (0 .. 14)             │
+     │      STATE CODE       │         INLINE PAYLOAD LENGTH         │
+     │       (0 .. 7)        │               (0 .. 22)               │
      └───────┴───────┴───────┴───────┴───────┴───────┴───────┴───────┘
 ```
 
 ```cpp
-struct SqliteOwnedValueTag {
-    uint8_t raw;
-
-    inline void set(uint8_t type, bool is_heap, uint8_t len = 0) noexcept {
-        raw = static_cast<uint8_t>(((type & 0x07) << 5) | ((is_heap ? 1 : 0) << 4) | (len & 0x0F));
-    }
-    inline int  type()        const noexcept { return static_cast<int>(raw >> 5); }
-    inline bool is_heap()     const noexcept { return (raw & 0x10) != 0; }
-    inline uint8_t len()      const noexcept { return static_cast<uint8_t>(raw & 0x0F); }
-    inline void clear()       noexcept       { raw = 0; }
-    inline bool is_active()   const noexcept { return raw >= 0x20; }
+enum State : uint8_t {
+    STATE_EMPTY = 0, // Inactive / uninitialized container slot
+    STATE_INT   = 1, // 64-bit integer (payload.iValue)
+    STATE_FLOAT = 2, // IEEE-754 double (payload.dValue)
+    STATE_TEXT  = 3, // Inline SBO null-terminated string (<= 21 chars)
+    STATE_BLOB  = 4, // Inline SBO binary blob (<= 22 bytes)
+    STATE_NULL  = 5, // Pure SQL NULL or nullptr typed pointer
+    STATE_UUID  = 6, // In-situ 16-byte raw binary UUID (InlineUuidRep)
+    STATE_HEAP  = 7  // Heap-allocated dynamic Text or Blob
 };
 ```
 
 #### The `0x20` Active Threshold
-Because valid SQLite datatypes have codes $1 \dots 5$ (`INTEGER=1`, `FLOAT=2`, `TEXT=3`, `BLOB=4`, `NULL=5`), shifting them by 5 bits (`type << 5`) ensures that any initialized SQLite value has a tag value $\ge \text{0x20}$ (`0b001_00000 = 0x20`). An empty slot or container marker has `raw == 0x00 < 0x20`.
+Because active SQLite values use `State` $1 \dots 7$ (`STATE_INT` through `STATE_HEAP`), shifting state by 5 bits (`state << 5`) ensures that any initialized value has a tag value $\ge \text{0x20}$ (`0b001_00000 = 0x20`). An empty container slot or container marker has `raw == 0x00 < 0x20`.
 
 | Method | C++ Expression | Generated x86-64 Assembly | Latency |
 | :--- | :--- | :--- | :--- |
-| `tag.is_active()` | `return raw >= 0x20;` | `cmp byte ptr [rdi + 15], 32`<br>`setae al` | **1 cycle** |
+| `tag.is_active()` | `return raw >= 0x20;` | `cmp byte ptr [rdi + 23], 32`<br>`setae al` | **1 cycle** |
 
 ---
 
@@ -209,11 +250,11 @@ Modern optimizing compilers (GCC, Clang, MSVC) compile `SqliteValueOwned` method
 
 | Method | C++ Expression | Generated x86-64 Assembly | Latency |
 | :--- | :--- | :--- | :--- |
-| `val.subtype()` | `return m_sqlite.subtype;` | `movzx eax, byte ptr [rdi + 14]` | **1 cycle** |
-| `val.type()` | `return m_sqlite.tag.type();` | `movzx eax, byte ptr [rdi + 15]`<br>`shr eax, 5` | **1 cycle** |
-| `val.is_heap_allocated()` | `return m_sqlite.tag.is_heap();` | `test byte ptr [rdi + 15], 16`<br>`setne al` | **1 cycle** |
-| `val.inline_length()` | `return m_sqlite.tag.len();` | `movzx eax, byte ptr [rdi + 15]`<br>`and eax, 15` | **1 cycle** |
-| `sqlite_move(a)` | `memcpy(this, &a, 16)` | `movups xmm0, [rsi]`<br>`movups [rdi], xmm0` | **1 cycle** |
+| `val.subtype()` | `return m_sqlite.subtag.subtype();` | `movzx eax, byte ptr [rdi + 22]`<br>`and al, 127` | **1 cycle** |
+| `val.is_uuid()` | `return m_sqlite.tag.state() == STATE_UUID;` | `movzx eax, byte ptr [rdi + 23]`<br>`shr eax, 5`<br>`cmp eax, 6`<br>`sete al` | **1 cycle** |
+| `val.is_heap_allocated()` | `return m_sqlite.tag.is_heap();` | `movzx eax, byte ptr [rdi + 23]`<br>`shr eax, 5`<br>`cmp eax, 7`<br>`sete al` | **1 cycle** |
+| `val.inline_length()` | `return m_sqlite.tag.len();` | `movzx eax, byte ptr [rdi + 23]`<br>`and eax, 31` | **1 cycle** |
+| `sqlite_move(a)` | `memcpy(this, &a, 24)` | `movups` / register copy | **1–2 cycles** |
 
 ---
 
@@ -221,18 +262,47 @@ Modern optimizing compilers (GCC, Clang, MSVC) compile `SqliteValueOwned` method
 
 `SqliteValueOwned` and `SqliteValueView` support SQLite's full official subtype registry:
 
-| Code | Subtype Constant | ASCII | Description | Inline SBO Support |
+| Code | Subtype Constant | ASCII | Description | Inline SBO / In-Situ Support |
 | :---: | :--- | :---: | :--- | :---: |
 | `0` | `SQLITE_SUBTYPE_NONE` | `\0` | Standard untagged SQL value | Yes |
-| `74` | `SQLITE_SUBTYPE_JSON` | `'J'` | Official SQLite JSON & JSONB | **Yes ($\le 13$ chars / $14$B)** |
-| `68` | `SQLITE_SUBTYPE_DECIMAL` | `'D'` | Exact Arbitrary Precision Decimal | **Yes ($\le 13$ chars)** |
-| `85` | `SQLITE_SUBTYPE_UUID` | `'U'` | 16-Byte Canonical UUID Binary | Yes (Heap pointer) |
-| `86` | `SQLITE_SUBTYPE_VECTOR` | `'V'` | AI Embedding Float32/Int8 Vector | Yes (Heap pointer / Inline $\le 14$B) |
-| `71` | `SQLITE_SUBTYPE_GEOMETRY` | `'G'` | GeoJSON / Geopoly Coordinate Array | Yes (Heap pointer / Inline $\le 14$B) |
+| `74` | `SQLITE_SUBTYPE_JSON` | `'J'` | Official SQLite JSON & JSONB | **Yes ($\le 21$ chars / $22$B)** |
+| `68` | `SQLITE_SUBTYPE_DECIMAL` | `'D'` | Exact Arbitrary Precision Decimal | **Yes ($\le 21$ chars)** |
+| `85` | `SQLITE_SUBTYPE_UUID` | `'U'` | 16-Byte Canonical UUID Binary | **Yes (In-Situ 16B, 0 Mallocs!)** |
+| `86` | `SQLITE_SUBTYPE_VECTOR` | `'V'` | AI Embedding Float32/Int8 Vector | Yes (Heap pointer / Inline $\le 22$B) |
+| `71` | `SQLITE_SUBTYPE_GEOMETRY` | `'G'` | GeoJSON / Geopoly Coordinate Array | Yes (Heap pointer / Inline $\le 22$B) |
 | `84` | `SQLITE_SUBTYPE_DATETIME` | `'T'` | ISO-8601 Timestamp / Epoch Millis | **Yes (Inline 64-bit int)** |
 | `66` | `SQLITE_SUBTYPE_BOOL` | `'B'` | Explicit Boolean flag (0 or 1) | **Yes (Inline 64-bit int)** |
-| `90` | `SQLITE_SUBTYPE_COMPRESSED` | `'Z'` | Compressed Binary Stream (ZSTD/Gorilla)| **Yes ($\le 14$ bytes)** |
+| `90` | `SQLITE_SUBTYPE_COMPRESSED` | `'Z'` | Compressed Binary Stream (ZSTD/Gorilla)| **Yes ($\le 22$ bytes)** |
 | `112` | `SQLITE_SUBTYPE_POINTER` | `'p'` | Native SQLite Opaque C/C++ Typed Pointer | **Yes (Inline 8B `payload.ptrVal`)** |
+
+### UUID Architecture, Orthogonal Formatting & Zero-Copy Canonical Equality
+
+`SqliteValueOwned` implements dedicated in-situ raw 16-byte UUID representation via `InlineUuidRep`:
+- **Zero Allocations**: Constructing a UUID from raw 16 bytes (`from_uuid(...)`) consumes 0 heap memory, sets state to `STATE_UUID` (6), sets `subtype` to `SQLITE_SUBTYPE_UUID` (`'U'`), and satisfies `val.is_blob() == true`, `val.is_uuid() == true`, and `!val.is_heap_allocated()`.
+- **Orthogonal Bitmask Flags (`SqliteUuidUtil::UuidFormatFlags`)**:
+  - `UUID_FORMAT_BLOB = 0x00`: 16-byte raw binary in-situ payload.
+  - `UUID_FORMAT_TEXT = 0x01`: Formatted ASCII string representation.
+  - `UUID_FORMAT_HYPHENS = 0x02`: Standard 8-4-4-4-12 grouping hyphens.
+  - `UUID_FORMAT_UPPERCASE = 0x04`: Hexadecimal digits in uppercase (`A-F`).
+  - `UUID_FORMAT_BRACED = 0x08`: Enclosed in curly braces (`{...}`).
+  - `UUID_FORMAT_STANDARD = TEXT | HYPHENS` (`0x03`): Standard canonical RFC 4122 string.
+- **Zero-Copy Canonical String Resolution**:
+  - `canonical_uuid_ptr(const char*& out_ptr, char scratch[39])`: Directly points `out_ptr` to existing text data for inline/heap text UUIDs without allocations or copies. For in-situ binary UUIDs, formats into local 39-byte stack `scratch`.
+  - `SqliteUuidUtil::canonical_string_ptr(s, n, out_ptr, scratch)`: Extracts zero-copy canonical string pointers from raw inputs.
+- **Format-Agnostic Zero-Copy Equality (`SqliteUuidUtil::uuid_equal`) & Hashing**:
+  - Performs case-insensitive, hyphen-agnostic, brace-agnostic verification across all $6 \times 6$ format permutations:
+    1. 16-byte raw binary BLOB (`InlineUuidRep`)
+    2. 36-char lowercase standard hyphenated text (`xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx`)
+    3. 36-char uppercase standard hyphenated text (`XXXXXXXX-XXXX-XXXX-XXXX-XXXXXXXXXXXX`)
+    4. 32-char compact hexadecimal text (`xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx`)
+    5. 38-char braced hyphenated text (`{xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx}`)
+    6. 34-char compact braced text (`{xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx}`)
+  - Direct zero-copy `memcmp` / case-folded byte comparison without allocating or copying intermediate strings.
+  - `SqliteValueOwned::hash()` and `std::hash<SqliteValueOwned>` hash the 36-character canonical lowercase hyphenated form across all representations, guaranteeing that equal UUIDs in any format produce identical 64-bit MurmurHash2 hashes.
+
+> [!IMPORTANT]
+> **Subtype Guidance for Application & Extension Developers**:
+> SQLite extensions, virtual tables, and analytical engines are strongly advised to explicitly pass and preserve the subtype `SQLITE_SUBTYPE_UUID` (`'U'` / code 85) across statements and UDF chains. Passing subtype `'U'` allows the runtime to distinguish UUID blobs from generic binary blobs in a single instruction (`val.is_uuid()`), completely bypassing expensive heuristic guessing or string validation.
 
 ---
 
@@ -266,8 +336,15 @@ auto type_rank = [](int t) -> int {
 ## 9. Value Containers Architecture (`SqliteValueTuple<N>` / `SqliteValueVec<N>`)
 
 Multi-column composite keys and rows are modeled as contiguous RAII-managed arrays of `SqliteValueOwned` elements with 100% stack data density:
-- **`SqliteValueTuple<N = 0>` ($N \in [1..8]$ Stack, $N = 0$ Direct Heap)**: Exact stack array ($N \times 16\text{B}$, 0 mallocs) for $N \in [1..8]$. $N = 0$ (`SqliteValueTuple<>`) provides an immutable dynamic heap tuple.
+- **`SqliteValueTuple<N = 0>` ($N \in [1..8]$ Stack, $N = 0$ Direct Heap)**: Exact stack array ($N \times 24\text{B}$, 0 mallocs) for $N \in [1..8]$ ($N=1$: 24B, $N=2$: 48B, $N=3$: 72B, $N=4$: 96B, $N=8$: 192B). $N = 0$ (`SqliteValueTuple<>`) provides an immutable dynamic heap tuple.
 - **`SqliteValueVec<N = 0>` ($N \in [1..8]$ SBO, $N = 0$ Direct Heap)**: Adaptive Small Buffer Optimized (SBO) vector living in-situ on stack when size $\le N$ ($N \in [1..8]$), spilling dynamically to heap when resized $> N$, or direct dynamic heap vector for $N = 0$ (`SqliteValueVec<>`).
+- **Dynamic Heap Memory Union (`HeapRep`)**:
+  - `ptr` (8B) at Offset 0
+  - `size` (4B) at Offset 8
+  - `capacity` (2B) at Offset 12
+  - `reserved[9]` (9B) at Offset 14..22
+  - `tag` (1B) at Offset 23 (`raw == 0x00`)
+  - `pad[(N * 24) - 24]` padding for $N > 1$ ensuring `sizeof(HeapRep) == N * 24`.
 
 > For complete architectural details, binary diagrams, and 8x8 matrix dispatching, see [`docs/VALUE_CONTAINERS_ARCHITECTURE.md`](VALUE_CONTAINERS_ARCHITECTURE.md).
 

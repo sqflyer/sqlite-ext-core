@@ -1,8 +1,8 @@
 # C++ Value Types (`sqlite3_value.hpp`)
 
-High-performance, zero-dependency, freestanding C++ RAII wrappers for SQLite core data types. Engineered specifically for SQLite extension authors to enable **Small Buffer Optimization (SBO)**, **zero-branch SQLite subtype preservation**, **zero-allocation heterogeneous map lookups**, and **transparent UDF/statement lifecycle binding**.
+High-performance, zero-dependency, freestanding C++ RAII wrappers for SQLite core data types. Engineered specifically for SQLite extension authors to enable **Small Buffer Optimization (SBO)**, **zero-branch SQLite subtype preservation**, **zero-allocation heterogeneous map lookups**, **in-situ 16-byte raw UUID storage**, and **transparent UDF/statement lifecycle binding**.
 
-> **Architecture Reference**: For an in-depth breakdown of the 16-byte dual-representation memory model, bit-packed control tag registers (`SqliteOwnedValueTag`), zero-branch subtype alignment, and the 144+ heterogeneous relational operator suite, see [`docs/VALUE_ARCHITECTURE.md`](VALUE_ARCHITECTURE.md).
+> **Architecture Reference**: For an in-depth breakdown of the 24-byte multi-representation memory model, bit-packed control tag registers (`SqliteOwnedValueTag`, `SqliteOwnedValueSubTag`), zero-branch subtype alignment, in-situ UUID representation (`InlineUuidRep`), and the 144+ heterogeneous relational operator suite, see [`docs/VALUE_ARCHITECTURE.md`](VALUE_ARCHITECTURE.md).
 
 ---
 
@@ -28,22 +28,22 @@ In SQLite extension development, values appear in two distinct contexts:
                                      ▼
 ┌─────────────────────────────────────────────────────────────────────────────┐
 │                                OWNED CLASSES                                │
-│ (RAII memory management, 16-Byte Dual Layout SBO, Automatic destruction)    │
+│ (RAII memory management, 24-Byte Layout SBO, In-situ UUIDs, Auto Cleanup)   │
 │                                                                             │
 │   SqliteValueOwned       SqliteStringOwned            SqliteBlobOwned       │
-│  (16B Dual Layout)     (sqlite3_str dynamic)       (sqlite3_malloc bytes)   │
-│  [16 Bytes]            [8 Bytes]                   [16 Bytes]               │
+│  (24B Multi-Layout)    (sqlite3_str dynamic)       (sqlite3_malloc bytes)   │
+│  [24 Bytes]            [8 Bytes]                   [16 Bytes]               │
 └─────────────────────────────────────────────────────────────────────────────┘
                                      │
          Compose via SqliteValueTuple<N> / SqliteValueVec<N>
                                      ▼
 ┌──────────────────────────────────────────────────────────────────────────────────┐
 │                            VALUE CONTAINERS (sqlite3_value_containers.hpp)       │
-│ (Contiguous N × 16B arrays of SqliteValueOwned, RAII-managed)                    │
+│ (Contiguous N × 24B arrays of SqliteValueOwned, RAII-managed)                    │
 │                                                                                  │
 │  SqliteValueTuple<N>                      SqliteValueVec<N>                      │
 │  (Stack Tuples — N cols, 0 mallocs)       (Adaptive SBO Vector — Stack/Spill)    │
-│  [N × 16 Bytes on Stack/In-Situ]          [N × 16B In-Situ / Heap Array]         │
+│  [N × 24 Bytes on Stack/In-Situ]          [N × 24B In-Situ / Heap Array]         │
 └──────────────────────────────────────────────────────────────────────────────────┘
 ```
 
@@ -53,12 +53,12 @@ In SQLite extension development, values appear in two distinct contexts:
 
 | Feature | `SqliteValueView` | `SqliteValueOwned` | `SqliteStringView` / `Owned` | `SqliteBlobView` / `Owned` |
 | :--- | :---: | :---: | :---: | :---: |
-| **Size in Memory** | **8 Bytes** | **16 Bytes (Exact)** | 16B (View) / 8B (Owned) | 16B (View) / 16B (Owned) |
-| **Allocation Model** | Zero (Non-owning) | SBO (Inline) / Heap | Zero (View) / `sqlite3_str` | Zero (View) / `sqlite3_malloc` |
-| **SBO Capacity** | N/A (View) | Strings $\le 13$B, Blobs $\le 14$B | N/A | N/A |
-| **Subtype Handling** | Zero-copy inspection | **Offset 14 (Zero-branch)** | N/A | N/A |
+| **Size in Memory** | **8 Bytes** | **24 Bytes (Exact)** | 16B (View) / 8B (Owned) | 16B (View) / 16B (Owned) |
+| **Allocation Model** | Zero (Non-owning) | SBO (Inline) / In-Situ UUID / Heap | Zero (View) / `sqlite3_str` | Zero (View) / `sqlite3_malloc` |
+| **SBO Capacity** | N/A (View) | Strings $\le 21$B, Blobs $\le 22$B, UUID 16B | N/A | N/A |
+| **Subtype Handling** | Zero-copy inspection | **Offset 22 (Zero-branch)** | N/A | N/A |
 | **Affinity Handling** | Storage-class derived | Native SQLite affinity byte | N/A | N/A |
-| **Direct Extraction** | `.as_text()`, `.as_blob()` | `.as_text()`, `.as_blob()` | `.data()`, `.c_str()` | `.data()` |
+| **Direct Extraction** | `.as_text()`, `.as_blob()` | `.as_text()`, `.as_blob()`, `.uuid_bytes()` | `.data()`, `.c_str()` | `.data()` |
 | **UDF / Statement Interop** | `.result()`, `.bind()` | `.result()`, `.bind()` | `.result()`, `.bind()` | `.result()`, `.bind()` |
 | **Heterogeneous Lookups** | 144+ operators | 144+ operators | Operators for `std::map` | Operators for `std::map` |
 
@@ -138,7 +138,7 @@ SqliteValueOwned owned = val.to_owned();
 
 ## 4. `SqliteValueOwned` API Reference
 
-`SqliteValueOwned` is a 16-byte RAII polymorphic container featuring Small Buffer Optimization (SBO), shared-offset subtype tracking, and automatic memory cleanup.
+`SqliteValueOwned` is a 24-byte RAII polymorphic container featuring Small Buffer Optimization (SBO), shared-offset subtype tracking, in-situ 16-byte raw UUID representation, and automatic memory cleanup.
 
 ### Primitive Constructors (Zero Heap Allocation)
 ```cpp
@@ -157,14 +157,14 @@ SqliteValueOwned bool_val(true);
 
 ### Static Subtype Factory Methods
 ```cpp
-// 1. JSON (Strings <= 13 chars stored inline with zero heap allocations)
+// 1. JSON (Strings <= 21 chars stored inline with zero heap allocations)
 SqliteValueOwned j1 = SqliteValueOwned::from_json("{\"ok\":true}");
 SqliteValueOwned j2 = SqliteValueOwned::from_jsonb(binary_data, len);
 
-// 2. Arbitrary Precision Decimal
+// 2. Arbitrary Precision Decimal (<= 21 chars stored inline)
 SqliteValueOwned dec = SqliteValueOwned::from_decimal("999999999999999.99");
 
-// 3. UUID Binary
+// 3. UUID Binary (16 bytes in-situ, 0 heap allocations!)
 SqliteValueOwned uuid = SqliteValueOwned::from_uuid(uuid_16_bytes);
 
 // 4. AI Vector Embeddings
@@ -173,8 +173,11 @@ SqliteValueOwned vec = SqliteValueOwned::from_vector(float_array, sizeof(float_a
 // 5. Geometry / Spatial Coordinates
 SqliteValueOwned geo = SqliteValueOwned::from_geometry(geo_bytes, len);
 
-// 6. Datetime (Epoch Milliseconds)
-SqliteValueOwned dt = SqliteValueOwned::from_datetime(1724700000000LL);
+// 6. Datetime (Integer Epoch Milliseconds or Complete ISO-8601 Strings)
+SqliteValueOwned dt_epoch = SqliteValueOwned::from_datetime(1788500000000LL);
+SqliteValueOwned dt_iso   = SqliteValueOwned::from_datetime("2026-09-04T17:20:00Z");              // SBO in-situ (20 chars)
+SqliteValueOwned dt_micro = SqliteValueOwned::from_datetime("2026-09-04T17:20:00.123456Z");       // Heap (27 chars)
+SqliteValueOwned dt_tz    = SqliteValueOwned::from_datetime("2026-09-04T17:20:00.999+05:30");     // Heap (29 chars)
 
 // 7. Compressed Stream
 SqliteValueOwned comp = SqliteValueOwned::from_compressed(zstd_stream, len);
@@ -182,6 +185,78 @@ SqliteValueOwned comp = SqliteValueOwned::from_compressed(zstd_stream, len);
 // 8. Opaque C/C++ Typed Pointer (Tagged with SQLITE_SUBTYPE_POINTER = 112 / 'p')
 SqliteValueOwned ptr_val  = SqliteValueOwned::from_pointer(&my_context);
 SqliteValueOwned null_ptr = SqliteValueOwned::from_pointer<CustomContext>(nullptr); // Semantically SQL NULL
+```
+
+### Datetime & ISO-8601 Representation Model
+
+`SqliteValueOwned` provides first-class support for DateTime values tagged with `SQLITE_SUBTYPE_DATETIME` (`'T'` / `0x54`):
+- **Epoch Timestamps**: `SqliteValueOwned::from_datetime(epoch_ms)` constructs an integer timestamp with SQLite affinity `SQLITE_AFF_INTEGER`.
+- **ISO-8601 Strings**: `SqliteValueOwned::from_datetime(iso_str)` constructs a string timestamp with `SQLITE_AFF_TEXT`.
+  - **SBO In-Situ ($\le 21$ chars)**: Date-only (`"2026-09-04"`), standard timestamp (`"2026-09-04 17:20:00"`), and UTC (`"2026-09-04T17:20:00Z"`) fit inside the 24-byte struct with **0 heap allocations**.
+  - **Heap Allocation ($> 21$ chars)**: High-precision subseconds (`.123Z`, `.123456Z`, `.123456789Z`) and timezone offsets (`+05:30`, `-08:00`) dynamically allocate exact-sized SQLite heap memory.
+- **Relational Ordering & Transparent STL Lookups**: ISO-8601 text values naturally sort in chronological order and support transparent heterogeneous lookups in `std::unordered_map` and `std::map<..., std::less<>>` via `SqliteStringView` and database column views (`SqliteValueView`).
+
+### UUID In-Situ Architecture, Orthogonal Formatting & Zero-Copy Comparisons
+
+`SqliteValueOwned` incorporates dedicated in-situ storage for 16-byte binary UUIDs (`InlineUuidRep`) within its 24-byte footprint.
+
+> [!IMPORTANT]
+> **Subtype Guidance for Application & Extension Authors**:
+> When passing UUIDs through SQLite statements, UDF arguments, or virtual table operations, **it is strongly recommended to explicitly assign the standard SQLite subtype `SQLITE_SUBTYPE_UUID` (`'U'` / code 85)**:
+> - **In UDF Return Values**: Use `sqlite3_result_subtype(ctx, 'U')` or `val.result(ctx)`.
+> - **In `SqliteValueOwned` Creation**: Use `SqliteValueOwned::from_uuid(raw_16_bytes)` which automatically sets subtype `'U'`.
+> - **Why this matters**: Explicitly preserving subtype `'U'` guarantees instant, branchless zero-allocation detection via `val.is_uuid()` across query pipelines, avoiding costly string re-parsing, regex matching, or heuristic byte inspection.
+
+#### Orthogonal UUID Format Flags (`SqliteUuidUtil::UuidFormatFlags`)
+`SqliteUuidUtil` provides fully orthogonal bitmask flags to control UUID formatting:
+
+| Flag | Value | Description |
+| :--- | :---: | :--- |
+| `UUID_FORMAT_BLOB` | `0x00` | 16-byte raw binary representation (default) |
+| `UUID_FORMAT_TEXT` | `0x01` | Formatted ASCII text string |
+| `UUID_FORMAT_HYPHENS` | `0x02` | Include standard 8-4-4-4-12 grouping hyphens |
+| `UUID_FORMAT_UPPERCASE` | `0x04` | Format hexadecimal digits in uppercase (`A-F`) |
+| `UUID_FORMAT_BRACED` | `0x08` | Enclose text in curly braces (`{...}`) |
+| `UUID_FORMAT_STANDARD` | `0x03` | Standard canonical RFC 4122 text (`TEXT \| HYPHENS`) |
+
+```cpp
+// Fast zero-allocation UUID parsing & formatting utilities
+#include "sqlite3_value.hpp"
+
+// 1. Parsing text UUIDs (supports 32-hex, 36-char hyphenated, 38-char braced, and 34-char compact braced):
+uint8_t raw_uuid[16];
+if (SqliteUuidUtil::parse_uuid("550e8400-e29b-41d4-a716-446655440000", raw_uuid)) {
+    // Construct in-situ owned UUID (0 heap allocations!)
+    SqliteValueOwned val = SqliteValueOwned::from_uuid(raw_uuid);
+    assert(val.is_uuid() == true);
+    assert(val.is_heap_allocated() == false);
+    assert(val.subtype() == SQLITE_SUBTYPE_UUID); // 'U'
+}
+
+// 2. Direct binary access & orthogonal string formatting (0 heap allocations):
+const uint8_t* raw = val.uuid_bytes(); // Direct 16-byte buffer pointer
+char out_str[39];
+val.format_uuid(out_str, SqliteUuidUtil::UUID_FORMAT_STANDARD);           // "550e8400-e29b-41d4-a716-446655440000"
+val.format_uuid(out_str, SqliteUuidUtil::UUID_FORMAT_UPPERCASE | SqliteUuidUtil::UUID_FORMAT_TEXT); // "550E8400E29B41D4A716446655440000" (Compact upper)
+val.format_uuid(out_str, SqliteUuidUtil::UUID_FORMAT_BRACED | SqliteUuidUtil::UUID_FORMAT_STANDARD); // "{550e8400-e29b-41d4-a716-446655440000}"
+
+// 3. Resolving canonical pointer with object format flags:
+const char* str_ptr = nullptr;
+char scratch[39];
+int len = val.canonical_uuid_ptr(str_ptr, scratch); // Uses val's actual format flags
+
+// 4. Zero-Copy Cross-Format Equality & Heterogeneous Hashing:
+SqliteValueOwned u_blob = SqliteValueOwned::from_uuid(raw_uuid); // Binary 16-byte
+SqliteValueOwned u_text = SqliteValueOwned::from_uuid(raw_uuid, SqliteUuidUtil::UUID_FORMAT_STANDARD); // Text
+SqliteValueOwned u_upper = SqliteValueOwned::from_uuid(raw_uuid, SqliteUuidUtil::UUID_FORMAT_STANDARD | SqliteUuidUtil::UUID_FORMAT_UPPERCASE);
+SqliteValueOwned u_brace = SqliteValueOwned::from_uuid(raw_uuid, SqliteUuidUtil::UUID_FORMAT_BRACED | SqliteUuidUtil::UUID_FORMAT_STANDARD);
+
+// All formats evaluate equal and produce identical 64-bit MurmurHash2 hashes!
+assert(u_blob == u_text);
+assert(u_text == u_upper);
+assert(u_upper == u_brace);
+assert(u_blob.hash() == u_text.hash());
+assert(u_text.hash() == u_upper.hash());
 ```
 
 ### Pointer Extraction & Mutation
@@ -202,10 +277,10 @@ ptr_val.result_pointer<CustomContext>(ctx);
 ### Inspection & Metadata Getters
 ```cpp
 int  t   = val.type();               // SQLITE_INTEGER, SQLITE_FLOAT, SQLITE_TEXT, etc.
-bool h   = val.is_heap_allocated();  // False for primitives and SBO buffers (<=13-14B)
-int  len = val.inline_length();      // Byte length of inline text/blob (0..14)
+bool h   = val.is_heap_allocated();  // False for primitives, UUIDs, and SBO buffers (<=21-22B)
+int  len = val.inline_length();      // Byte length of inline text/blob (0..22)
 char aff = val.affinity();           // SQLite Affinity character ('@', 'A'..'F')
-uint8_t sub = val.subtype();         // 8-bit SQLite Subtype (Offset 14, 1-cycle access)
+uint8_t sub = val.subtype();         // 8-bit SQLite Subtype (Offset 22, 1-cycle access)
 
 SqliteOwnedValueTag tag = val.tag(); // Access raw 1-byte packed control register
 ```
@@ -215,7 +290,7 @@ SqliteOwnedValueTag tag = val.tag(); // Access raw 1-byte packed control registe
 #include "sqlite3_allocator.hpp" // For sqlite_move
 
 SqliteValueOwned a = SqliteValueOwned::from_text("my string");
-SqliteValueOwned b = sqlite_move(a); // 128-bit register move (1 cycle)
+SqliteValueOwned b = sqlite_move(a); // Fast register move
 
 assert(b.as_text() == "my string");
 assert(a.is_null()); // Moved-from instance is safely reset to NULL
@@ -230,7 +305,7 @@ These classes provide contiguous RAII-managed arrays of `SqliteValueOwned` eleme
 ### `SqliteValueTuple<N>` — Stack-Allocated Fixed-Arity Tuple
 
 ```cpp
-// Exactly N * 16 bytes on the stack — zero heap allocations
+// Exactly N * 24 bytes on the stack — zero heap allocations
 SqliteValueTuple<4> static_tuple;
 static_tuple[0] = 42LL;
 static_tuple[1] = SqliteValueOwned("hello");
@@ -451,9 +526,10 @@ assert(!(live_ptr < null_ptr));
 
 | Operation | Standard C++ / SQLite Baseline | `sqlite3_value.hpp` | Improvement |
 | :--- | :--- | :--- | :--- |
-| **Short Text Allocation ($\le 13$B)** | `sqlite3_value_dup` ($\sim 80\text{--}200$ cycles) | **Inline SBO ($\sim 1\text{--}2$ cycles)** | **$\sim 50\times\text{--}100\times$ Faster** |
-| **Short Blob Allocation ($\le 14$B)** | `sqlite3_value_dup` ($\sim 80\text{--}200$ cycles) | **Inline SBO ($\sim 1\text{--}2$ cycles)** | **$\sim 50\times\text{--}100\times$ Faster** |
-| **Subtype Inspection (`subtype()`)** | Pointer deref + branch ($\sim 5\text{--}15$ cycles) | **Shared Offset 14 ($1$ cycle)** | **$\sim 5\times\text{--}15\times$ Faster** |
+| **Short Text Allocation ($\le 21$B)** | `sqlite3_value_dup` ($\sim 80\text{--}200$ cycles) | **Inline SBO ($\sim 1\text{--}2$ cycles)** | **$\sim 50\times\text{--}100\times$ Faster** |
+| **Short Blob Allocation ($\le 22$B)** | `sqlite3_value_dup` ($\sim 80\text{--}200$ cycles) | **Inline SBO ($\sim 1\text{--}2$ cycles)** | **$\sim 50\times\text{--}100\times$ Faster** |
+| **Raw UUID In-Situ (16B)** | `sqlite3_value_dup` ($\sim 80\text{--}200$ cycles) | **In-Situ UUID ($\sim 1\text{--}2$ cycles)** | **Zero Mallocs ($\sim 50\times\text{--}100\times$ Faster)** |
+| **Subtype Inspection (`subtype()`)** | Pointer deref + branch ($\sim 5\text{--}15$ cycles) | **Shared Offset 22 ($1$ cycle)** | **$\sim 5\times\text{--}15\times$ Faster** |
 | **Type Query (`type()`)** | Branch / switch ($\sim 3\text{--}8$ cycles) | **Bit shift `raw >> 5` ($1$ cycle)** | **$\sim 3\times\text{--}8\times$ Faster** |
-| **Move Constructor / Assignment** | Struct copy + free ($\sim 15\text{--}30$ cycles) | **128-bit SIMD Move ($1$ cycle)** | **$\sim 15\times\text{--}30\times$ Faster** |
-| **Cache Line Capacity (64 Bytes)** | 2 values (32B layout) | **4 values (16B layout)** | **$2\times$ Cache Line Density** |
+| **Move Constructor / Assignment** | Struct copy + free ($\sim 15\text{--}30$ cycles) | **Register Move ($1\text{--}2$ cycles)** | **$\sim 15\times\text{--}30\times$ Faster** |
+| **Cache Line Density (64 Bytes)** | 1 value (56--64B `struct Mem`) | **2+ values (24B layout)** | **$> 2\times$ Cache Line Density** |

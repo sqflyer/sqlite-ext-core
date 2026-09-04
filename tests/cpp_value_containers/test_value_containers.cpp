@@ -13,16 +13,16 @@ static void test_value_tuple_static() {
   printf("1. Testing SqliteValueTuple<N> in-situ static memory (N=1..8)...\n");
 
   // Static footprint checks
-  static_assert(sizeof(SqliteValueTuple<1>) == 16,
-                "SqliteValueTuple<1> must be 16 bytes");
-  static_assert(sizeof(SqliteValueTuple<2>) == 32,
-                "SqliteValueTuple<2> must be 32 bytes");
-  static_assert(sizeof(SqliteValueTuple<3>) == 48,
-                "SqliteValueTuple<3> must be 48 bytes");
-  static_assert(sizeof(SqliteValueTuple<4>) == 64,
-                "SqliteValueTuple<4> must be 64 bytes");
-  static_assert(sizeof(SqliteValueTuple<8>) == 128,
-                "SqliteValueTuple<8> must be 128 bytes");
+  static_assert(sizeof(SqliteValueTuple<1>) == 24,
+                "SqliteValueTuple<1> must be 24 bytes");
+  static_assert(sizeof(SqliteValueTuple<2>) == 48,
+                "SqliteValueTuple<2> must be 48 bytes");
+  static_assert(sizeof(SqliteValueTuple<3>) == 72,
+                "SqliteValueTuple<3> must be 72 bytes");
+  static_assert(sizeof(SqliteValueTuple<4>) == 96,
+                "SqliteValueTuple<4> must be 96 bytes");
+  static_assert(sizeof(SqliteValueTuple<8>) == 192,
+                "SqliteValueTuple<8> must be 192 bytes");
 
   // 1. Single Key Tuple (N = 1)
   SqliteValueTuple<1> t1;
@@ -179,14 +179,14 @@ static void test_value_vec_adaptive_sbo() {
   printf(
       "3. Testing SqliteValueVec<N> adaptive stack SBO & heap spilling...\n");
 
-  static_assert(sizeof(SqliteValueVec<1>) == 16,
-                "SqliteValueVec<1> must be 16 bytes");
-  static_assert(sizeof(SqliteValueVec<2>) == 32,
-                "SqliteValueVec<2> must be 32 bytes");
-  static_assert(sizeof(SqliteValueVec<4>) == 64,
-                "SqliteValueVec<4> must be 64 bytes");
-  static_assert(sizeof(SqliteValueVec<8>) == 128,
-                "SqliteValueVec<8> must be 128 bytes");
+  static_assert(sizeof(SqliteValueVec<1>) == 24,
+                "SqliteValueVec<1> must be 24 bytes");
+  static_assert(sizeof(SqliteValueVec<2>) == 48,
+                "SqliteValueVec<2> must be 48 bytes");
+  static_assert(sizeof(SqliteValueVec<4>) == 96,
+                "SqliteValueVec<4> must be 96 bytes");
+  static_assert(sizeof(SqliteValueVec<8>) == 192,
+                "SqliteValueVec<8> must be 192 bytes");
 
   // 1. In-Situ Stack Usage (N = 4)
   SqliteValueVec<4> vec;
@@ -686,7 +686,7 @@ static void test_dispatch_framework() {
     assert(t_tup != nullptr);
     assert(t_tup->get_tag() == 100 + cols);
     if (cols >= 1 && cols <= 8) {
-      assert(t_tup->get_val_size() == static_cast<size_t>(cols) * 16);
+      assert(t_tup->get_val_size() == static_cast<size_t>(cols) * 24);
     } else {
       assert(t_tup->get_val_size() == 16); // SqliteValueTuple<0> is 16 bytes
     }
@@ -696,7 +696,7 @@ static void test_dispatch_framework() {
     assert(t_vec != nullptr);
     assert(t_vec->get_tag() == 200 + cols);
     if (cols >= 1 && cols <= 8) {
-      assert(t_vec->get_val_size() == static_cast<size_t>(cols) * 16);
+      assert(t_vec->get_val_size() == static_cast<size_t>(cols) * 24);
     } else {
       assert(t_vec->get_val_size() == 16); // SqliteValueVec<0> is 16 bytes
     }
@@ -710,12 +710,12 @@ static void test_dispatch_framework() {
       assert(t_8x8 != nullptr);
       assert(t_8x8->get_tag() == k * 100 + v);
       if (k >= 1 && k <= 8) {
-        assert(t_8x8->get_key_size() == static_cast<size_t>(k) * 16);
+        assert(t_8x8->get_key_size() == static_cast<size_t>(k) * 24);
       } else {
         assert(t_8x8->get_key_size() == 16); // SqliteValueTuple<0>
       }
       if (v >= 1 && v <= 8) {
-        assert(t_8x8->get_val_size() == static_cast<size_t>(v) * 16);
+        assert(t_8x8->get_val_size() == static_cast<size_t>(v) * 24);
       } else {
         assert(t_8x8->get_val_size() == 16); // SqliteValueVec<0>
       }
@@ -805,10 +805,10 @@ static void test_null_mechanics_and_simd_init() {
   assert(s_null.type() == SQLITE_NULL);
   assert(!s_null.is_heap_allocated());
   assert(s_null.subtype() == SQLITE_SUBTYPE_NONE);
-  assert(sizeof(s_null) == 16);
+  assert(sizeof(s_null) == 24);
 
   // 2. Verify SqliteValueOwned::static_null_array() invariants (8 contiguous
-  // nulls = 128 bytes)
+  // nulls = 192 bytes)
   const SqliteValueOwned *null_arr = SqliteValueOwned::static_null_array();
   assert(null_arr != nullptr);
   for (int i = 0; i < 8; ++i) {

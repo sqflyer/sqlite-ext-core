@@ -126,11 +126,11 @@ void test_row_view_udf_args() {
 void test_row_tuple_stack_allocation(sqlite3 *db) {
   printf("Testing SqliteValueTuple stack allocation...\n");
 
-  // Exact footprint check: 3 columns * 16 bytes = 48 bytes!
-  static_assert(sizeof(SqliteValueTuple<3>) == 48,
-                "SqliteValueTuple<3> must be exactly 48 bytes!");
-  static_assert(sizeof(SqliteValueTuple<4>) == 64,
-                "SqliteValueTuple<4> must be exactly 64 bytes!");
+  // Exact footprint check: 3 columns * 24 bytes = 72 bytes!
+  static_assert(sizeof(SqliteValueTuple<3>) == 72,
+                "SqliteValueTuple<3> must be exactly 72 bytes!");
+  static_assert(sizeof(SqliteValueTuple<4>) == 96,
+                "SqliteValueTuple<4> must be exactly 96 bytes!");
 
   SqliteValueTuple<3> stack_row;
   assert(stack_row.size() == 3);

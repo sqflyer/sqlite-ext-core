@@ -18,11 +18,11 @@ To achieve maximum performance without standard library container overheads (`st
 ├──────────────────────────┬───────────────────────────────────────────┬────────────────────────────────────────────────┤
 │ Container Type           │ Memory & Allocation Semantics             │ Standard Alignment & Role                      │
 ├──────────────────────────┼───────────────────────────────────────────┼────────────────────────────────────────────────┤
-│ SqliteValueTuple<N = 0>  │ Exact N x 16B stack array for N = 1..8.   │ std::array compliant. Fixed-arity Primary      │
+│ SqliteValueTuple<N = 0>  │ Exact N x 24B stack array for N = 1..8.   │ std::array compliant. Fixed-arity Primary      │
 │                          │ 0 heap allocations, 0 capacity overhead.  │ Keys, Composite Index Keys, Fixed Records.     │
 │                          │ N = 0 (SqliteValueTuple<>): Direct heap.  │                                                │
 ├──────────────────────────┼───────────────────────────────────────────┼────────────────────────────────────────────────┤
-│ SqliteValueVec<N = 0>    │ 16-byte aligned in-situ SBO stack buffer  │ std::vector compliant. Adaptive payload rows,  │
+│ SqliteValueVec<N = 0>    │ 24-byte aligned in-situ SBO stack buffer  │ std::vector compliant. Adaptive payload rows,  │
 │                          │ for N = 1..8, spills dynamically to       │ variable-length scratch vectors, reversible    │
 │                          │ sqlite3_malloc64 when resized > N.        │ stack-to-heap lifecycle, insert/erase/assign.  │
 │                          │ N = 0 (SqliteValueVec<>): Direct heap.    │                                                │
@@ -33,20 +33,23 @@ To achieve maximum performance without standard library container overheads (`st
 
 ## 2. In-Situ Stack Footprints & L1 Cache Density
 
-Each `SqliteValueOwned` element is exactly 16 bytes. Therefore, stack-allocated containers achieve deterministic, cache-aligned boundaries:
+Each `SqliteValueOwned` element is exactly 24 bytes. Therefore, stack-allocated containers achieve deterministic boundaries:
 
 ```
-SqliteValueTuple<1> / SqliteValueVec<1> (16 Bytes):
-[ 16B Element 0 ] -> 4 containers per 64-byte L1 Cache Line
+SqliteValueTuple<1> / SqliteValueVec<1> (24 Bytes):
+[ 24B Element 0 ] -> 24 Bytes (In-situ)
 
-SqliteValueTuple<2> / SqliteValueVec<2> (32 Bytes):
-[ 16B Element 0 ][ 16B Element 1 ] -> 2 containers per 64-byte L1 Cache Line
+SqliteValueTuple<2> / SqliteValueVec<2> (48 Bytes):
+[ 24B Element 0 ][ 24B Element 1 ] -> 48 Bytes
 
-SqliteValueTuple<4> / SqliteValueVec<4> (64 Bytes):
-[ 16B Element 0 ][ 16B Element 1 ][ 16B Element 2 ][ 16B Element 3 ] -> Exactly 1 L1 Cache Line!
+SqliteValueTuple<3> / SqliteValueVec<3> (72 Bytes):
+[ 24B Element 0 ][ 24B Element 1 ][ 24B Element 2 ] -> 72 Bytes
 
-SqliteValueTuple<8> / SqliteValueVec<8> (128 Bytes):
-[ 8 x 16B Elements ] -> Exactly 2 L1 Cache Lines!
+SqliteValueTuple<4> / SqliteValueVec<4> (96 Bytes):
+[ 24B Element 0 ][ 24B Element 1 ][ 24B Element 2 ][ 24B Element 3 ] -> 96 Bytes (1.5 L1 Cache Lines)
+
+SqliteValueTuple<8> / SqliteValueVec<8> (192 Bytes):
+[ 8 x 24B Elements ] -> Exactly 3 L1 Cache Lines!
 ```
 
 ---
@@ -92,12 +95,13 @@ Both `SqliteValueTuple` and `SqliteValueVec` are synthesized using modular macro
 │ Mode A: Inline Stack Buffer       │ Mode B: Dynamic Heap Representation     │
 │ (Active when size <= N)           │ (Active when size > N)                  │
 ├───────────────────────────────────┼─────────────────────────────────────────┤
-│ m_inline[0]: SqliteValueOwned(16B)│ ptr:      SqliteValueOwned* (8 Bytes)   │
-│ m_inline[1]: SqliteValueOwned(16B)│ size:     uint32_t (4 Bytes)            │
+│ m_inline[0]: SqliteValueOwned(24B)│ ptr:      SqliteValueOwned* (8 Bytes)   │
+│ m_inline[1]: SqliteValueOwned(24B)│ size:     uint32_t (4 Bytes)            │
 │ ...                               │ capacity: uint16_t (2 Bytes)            │
-│ m_inline[N-1]: Value(16B)         │ reserved: uint8_t  (1 Byte)             │
-│ (Tag at byte 15 >= 0x20)          │ tag:      SqliteOwnedValueTag (1 Byte)  │
-│                                   │           (tag.raw == 0x00, ptr != null)│
+│ m_inline[N-1]: Value(24B)         │ reserved: uint8_t[9] (9 Bytes)          │
+│ (Tag at byte 23 >= 0x20)          │ tag:      SqliteOwnedValueTag (1 Byte)  │
+│                                   │           (Offset 23, raw == 0x00)      │
+│                                   │ pad:      uint8_t[(N*24)-24] (if N > 1) │
 └───────────────────────────────────┴─────────────────────────────────────────┘
 ```
 
@@ -106,6 +110,10 @@ Both `SqliteValueTuple` and `SqliteValueVec` are synthesized using modular macro
 1. **Initial Stack State**: Constructing `SqliteValueVec<4>` uses 0 heap memory. Elements `0..3` live in `m_inline`.
 2. **Heap Spill**: Calling `resize(6)` allocates 6 contiguous elements via `sqlite3_malloc64`, moves existing inline elements to the heap, sets `m_heap.ptr`, and marks `m_heap.tag.raw = 0x00`.
 3. **Safe Return to Stack**: Calling `resize(2)` moves the first 2 elements back to `m_inline`, frees the heap buffer via `sqlite_delete_array`, sets `m_heap.ptr = nullptr`, and restores stack operation.
+
+### Storage State Inspection Methods:
+- `is_inline() const noexcept`: Returns `true` if elements are stored entirely on the stack within `m_inline`.
+- `is_heap() const noexcept` / `is_heap_allocated() const noexcept`: Returns `true` if dynamic heap buffer (`m_heap.ptr != nullptr`) is actively managing storage. Always returns `true` for `SqliteValueVec<0>` with non-zero capacity.
 
 ---
 

@@ -789,8 +789,8 @@ private:
     const SqliteValueView *m_view_array;
     const SqliteValueView *const *m_view_ptr_array;
   };
-  SqliteRowSourceType m_source; // SQLITE_ROW_SOURCE_*
   int m_col_count;
+  SqliteRowSourceType m_source; // SQLITE_ROW_SOURCE_*
 
 public:
   /**

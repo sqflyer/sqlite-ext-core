@@ -348,13 +348,13 @@ static void test_row_owned_view_cross_container_matrix() {
 static void test_sbo_and_blob_boundaries_comparison_matrix() {
     printf("7. Testing SBO String & Blob Capacity Transitions Matrix...\n");
 
-    // SBO limits: String SBO is <= 13 chars, Blob SBO is <= 14 bytes
-    const char* str_11 = "12345678901";       // 11 chars -> SBO inline
-    const char* str_12 = "123456789012";      // 12 chars -> SBO inline
-    const char* str_13 = "1234567890123";     // 13 chars -> SBO inline max
+    // SBO limits: String SBO is <= 21 chars, Blob SBO is <= 22 bytes
+    const char* str_19 = "1234567890123456789";       // 19 chars -> SBO inline
+    const char* str_20 = "12345678901234567890";      // 20 chars -> SBO inline
+    const char* str_21 = "123456789012345678901";     // 21 chars -> SBO inline max
 
-    SqliteValueTuple<3> t_sbo_strings(str_11, str_12, str_13);
-    SqliteValueVec<3>   v_sbo_strings(str_11, str_12, str_13);
+    SqliteValueTuple<3> t_sbo_strings(str_19, str_20, str_21);
+    SqliteValueVec<3>   v_sbo_strings(str_19, str_20, str_21);
     SqliteRowOwnedView  view_sbo_strings(t_sbo_strings);
 
     assert_relops_equal(t_sbo_strings, v_sbo_strings);
@@ -363,45 +363,45 @@ static void test_sbo_and_blob_boundaries_comparison_matrix() {
     assert(t_sbo_strings.hash() == v_sbo_strings.hash());
     assert(t_sbo_strings.hash() == view_sbo_strings.hash());
 
-    // Lexicographical inline string comparisons: "12345678901" < "123456789012" < "1234567890123"
-    SqliteValueTuple<1> t_sbo11(str_11);
-    SqliteValueTuple<1> t_sbo12(str_12);
-    SqliteValueTuple<1> t_sbo13(str_13);
+    // Lexicographical inline string comparisons: "1234567890123456789" < "12345678901234567890" < "123456789012345678901"
+    SqliteValueTuple<1> t_sbo19(str_19);
+    SqliteValueTuple<1> t_sbo20(str_20);
+    SqliteValueTuple<1> t_sbo21(str_21);
 
-    assert_relops_less(t_sbo11, t_sbo12);
-    assert_relops_less(t_sbo12, t_sbo13);
-    assert_relops_less(t_sbo11, t_sbo13);
+    assert_relops_less(t_sbo19, t_sbo20);
+    assert_relops_less(t_sbo20, t_sbo21);
+    assert_relops_less(t_sbo19, t_sbo21);
 
-    // Heap-backed strings exceeding 14 chars created via SQLite statement
+    // Heap-backed strings exceeding 21 chars created via SQLite statement
     sqlite3* db = nullptr;
     assert(sqlite3_open(":memory:", &db) == SQLITE_OK);
     sqlite3_stmt* stmt_str = nullptr;
-    assert(sqlite3_prepare_v2(db, "SELECT '123456789012345', '1234567890123456';", -1, &stmt_str, nullptr) == SQLITE_OK);
+    assert(sqlite3_prepare_v2(db, "SELECT '1234567890123456789012', '12345678901234567890123';", -1, &stmt_str, nullptr) == SQLITE_OK);
     assert(sqlite3_step(stmt_str) == SQLITE_ROW);
 
-    SqliteValueOwned heap_s15(sqlite3_column_value(stmt_str, 0));
-    SqliteValueOwned heap_s16(sqlite3_column_value(stmt_str, 1));
-    assert(heap_s15.is_heap_allocated());
-    assert(heap_s16.is_heap_allocated());
+    SqliteValueOwned heap_s22(sqlite3_column_value(stmt_str, 0));
+    SqliteValueOwned heap_s23(sqlite3_column_value(stmt_str, 1));
+    assert(heap_s22.is_heap_allocated());
+    assert(heap_s23.is_heap_allocated());
 
-    SqliteValueTuple<1> t_heap15(heap_s15);
-    SqliteValueTuple<1> t_heap16(heap_s16);
+    SqliteValueTuple<1> t_heap22(heap_s22);
+    SqliteValueTuple<1> t_heap23(heap_s23);
 
-    assert_relops_less(t_sbo13, t_heap15);
-    assert_relops_less(t_heap15, t_heap16);
+    assert_relops_less(t_sbo21, t_heap22);
+    assert_relops_less(t_heap22, t_heap23);
     sqlite3_finalize(stmt_str);
 
-    // Blobs: 10 bytes (inline SBO) vs 14 bytes (inline max SBO)
-    uint8_t raw_b10[10];
-    uint8_t raw_b14[14];
-    memset(raw_b10, 0xAA, 10);
-    memset(raw_b14, 0xAA, 14);
+    // Blobs: 16 bytes (inline SBO) vs 22 bytes (inline max SBO)
+    uint8_t raw_b16[16];
+    uint8_t raw_b22[22];
+    memset(raw_b16, 0xAA, 16);
+    memset(raw_b22, 0xAA, 22);
 
-    SqliteBlobView bv10(raw_b10, 10);
-    SqliteBlobView bv14(raw_b14, 14);
+    SqliteBlobView bv16(raw_b16, 16);
+    SqliteBlobView bv22(raw_b22, 22);
 
-    SqliteValueTuple<2> t_blobs(bv10, bv14);
-    SqliteValueVec<2>   v_blobs(bv10, bv14);
+    SqliteValueTuple<2> t_blobs(bv16, bv22);
+    SqliteValueVec<2>   v_blobs(bv16, bv22);
     SqliteRowOwnedView  view_blobs(t_blobs);
 
     assert_relops_equal(t_blobs, v_blobs);
@@ -410,21 +410,22 @@ static void test_sbo_and_blob_boundaries_comparison_matrix() {
     assert(t_blobs.hash() == view_blobs.hash());
 
     // Length prefix comparison on identical byte prefixes
-    SqliteValueTuple<1> t_b10(bv10);
-    SqliteValueTuple<1> t_b14_single(bv14);
-    assert_relops_less(t_b10, t_b14_single);
+    SqliteValueTuple<1> t_b16(bv16);
+    SqliteValueTuple<1> t_b22_single(bv22);
+    assert_relops_less(t_b16, t_b22_single);
 
-    // Heap-backed blobs exceeding 14 bytes created via SQLite statement
+    // Heap-backed blobs exceeding 22 bytes created via SQLite statement
     sqlite3_stmt* stmt_blob = nullptr;
-    assert(sqlite3_prepare_v2(db, "SELECT x'AAAAAAAAAAAAAAAAAAAAAAAAAA', x'AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA';", -1, &stmt_blob, nullptr) == SQLITE_OK);
+    assert(sqlite3_prepare_v2(db, "SELECT x'AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA', x'AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA';", -1, &stmt_blob, nullptr) == SQLITE_OK);
     assert(sqlite3_step(stmt_blob) == SQLITE_ROW);
 
-    SqliteValueOwned heap_b13(sqlite3_column_value(stmt_blob, 0));
-    SqliteValueOwned heap_b16(sqlite3_column_value(stmt_blob, 1));
-    assert(heap_b16.is_heap_allocated());
+    SqliteValueOwned heap_b24(sqlite3_column_value(stmt_blob, 0));
+    SqliteValueOwned heap_b25(sqlite3_column_value(stmt_blob, 1));
+    assert(heap_b24.is_heap_allocated());
+    assert(heap_b25.is_heap_allocated());
 
-    SqliteValueTuple<1> t_heap_b16(heap_b16);
-    assert_relops_less(t_b14_single, t_heap_b16);
+    SqliteValueTuple<1> t_heap_b25(heap_b25);
+    assert_relops_less(t_b22_single, t_heap_b25);
 
     sqlite3_finalize(stmt_blob);
     sqlite3_close(db);
