@@ -148,6 +148,30 @@ public:
         return true;
     }
 
+    /** @brief Attempts to reserve buffer capacity, returning SqliteStatus. */
+    inline SqliteStatus try_reserve(sqlite3_int64 new_capacity) {
+        if (new_capacity <= m_capacity) return SqliteStatus::ok();
+        void* new_data = sqlite3_realloc64(m_data, new_capacity);
+        if (!new_data) {
+            return SqliteStatus::nomem("Failed to reallocate memory in SqliteBuffer::try_reserve");
+        }
+        m_data = new_data;
+        m_capacity = new_capacity;
+        return SqliteStatus::ok();
+    }
+
+    /** @brief Attempts to append raw bytes to the buffer, returning SqliteStatus. */
+    inline SqliteStatus try_append(const void* data, sqlite3_int64 bytes) {
+        if (!data || bytes <= 0) return SqliteStatus::ok();
+        if (!ensure_capacity(bytes)) {
+            return SqliteStatus::nomem("Failed to grow buffer in SqliteBuffer::try_append");
+        }
+        char* dest = static_cast<char*>(m_data) + m_size;
+        memcpy(dest, data, bytes);
+        m_size += bytes;
+        return SqliteStatus::ok();
+    }
+
     /** @brief Returns a pointer to the raw underlying byte array. */
     inline void* data() const { return m_data; }
     
@@ -191,6 +215,19 @@ public:
         char* dest = static_cast<char*>(m_data) + m_size;
         m_size += additional_bytes;
         return dest;
+    }
+
+    /**
+     * @brief Attempts to expand the buffer without initializing the new memory, returning SqliteResult.
+     */
+    inline SqliteResult<void*> try_append_uninitialized(sqlite3_int64 additional_bytes) {
+        if (additional_bytes <= 0) return SqliteResult<void*>::ok(nullptr);
+        if (!ensure_capacity(additional_bytes)) {
+            return SqliteResult<void*>::nomem("Failed to grow buffer in SqliteBuffer::try_append_uninitialized");
+        }
+        char* dest = static_cast<char*>(m_data) + m_size;
+        m_size += additional_bytes;
+        return SqliteResult<void*>::ok(dest);
     }
     
     /**
@@ -286,6 +323,9 @@ public:
     using SqliteBuffer::data;
     using SqliteBuffer::bytes;
     using SqliteBuffer::capacity;
+    using SqliteBuffer::try_reserve;
+    using SqliteBuffer::clear;
+    using SqliteBuffer::truncate;
     using SqliteBuffer::hash;
 
     /** @brief Constructs an empty string. */
@@ -313,17 +353,50 @@ public:
     inline bool append(const char* str) {
         if (!str) return true;
         sqlite3_int64 len = strlen(str);
-        
-        // Ensure capacity for the new string PLUS the null terminator
+        return append(str, len);
+    }
+
+    /** @brief Appends a buffer with explicit length. */
+    inline bool append(const char* str, sqlite3_int64 len) {
+        if (!str || len <= 0) return true;
         if (!ensure_capacity(len + 1)) return false;
-        
         char* dest = static_cast<char*>(m_data) + m_size;
         memcpy(dest, str, len);
         m_size += len;
-        
-        // Null terminate (not included in m_size)
         static_cast<char*>(m_data)[m_size] = '\0';
         return true;
+    }
+
+    /** @brief Attempts to append a null-terminated C-string, returning SqliteStatus. */
+    inline SqliteStatus try_append(const char* str) {
+        if (!str) return SqliteStatus::ok();
+        sqlite3_int64 len = strlen(str);
+        return try_append(str, len);
+    }
+
+    /** @brief Attempts to append a buffer with explicit length, returning SqliteStatus. */
+    inline SqliteStatus try_append(const char* str, sqlite3_int64 len) {
+        if (!str || len <= 0) return SqliteStatus::ok();
+        if (!ensure_capacity(len + 1)) {
+            return SqliteStatus::nomem("Failed to grow string buffer in SqliteString::try_append");
+        }
+        char* dest = static_cast<char*>(m_data) + m_size;
+        memcpy(dest, str, len);
+        m_size += len;
+        static_cast<char*>(m_data)[m_size] = '\0';
+        return SqliteStatus::ok();
+    }
+
+    /** @brief Attempts to construct a dynamic string, returning SqliteResult. */
+    static inline SqliteResult<SqliteString> try_create(const char* str = nullptr) {
+        SqliteString s;
+        if (str) {
+            SqliteStatus stat = s.try_append(str);
+            if (stat.is_err()) {
+                return SqliteResult<SqliteString>::err(stat.err_code(), stat.err_message());
+            }
+        }
+        return SqliteResult<SqliteString>::ok(sqlite_move(s));
     }
 
     /** @brief Returns a pointer to the null-terminated C-string. */

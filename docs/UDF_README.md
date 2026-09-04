@@ -273,3 +273,30 @@ SqliteAggregate::define<StdDevAgg>(db, "std_dev", 1);
 
 ### Umbrella Master Header:
 - `#include "sqlite3_ext.hpp"`: Provides `SqliteExt` unified registration across Scalar UDFs, Aggregates, TVFs, and Virtual Tables.
+
+---
+
+## 6. Zero-Exception Fallible Execution & Error Propagation
+
+Under `-fno-exceptions`, UDFs can propagate errors and out-of-memory states directly to SQLite using `SqliteResult<T>` or `SqliteStatus` with `set_sqlite_err(ctx)`:
+
+```cpp
+static void udf_parse_and_scale(SqliteContext ctx, SqliteUdfArgs args) {
+    if (args.size() < 1) {
+        ctx.result_error("udf_parse_and_scale requires 1 argument");
+        return;
+    }
+
+    // Fallible buffer creation
+    auto res_buf = SqliteString::try_create(128);
+    if (res_buf.is_err()) {
+        res_buf.set_sqlite_err(ctx.get());
+        return;
+    }
+    SqliteString str = res_buf.take_value();
+    str.append("processed: ");
+    str.append(args[0].as_text().data(), args[0].as_text().length());
+    ctx.result_text(str.c_str(), str.length());
+}
+```
+

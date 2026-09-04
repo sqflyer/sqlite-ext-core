@@ -296,6 +296,31 @@ assert(b.as_text() == "my string");
 assert(a.is_null()); // Moved-from instance is safely reset to NULL
 ```
 
+### Fallible Construction & Mutation (`SqliteResult<SqliteValueOwned>`, `SqliteStatus`)
+For memory-constrained and zero-exception environments:
+
+```cpp
+// 1. Fallible factory creation
+SqliteResult<SqliteValueOwned> res = SqliteValueOwned::try_from_text("dynamic string data");
+if (res.is_err()) {
+    printf("Allocation error [%d]: %s\n", res.err_code(), res.err_msg());
+    return res.status();
+}
+SqliteValueOwned val = res.take_value();
+
+// 2. Fallible in-place mutation
+SqliteStatus stat = val.try_set_text("new long text exceeding SBO inline capacity...");
+if (stat.is_err()) {
+    return stat;
+}
+
+// 3. Fallible cloning
+SqliteResult<SqliteValueOwned> clone_res = val.try_clone();
+if (clone_res.is_ok()) {
+    SqliteValueOwned copy = clone_res.take_value();
+}
+```
+
 ---
 
 ## 5. Value Containers (`SqliteValueTuple<N>`, `SqliteValueVec<N>`)

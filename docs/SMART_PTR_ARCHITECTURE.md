@@ -119,3 +119,22 @@ Since C lacks C++ templates, a polymorphic `void*` based memory manager would co
 Every single generated function is declared as `static inline`. 
 - **Performance**: This guarantees that modern C compilers (GCC, Clang) will completely inline the reference counting logic directly into the caller's assembly, achieving absolute zero-overhead execution paths compared to hand-written manual reference counting.
 - **Linker Safety**: Because they are `static`, multiple different `.c` files (translation units) can invoke `SQLITE_SHARED_PTR_DEFINE` for the exact same struct without causing "Multiple Definition" linker errors. Each translation unit simply gets its own safely isolated, inlined copy of the fast-path logic.
+
+---
+
+## Fallible Construction with `SqliteResult<T>`
+
+In memory-constrained SQLite extensions compiling with `-fno-exceptions`, `sqlite_make_shared` and `sqlite_make_unique` return raw smart pointers (which may hold `nullptr` upon OOM). To enable explicit, monadic, and zero-exception error handling, the smart pointer suite exposes fallible factory functions returning Rust-style `SqliteResult`:
+
+- **`sqlite_try_make_shared<T, ...Args>(args...)`**: Returns `SqliteResult<SqliteSharedPtr<T>>`. Allocates the managed payload and control block. If either allocation fails, cleanly releases any partially constructed state and returns `SqliteResult::err(SQLITE_NOMEM, ...)`.
+- **`sqlite_try_make_unique<T, ...Args>(args...)`**: Returns `SqliteResult<SqliteUniquePtr<T>>`. Allocates payload via `sqlite_try_new<T>` and returns `SqliteResult::err(SQLITE_NOMEM, ...)` on failure.
+
+```cpp
+auto res = sqlite_try_make_shared<MyStruct>(42, "hello");
+if (res.is_err()) {
+    res.set_sqlite_err(ctx);
+    return;
+}
+SqliteSharedPtr<MyStruct> sp = res.unwrap();
+```
+

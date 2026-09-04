@@ -6,10 +6,14 @@ This repository serves as the native C and C++ counterpart to the Rust `sqlite-e
 
 ## Currently Implemented
 
-### 1. Zero-Dependency C++ Memory Allocator (`sqlite3_allocator.hpp`)
-A fully freestanding C++ allocator that brings `std::allocator`, `std::construct_at`, and `std::move` semantics to SQLite extensions compiled with `-nostdlib++` and `-fno-exceptions`.
+### 1. Zero-Dependency C++ Memory Allocator & Fallible Results (`sqlite3_allocator.hpp`)
+A fully freestanding C++ allocator and Rust-style explicit result monad that brings `std::allocator`, `std::construct_at`, `std::move` semantics, and zero-exception fallible error handling to SQLite extensions compiled with `-nostdlib++` and `-fno-exceptions`.
 
 #### Key Features:
+- **Rust-Style `SqliteResult<T>` & `SqliteStatus`**: Pure Rust-style explicit return types bundling typed payloads with SQLite integer error codes and custom error messages (`is_ok()`, `is_err()`, `err_code()`, `err_message()`, `err_msg()`, `unwrap()`, `unwrap_or()`, `unwrap_or_default()`, `take_value()`, `inspect_err()`, `or_else()`, `and_then()`).
+- **Direct SQLite Error Setting (`set_sqlite_err`)**: `SqliteResult<T>::set_sqlite_err(ctx)` and `SqliteStatus::set_sqlite_err(ctx)` automatically route `SQLITE_NOMEM`, `SQLITE_TOOBIG`, and custom error codes directly to SQLite UDF contexts (`sqlite3_result_error_nomem`, `sqlite3_result_error_toobig`, `sqlite3_result_error_code`).
+- **Fallible Allocation Functions**: `sqlite_try_new<T>(args...)` and `sqlite_try_new_array<T>(count)` safely return `SqliteResult<T*>` and `SqliteResult<SqliteBufferView<T>>` with `SQLITE_NOMEM` on allocation failure, completely eliminating unhandled null dereferences.
+- **Portable Early-Return Macro (`SQLITE_TRY_ASSIGN`)**: Rust-like `?` operator macro (`SQLITE_TRY_ASSIGN(target, expr)`) that automatically propagates error statuses across MSVC, GCC, and Clang.
 - **Zero-Dependency Construction**: Leverages proprietary `operator new` tag trickery to safely invoke C++ constructors natively without the `<new>` header.
 - **SQLite Profiler Integration**: Provides `sqlite_new` and `sqlite_delete` to flawlessly route all C++ instantiations through `sqlite3_malloc` and `sqlite3_free`, keeping memory limits perfectly tracked by the core engine.
 - **Decoupled Array Architecture**: Explicitly separates raw memory allocation (`sqlite_new_array`) from construction (`sqlite_construct_at`) to completely eliminate the hidden length overhead of standard C++ `new[]`.
@@ -255,9 +259,11 @@ A clean, object-oriented RAII wrapper for managing SQLite connection handles, ex
 - [Database Architecture Guide](docs/DB_ARCHITECTURE.md)
 
 ### 12. Dynamic Buffers and Strings (`sqlite3_buffer.hpp`)
-Provides `SqliteString` and `SqliteBuffer` as `-nostdlib++` compliant drop-in replacements for `std::string` and `std::vector<uint8_t>`.
+Provides `SqliteString` and `SqliteBuffer` as `-nostdlib++` compliant drop-in replacements for `std::string` and `std::vector<uint8_t>` with pure Rust-style fallible operations.
 
 #### Key Features:
+- **Rust-Style Fallible Builders**: `SqliteString::try_create()` and `SqliteBuffer::try_create()` safely construct dynamic strings and byte buffers, returning `SqliteResult<SqliteString>` and `SqliteResult<SqliteBuffer>` with `SQLITE_NOMEM` on allocation failure.
+- **Fallible Growth Operations**: `try_reserve()`, `try_append(data, bytes)`, and `try_append(str, len)` return `SqliteStatus` without throwing exceptions or risking heap corruption.
 - **Zero-Dependency**: Does not require `<string>` or `<vector>`.
 - **Integrated Allocator**: Automatically grows geometrically using `sqlite3_realloc64`, keeping memory tracked by SQLite's internal limits.
 - **Heterogeneous Lookups**: Natively plugs into `SqliteValue`'s FNV-1a hashing and `memcmp_equal` engines. This guarantees identical hashes and allows `SqliteString` and `SqliteBuffer` to be used dynamically as zero-allocation lookup keys into `std::unordered_map<SqliteValueOwned, T>`!
@@ -446,8 +452,10 @@ make test-cpp-extension
 make test-ext-state
 
 # Run turnkey extension demos
-make example      # C++ extension demo
-make example-c    # Pure C extension demo
+make example          # C++ extension demo (alias for example-cpp)
+make example-cpp      # C++ extension demo
+make example-coro-cpp # C++ Coroutine extension demo
+make example-c        # Pure C extension demo
 ```
 
 ### 2. Native Windows MSVC (`make.bat`)
@@ -486,6 +494,8 @@ make.bat test-cpp-extension
 make.bat test-ext-state
 
 :: Run turnkey extension demos
-make.bat example      :: C++ extension demo
-make.bat example-c    :: Pure C extension demo
+make.bat example          :: C++ extension demo (alias for example-cpp)
+make.bat example-cpp      :: C++ extension demo
+make.bat example-coro-cpp :: C++ Coroutine extension demo
+make.bat example-c        :: Pure C extension demo
 ```

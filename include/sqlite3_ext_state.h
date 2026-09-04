@@ -268,11 +268,11 @@
      */ \
     static inline StateType##_Entry* __##StateType##_entry_alloc(const char *db_path, void (*init_fn)(StateType*), void (*free_fn)(StateType*)) { \
         /* Step 1: Allocate the main entry struct */ \
-        StateType##_Entry *entry = (StateType##_Entry*) sqlite3_malloc(sizeof(StateType##_Entry)); \
+        StateType##_Entry *entry = (StateType##_Entry*) sqlite3_malloc64(sizeof(StateType##_Entry)); \
         if (entry) { \
             /* Step 2: Deep copy the database path to serve as the registry key */ \
-            int path_len = (int)strlen(db_path); \
-            entry->db_path = (char*)sqlite3_malloc(path_len + 1); \
+            size_t path_len = strlen(db_path); \
+            entry->db_path = (char*)sqlite3_malloc64(path_len + 1); \
             if (entry->db_path) { \
                 memcpy(entry->db_path, db_path, path_len + 1); \
             } else { \

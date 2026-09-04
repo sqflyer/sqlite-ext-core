@@ -1,424 +1,553 @@
 #define SQLITE_CORE
-#include <stdio.h>
-#include <assert.h>
-#include <string.h>
 #include "../../include/sqlite3_allocator.hpp"
+#include "../../include/sqlite3_ext.hpp"
+#include <assert.h>
+#include <stdio.h>
+#include <string.h>
 
 struct MyStruct {
-    int data;
-    static int construct_count;
-    static int destruct_count;
-    
-    MyStruct() : data(0) { construct_count++; }
-    MyStruct(int d) : data(d) { construct_count++; }
-    
-    // Copy constructor
-    MyStruct(const MyStruct& other) : data(other.data) { construct_count++; }
-    
-    // Move constructor
-    MyStruct(MyStruct&& other) noexcept : data(other.data) {
-        other.data = -1;
-        construct_count++;
-    }
+  int data;
+  static int construct_count;
+  static int destruct_count;
 
-    ~MyStruct() {
-        destruct_count++;
-    }
+  MyStruct() : data(0) { construct_count++; }
+  MyStruct(int d) : data(d) { construct_count++; }
+
+  // Copy constructor
+  MyStruct(const MyStruct &other) : data(other.data) { construct_count++; }
+
+  // Move constructor
+  MyStruct(MyStruct &&other) noexcept : data(other.data) {
+    other.data = -1;
+    construct_count++;
+  }
+
+  ~MyStruct() { destruct_count++; }
 };
 
 int MyStruct::construct_count = 0;
 int MyStruct::destruct_count = 0;
 
 void reset_counts() {
-    MyStruct::construct_count = 0;
-    MyStruct::destruct_count = 0;
+  MyStruct::construct_count = 0;
+  MyStruct::destruct_count = 0;
 }
 
 void test_single_object() {
-    reset_counts();
-    
-    MyStruct* obj = sqlite_new<MyStruct>(42);
-    assert(obj != nullptr);
-    assert(obj->data == 42);
-    assert(MyStruct::construct_count == 1);
-    assert(MyStruct::destruct_count == 0);
-    
-    sqlite_delete(obj);
-    assert(MyStruct::destruct_count == 1);
+  reset_counts();
+
+  MyStruct *obj = sqlite_new<MyStruct>(42);
+  assert(obj != nullptr);
+  assert(obj->data == 42);
+  assert(MyStruct::construct_count == 1);
+  assert(MyStruct::destruct_count == 0);
+
+  sqlite_delete(obj);
+  assert(MyStruct::destruct_count == 1);
 }
 
 void test_array_allocation() {
-    reset_counts();
-    
-    // Allocate raw array (no constructors)
-    MyStruct* arr = sqlite_new_array<MyStruct>(3);
-    assert(arr != nullptr);
-    assert(MyStruct::construct_count == 0); // Uninitialized!
-    
-    // Manually construct
-    for (size_t i = 0; i < 3; ++i) {
-        sqlite_construct_at(&arr[i], (int)(i + 1) * 10);
-    }
-    assert(MyStruct::construct_count == 3);
-    assert(arr[0].data == 10);
-    assert(arr[1].data == 20);
-    assert(arr[2].data == 30);
-    
-    // Manually destruct
-    sqlite_destroy_n(arr, 3);
-    assert(MyStruct::destruct_count == 3);
-    
-    // Free raw memory
-    sqlite_delete_array(arr);
+  reset_counts();
+
+  // Allocate raw array (no constructors)
+  MyStruct *arr = sqlite_new_array<MyStruct>(3);
+  assert(arr != nullptr);
+  assert(MyStruct::construct_count == 0); // Uninitialized!
+
+  // Manually construct
+  for (size_t i = 0; i < 3; ++i) {
+    sqlite_construct_at(&arr[i], (int)(i + 1) * 10);
+  }
+  assert(MyStruct::construct_count == 3);
+  assert(arr[0].data == 10);
+  assert(arr[1].data == 20);
+  assert(arr[2].data == 30);
+
+  // Manually destruct
+  sqlite_destroy_n(arr, 3);
+  assert(MyStruct::destruct_count == 3);
+
+  // Free raw memory
+  sqlite_delete_array(arr);
 }
 
 void test_move_forwarding() {
-    reset_counts();
-    
-    MyStruct original(100);
-    assert(MyStruct::construct_count == 1);
-    
-    // Test move via perfect forwarding
-    MyStruct* moved_obj = sqlite_new<MyStruct>(sqlite_move_ptr(original));
-    assert(moved_obj->data == 100);
-    assert(original.data == -1); // Moved from!
-    assert(MyStruct::construct_count == 2);
-    
-    sqlite_delete(moved_obj);
+  reset_counts();
+
+  MyStruct original(100);
+  assert(MyStruct::construct_count == 1);
+
+  // Test move via perfect forwarding
+  MyStruct *moved_obj = sqlite_new<MyStruct>(sqlite_move_ptr(original));
+  assert(moved_obj->data == 100);
+  assert(original.data == -1); // Moved from!
+  assert(MyStruct::construct_count == 2);
+
+  sqlite_delete(moved_obj);
 }
 
 void test_forwarding() {
-    reset_counts();
-    
-    MyStruct original(200);
-    assert(MyStruct::construct_count == 1);
-    
-    // Explicitly test sqlite_forward with an lvalue (should copy)
-    MyStruct* copied_obj = sqlite_new<MyStruct>(sqlite_forward<MyStruct&>(original));
-    assert(copied_obj->data == 200);
-    assert(original.data == 200); // Not moved!
-    assert(MyStruct::construct_count == 2);
-    
-    sqlite_delete(copied_obj);
+  reset_counts();
+
+  MyStruct original(200);
+  assert(MyStruct::construct_count == 1);
+
+  // Explicitly test sqlite_forward with an lvalue (should copy)
+  MyStruct *copied_obj =
+      sqlite_new<MyStruct>(sqlite_forward<MyStruct &>(original));
+  assert(copied_obj->data == 200);
+  assert(original.data == 200); // Not moved!
+  assert(MyStruct::construct_count == 2);
+
+  sqlite_delete(copied_obj);
 }
 
 void test_destroy_at() {
-    reset_counts();
-    
-    // Allocate raw memory
-    MyStruct* raw = (MyStruct*)sqlite3_malloc(sizeof(MyStruct));
-    
-    // Manually construct
-    sqlite_construct_at(raw, 55);
-    assert(MyStruct::construct_count == 1);
-    assert(MyStruct::destruct_count == 0);
-    
-    // Explicitly test sqlite_destroy_at
-    sqlite_destroy_at(raw);
-    assert(MyStruct::destruct_count == 1);
-    
-    // Free raw memory
-    sqlite3_free(raw);
+  reset_counts();
+
+  // Allocate raw memory
+  MyStruct *raw = (MyStruct *)sqlite3_malloc(sizeof(MyStruct));
+
+  // Manually construct
+  sqlite_construct_at(raw, 55);
+  assert(MyStruct::construct_count == 1);
+  assert(MyStruct::destruct_count == 0);
+
+  // Explicitly test sqlite_destroy_at
+  sqlite_destroy_at(raw);
+  assert(MyStruct::destruct_count == 1);
+
+  // Free raw memory
+  sqlite3_free(raw);
 }
 
 void test_reallocate_array() {
-    reset_counts();
+  reset_counts();
 
-    // 1. Initial allocation: size 2
-    MyStruct* arr = sqlite_new_array<MyStruct>(2);
-    assert(arr != nullptr);
+  // 1. Initial allocation: size 2
+  MyStruct *arr = sqlite_new_array<MyStruct>(2);
+  assert(arr != nullptr);
 
-    sqlite_construct_at(&arr[0], 100);
-    sqlite_construct_at(&arr[1], 200);
-    assert(MyStruct::construct_count == 2);
+  sqlite_construct_at(&arr[0], 100);
+  sqlite_construct_at(&arr[1], 200);
+  assert(MyStruct::construct_count == 2);
 
-    // 2. Grow array to size 4
-    arr = sqlite_reallocate_array<MyStruct>(arr, 4);
-    assert(arr != nullptr);
-    assert(arr[0].data == 100);
-    assert(arr[1].data == 200);
+  // 2. Grow array to size 4
+  arr = sqlite_reallocate_array<MyStruct>(arr, 4);
+  assert(arr != nullptr);
+  assert(arr[0].data == 100);
+  assert(arr[1].data == 200);
 
-    sqlite_construct_at(&arr[2], 300);
-    sqlite_construct_at(&arr[3], 400);
-    assert(MyStruct::construct_count == 4);
+  sqlite_construct_at(&arr[2], 300);
+  sqlite_construct_at(&arr[3], 400);
+  assert(MyStruct::construct_count == 4);
 
-    // 3. Shrink array to size 3 (destroy trimmed element first)
-    sqlite_destroy_at(&arr[3]);
-    assert(MyStruct::destruct_count == 1);
+  // 3. Shrink array to size 3 (destroy trimmed element first)
+  sqlite_destroy_at(&arr[3]);
+  assert(MyStruct::destruct_count == 1);
 
-    arr = sqlite_reallocate_array<MyStruct>(arr, 3);
-    assert(arr != nullptr);
-    assert(arr[0].data == 100);
-    assert(arr[1].data == 200);
-    assert(arr[2].data == 300);
+  arr = sqlite_reallocate_array<MyStruct>(arr, 3);
+  assert(arr != nullptr);
+  assert(arr[0].data == 100);
+  assert(arr[1].data == 200);
+  assert(arr[2].data == 300);
 
-    // 4. Clean up remaining elements
-    sqlite_destroy_n(arr, 3);
-    assert(MyStruct::destruct_count == 4);
+  // 4. Clean up remaining elements
+  sqlite_destroy_n(arr, 3);
+  assert(MyStruct::destruct_count == 4);
 
-    // 5. Reallocate to 0 (should free memory and return nullptr)
-    arr = sqlite_reallocate_array<MyStruct>(arr, 0);
-    assert(arr == nullptr);
+  // 5. Reallocate to 0 (should free memory and return nullptr)
+  arr = sqlite_reallocate_array<MyStruct>(arr, 0);
+  assert(arr == nullptr);
 
-    // 6. Reallocating nullptr should act as new allocation
-    arr = sqlite_reallocate_array<MyStruct>(nullptr, 2);
-    assert(arr != nullptr);
-    sqlite_delete_array(arr);
+  // 6. Reallocating nullptr should act as new allocation
+  arr = sqlite_reallocate_array<MyStruct>(nullptr, 2);
+  assert(arr != nullptr);
+  sqlite_delete_array(arr);
 }
 
 void test_sqlite_allocator() {
-    reset_counts();
-    sqlite3_initialize();
+  reset_counts();
+  sqlite3_initialize();
 
-    sqlite3_int64 mem_before = sqlite3_memory_used();
+  sqlite3_int64 mem_before = sqlite3_memory_used();
 
-    SqliteAllocator<MyStruct> alloc;
-    SqliteAllocator<int> int_alloc;
-    (void)int_alloc;
+  SqliteAllocator<MyStruct> alloc;
+  SqliteAllocator<int> int_alloc;
+  (void)int_alloc;
 
-    // Test equality comparisons
-    assert(alloc == alloc);
-    assert(!(alloc != alloc));
+  // Test equality comparisons
+  assert(alloc == alloc);
+  assert(!(alloc != alloc));
 
-    // Test rebind
-    SqliteAllocator<MyStruct>::rebind<double>::other dbl_alloc;
-    (void)dbl_alloc;
+  // Test rebind
+  SqliteAllocator<MyStruct>::rebind<double>::other dbl_alloc;
+  (void)dbl_alloc;
 
-    // Allocate 3 elements
-    MyStruct* buffer = alloc.allocate(3);
-    assert(buffer != nullptr);
-    assert(MyStruct::construct_count == 0); // Raw uninitialized allocation!
+  // Allocate 3 elements
+  MyStruct *buffer = alloc.allocate(3);
+  assert(buffer != nullptr);
+  assert(MyStruct::construct_count == 0); // Raw uninitialized allocation!
 
-    sqlite3_int64 mem_allocated = sqlite3_memory_used();
-    assert(mem_allocated > mem_before);
+  sqlite3_int64 mem_allocated = sqlite3_memory_used();
+  assert(mem_allocated > mem_before);
 
-    // In-place construction
-    alloc.construct(&buffer[0], 11);
-    alloc.construct(&buffer[1], 22);
-    alloc.construct(&buffer[2], 33);
-    assert(MyStruct::construct_count == 3);
-    assert(MyStruct::destruct_count == 0);
-    assert(buffer[0].data == 11);
-    assert(buffer[1].data == 22);
-    assert(buffer[2].data == 33);
+  // In-place construction
+  alloc.construct(&buffer[0], 11);
+  alloc.construct(&buffer[1], 22);
+  alloc.construct(&buffer[2], 33);
+  assert(MyStruct::construct_count == 3);
+  assert(MyStruct::destruct_count == 0);
+  assert(buffer[0].data == 11);
+  assert(buffer[1].data == 22);
+  assert(buffer[2].data == 33);
 
-    // In-place destruction
-    alloc.destroy(&buffer[0]);
-    alloc.destroy(&buffer[1]);
-    alloc.destroy(&buffer[2]);
-    assert(MyStruct::destruct_count == 3);
+  // In-place destruction
+  alloc.destroy(&buffer[0]);
+  alloc.destroy(&buffer[1]);
+  alloc.destroy(&buffer[2]);
+  assert(MyStruct::destruct_count == 3);
 
-    // Deallocation
-    alloc.deallocate(buffer, 3);
-    sqlite3_int64 mem_after = sqlite3_memory_used();
-    assert(mem_after == mem_before); // Clean memory release
+  // Deallocation
+  alloc.deallocate(buffer, 3);
+  sqlite3_int64 mem_after = sqlite3_memory_used();
+  assert(mem_after == mem_before); // Clean memory release
 
-    // Zero-count allocation safety
-    MyStruct* zero_ptr = alloc.allocate(0);
-    assert(zero_ptr == nullptr);
-    alloc.deallocate(nullptr, 0); // No-op safe
+  // Zero-count allocation safety
+  MyStruct *zero_ptr = alloc.allocate(0);
+  assert(zero_ptr == nullptr);
+  alloc.deallocate(nullptr, 0); // No-op safe
+}
+
+void test_allocator_class_comprehensive() {
+  reset_counts();
+  sqlite3_initialize();
+
+  // 1. Standard STL Typedefs and Traits
+  static_assert(sqlite_is_same<SqliteAllocator<int>::value_type, int>::value,
+                "value_type must be int");
+  static_assert(sqlite_is_same<SqliteAllocator<int>::pointer, int *>::value,
+                "pointer must be int*");
+  static_assert(
+      sqlite_is_same<SqliteAllocator<int>::const_pointer, const int *>::value,
+      "const_pointer must be const int*");
+  static_assert(sqlite_is_same<SqliteAllocator<int>::reference, int &>::value,
+                "reference must be int&");
+  static_assert(
+      sqlite_is_same<SqliteAllocator<int>::const_reference, const int &>::value,
+      "const_reference must be const int&");
+  static_assert(sqlite_is_same<SqliteAllocator<int>::size_type, size_t>::value,
+                "size_type must be size_t");
+  static_assert(
+      sqlite_is_same<SqliteAllocator<int>::difference_type, ptrdiff_t>::value,
+      "difference_type must be ptrdiff_t");
+
+  // 2. Rebind traits
+  static_assert(sqlite_is_same<SqliteAllocator<int>::rebind<double>::other,
+                               SqliteAllocator<double>>::value,
+                "rebind to double mismatch");
+  static_assert(sqlite_is_same<SqliteAllocator<MyStruct>::rebind<char>::other,
+                               SqliteAllocator<char>>::value,
+                "rebind to char mismatch");
+
+  // 3. SqliteExt::Allocator<T> alias parity
+  static_assert(sqlite_is_same<SqliteExt::Allocator<MyStruct>,
+                               SqliteAllocator<MyStruct>>::value,
+                "SqliteExt::Allocator must alias SqliteAllocator");
+
+  // 4. Default, Copy, and Converting (Rebind) Constructors
+  SqliteAllocator<MyStruct> alloc1;
+  SqliteAllocator<MyStruct> alloc2(alloc1);  // Copy constructor
+  SqliteAllocator<double> alloc_dbl(alloc1); // Converting rebind constructor
+  (void)alloc2;
+  (void)alloc_dbl;
+
+  // 5. Stateless Equality Operators
+  assert(alloc1 == alloc2);
+  assert(!(alloc1 != alloc2));
+  assert(alloc1 == alloc1);
+
+  // 6. allocate() and deallocate() lifecycle
+  sqlite3_int64 mem_before = sqlite3_memory_used();
+  MyStruct *p = alloc1.allocate(4);
+  assert(p != nullptr);
+  assert(sqlite3_memory_used() > mem_before);
+  assert(MyStruct::construct_count == 0); // Raw unconstructed memory
+
+  // 7. construct() across all construction categories:
+  // 7a. Default construct
+  alloc1.construct(&p[0]);
+  assert(p[0].data == 0);
+  assert(MyStruct::construct_count == 1);
+
+  // 7b. Parameterized construct
+  alloc1.construct(&p[1], 100);
+  assert(p[1].data == 100);
+  assert(MyStruct::construct_count == 2);
+
+  // 7c. Copy construct
+  MyStruct sample(200);
+  assert(MyStruct::construct_count == 3);
+  alloc1.construct(&p[2], sample);
+  assert(p[2].data == 200);
+  assert(sample.data == 200);
+  assert(MyStruct::construct_count == 4);
+
+  // 7d. Move construct
+  alloc1.construct(&p[3], sqlite_move(sample));
+  assert(p[3].data == 200);
+  assert(sample.data == -1); // Moved from
+  assert(MyStruct::construct_count == 5);
+
+  // 8. destroy() elements in-place
+  assert(MyStruct::destruct_count == 0);
+  alloc1.destroy(&p[0]);
+  alloc1.destroy(&p[1]);
+  alloc1.destroy(&p[2]);
+  alloc1.destroy(&p[3]);
+  assert(MyStruct::destruct_count == 4);
+
+  // 9. deallocate() memory
+  alloc1.deallocate(p, 4);
+
+  // 10. allocate_zeroed() validation
+  MyStruct *z_buf = alloc1.allocate_zeroed(3);
+  assert(z_buf != nullptr);
+  const unsigned char *z_raw = reinterpret_cast<const unsigned char *>(z_buf);
+  for (size_t i = 0; i < 3 * sizeof(MyStruct); ++i) {
+    assert(z_raw[i] == 0x00);
+  }
+  assert(z_buf[0].data == 0);
+  assert(z_buf[1].data == 0);
+  assert(z_buf[2].data == 0);
+  alloc1.deallocate(z_buf, 3);
+
+  // 11. Zero allocation and nullptr deallocation safety
+  assert(alloc1.allocate(0) == nullptr);
+  assert(alloc1.allocate_zeroed(0) == nullptr);
+  alloc1.deallocate(nullptr, 0);
+  alloc1.deallocate(nullptr, 100);
 }
 
 void test_zeroed_allocations() {
-    reset_counts();
+  reset_counts();
 
-    // 1. sqlite_new_zeroed<T>() - raw single object allocation without constructors
-    MyStruct* single = sqlite_new_zeroed<MyStruct>();
-    assert(single != nullptr);
-    assert(MyStruct::construct_count == 0); // Must NOT invoke constructors
-    const unsigned char* single_bytes = reinterpret_cast<const unsigned char*>(single);
-    for (size_t i = 0; i < sizeof(MyStruct); ++i) {
-        assert(single_bytes[i] == 0x00);
-    }
-    assert(single->data == 0);
-    sqlite3_free(single);
+  // 1. sqlite_new_zeroed<T>() - raw single object allocation without
+  // constructors
+  MyStruct *single = sqlite_new_zeroed<MyStruct>();
+  assert(single != nullptr);
+  assert(MyStruct::construct_count == 0); // Must NOT invoke constructors
+  const unsigned char *single_bytes =
+      reinterpret_cast<const unsigned char *>(single);
+  for (size_t i = 0; i < sizeof(MyStruct); ++i) {
+    assert(single_bytes[i] == 0x00);
+  }
+  assert(single->data == 0);
+  sqlite3_free(single);
 
-    // 2. sqlite_new_array_zeroed<T>(count) - raw array allocation
-    const size_t elem_count = 8;
-    MyStruct* arr = sqlite_new_array_zeroed<MyStruct>(elem_count);
-    assert(arr != nullptr);
-    assert(MyStruct::construct_count == 0); // Must NOT invoke constructors
-    const unsigned char* arr_bytes = reinterpret_cast<const unsigned char*>(arr);
-    for (size_t i = 0; i < elem_count * sizeof(MyStruct); ++i) {
-        assert(arr_bytes[i] == 0x00);
-    }
-    for (size_t i = 0; i < elem_count; ++i) {
-        assert(arr[i].data == 0);
-    }
-    sqlite_delete_array(arr);
+  // 2. sqlite_new_array_zeroed<T>(count) - raw array allocation
+  const size_t elem_count = 8;
+  MyStruct *arr = sqlite_new_array_zeroed<MyStruct>(elem_count);
+  assert(arr != nullptr);
+  assert(MyStruct::construct_count == 0); // Must NOT invoke constructors
+  const unsigned char *arr_bytes = reinterpret_cast<const unsigned char *>(arr);
+  for (size_t i = 0; i < elem_count * sizeof(MyStruct); ++i) {
+    assert(arr_bytes[i] == 0x00);
+  }
+  for (size_t i = 0; i < elem_count; ++i) {
+    assert(arr[i].data == 0);
+  }
+  sqlite_delete_array(arr);
 
-    // 3. sqlite_malloc_zeroed(bytes)
-    const size_t byte_count = 64;
-    void* raw_mem = sqlite_malloc_zeroed(byte_count);
-    assert(raw_mem != nullptr);
-    const unsigned char* raw_bytes = static_cast<const unsigned char*>(raw_mem);
-    for (size_t i = 0; i < byte_count; ++i) {
-        assert(raw_bytes[i] == 0x00);
-    }
-    sqlite3_free(raw_mem);
+  // 3. sqlite_malloc_zeroed(bytes)
+  const size_t byte_count = 64;
+  void *raw_mem = sqlite_malloc_zeroed(byte_count);
+  assert(raw_mem != nullptr);
+  const unsigned char *raw_bytes = static_cast<const unsigned char *>(raw_mem);
+  for (size_t i = 0; i < byte_count; ++i) {
+    assert(raw_bytes[i] == 0x00);
+  }
+  sqlite3_free(raw_mem);
 
-    // 4. Zero count and edge cases
-    assert(sqlite_new_array_zeroed<MyStruct>(0) == nullptr);
-    assert(sqlite_malloc_zeroed(0) == nullptr);
+  // 4. Zero count and edge cases
+  assert(sqlite_new_array_zeroed<MyStruct>(0) == nullptr);
+  assert(sqlite_malloc_zeroed(0) == nullptr);
 }
 
 void test_reallocate_zeroed() {
-    reset_counts();
+  reset_counts();
 
-    // 1. sqlite_reallocate_array_zeroed
-    MyStruct* arr = sqlite_new_array_zeroed<MyStruct>(2);
-    assert(arr != nullptr);
-    arr[0].data = 111;
-    arr[1].data = 222;
+  // 1. sqlite_reallocate_array_zeroed
+  MyStruct *arr = sqlite_new_array_zeroed<MyStruct>(2);
+  assert(arr != nullptr);
+  arr[0].data = 111;
+  arr[1].data = 222;
 
-    // Grow from 2 to 5 elements (new elements 2..4 must be zeroed)
-    arr = sqlite_reallocate_array_zeroed<MyStruct>(arr, 2, 5);
-    assert(arr != nullptr);
-    assert(arr[0].data == 111);
-    assert(arr[1].data == 222);
+  // Grow from 2 to 5 elements (new elements 2..4 must be zeroed)
+  arr = sqlite_reallocate_array_zeroed<MyStruct>(arr, 2, 5);
+  assert(arr != nullptr);
+  assert(arr[0].data == 111);
+  assert(arr[1].data == 222);
 
-    const unsigned char* new_elem_bytes = reinterpret_cast<const unsigned char*>(&arr[2]);
-    for (size_t i = 0; i < 3 * sizeof(MyStruct); ++i) {
-        assert(new_elem_bytes[i] == 0x00);
-    }
-    assert(arr[2].data == 0);
-    assert(arr[3].data == 0);
-    assert(arr[4].data == 0);
+  const unsigned char *new_elem_bytes =
+      reinterpret_cast<const unsigned char *>(&arr[2]);
+  for (size_t i = 0; i < 3 * sizeof(MyStruct); ++i) {
+    assert(new_elem_bytes[i] == 0x00);
+  }
+  assert(arr[2].data == 0);
+  assert(arr[3].data == 0);
+  assert(arr[4].data == 0);
 
-    // Shrink array
-    arr = sqlite_reallocate_array_zeroed<MyStruct>(arr, 5, 2);
-    assert(arr != nullptr);
-    assert(arr[0].data == 111);
-    assert(arr[1].data == 222);
+  // Shrink array
+  arr = sqlite_reallocate_array_zeroed<MyStruct>(arr, 5, 2);
+  assert(arr != nullptr);
+  assert(arr[0].data == 111);
+  assert(arr[1].data == 222);
 
-    // Reallocate to 0 frees memory
-    arr = sqlite_reallocate_array_zeroed<MyStruct>(arr, 2, 0);
-    assert(arr == nullptr);
+  // Reallocate to 0 frees memory
+  arr = sqlite_reallocate_array_zeroed<MyStruct>(arr, 2, 0);
+  assert(arr == nullptr);
 
-    // 2. sqlite_realloc_zeroed byte buffer
-    void* raw = sqlite_malloc_zeroed(16);
-    assert(raw != nullptr);
-    memset(raw, 0x5A, 16);
+  // 2. sqlite_realloc_zeroed byte buffer
+  void *raw = sqlite_malloc_zeroed(16);
+  assert(raw != nullptr);
+  memset(raw, 0x5A, 16);
 
-    // Expand from 16 to 48 bytes (bytes 16..47 must be zeroed)
-    raw = sqlite_realloc_zeroed(raw, 16, 48);
-    assert(raw != nullptr);
-    const unsigned char* ptr_bytes = static_cast<const unsigned char*>(raw);
-    for (size_t i = 0; i < 16; ++i) {
-        assert(ptr_bytes[i] == 0x5A);
-    }
-    for (size_t i = 16; i < 48; ++i) {
-        assert(ptr_bytes[i] == 0x00);
-    }
+  // Expand from 16 to 48 bytes (bytes 16..47 must be zeroed)
+  raw = sqlite_realloc_zeroed(raw, 16, 48);
+  assert(raw != nullptr);
+  const unsigned char *ptr_bytes = static_cast<const unsigned char *>(raw);
+  for (size_t i = 0; i < 16; ++i) {
+    assert(ptr_bytes[i] == 0x5A);
+  }
+  for (size_t i = 16; i < 48; ++i) {
+    assert(ptr_bytes[i] == 0x00);
+  }
 
-    // Realloc to 0 frees memory
-    raw = sqlite_realloc_zeroed(raw, 48, 0);
-    assert(raw == nullptr);
+  // Realloc to 0 frees memory
+  raw = sqlite_realloc_zeroed(raw, 48, 0);
+  assert(raw == nullptr);
 }
 
 void test_sqlite_allocator_zeroed() {
-    SqliteAllocator<MyStruct> alloc;
+  SqliteAllocator<MyStruct> alloc;
 
-    MyStruct* buffer = alloc.allocate_zeroed(4);
-    assert(buffer != nullptr);
-    const unsigned char* bytes = reinterpret_cast<const unsigned char*>(buffer);
-    for (size_t i = 0; i < 4 * sizeof(MyStruct); ++i) {
-        assert(bytes[i] == 0x00);
-    }
-    for (size_t i = 0; i < 4; ++i) {
-        assert(buffer[i].data == 0);
-    }
+  MyStruct *buffer = alloc.allocate_zeroed(4);
+  assert(buffer != nullptr);
+  const unsigned char *bytes = reinterpret_cast<const unsigned char *>(buffer);
+  for (size_t i = 0; i < 4 * sizeof(MyStruct); ++i) {
+    assert(bytes[i] == 0x00);
+  }
+  for (size_t i = 0; i < 4; ++i) {
+    assert(buffer[i].data == 0);
+  }
 
-    alloc.deallocate(buffer, 4);
+  alloc.deallocate(buffer, 4);
 }
 
 void test_construct_n() {
-    reset_counts();
+  reset_counts();
 
-    // 1. Default construct_n
-    MyStruct* arr = sqlite_new_array<MyStruct>(4);
-    assert(arr != nullptr);
-    assert(MyStruct::construct_count == 0);
+  // 1. Default construct_n
+  MyStruct *arr = sqlite_new_array<MyStruct>(4);
+  assert(arr != nullptr);
+  assert(MyStruct::construct_count == 0);
 
-    sqlite_construct_n(arr, 4);
-    assert(MyStruct::construct_count == 4);
-    for (size_t i = 0; i < 4; ++i) {
-        assert(arr[i].data == 0);
-    }
+  sqlite_construct_n(arr, 4);
+  assert(MyStruct::construct_count == 4);
+  for (size_t i = 0; i < 4; ++i) {
+    assert(arr[i].data == 0);
+  }
 
-    sqlite_destroy_n(arr, 4);
-    assert(MyStruct::destruct_count == 4);
-    sqlite_delete_array(arr);
+  sqlite_destroy_n(arr, 4);
+  assert(MyStruct::destruct_count == 4);
+  sqlite_delete_array(arr);
 
-    // 2. Parameterized construct_n
-    reset_counts();
-    arr = sqlite_new_array<MyStruct>(3);
-    assert(arr != nullptr);
-    assert(MyStruct::construct_count == 0);
+  // 2. Parameterized construct_n
+  reset_counts();
+  arr = sqlite_new_array<MyStruct>(3);
+  assert(arr != nullptr);
+  assert(MyStruct::construct_count == 0);
 
-    sqlite_construct_n(arr, 3, 77);
-    assert(MyStruct::construct_count == 3);
-    for (size_t i = 0; i < 3; ++i) {
-        assert(arr[i].data == 77);
-    }
+  sqlite_construct_n(arr, 3, 77);
+  assert(MyStruct::construct_count == 3);
+  for (size_t i = 0; i < 3; ++i) {
+    assert(arr[i].data == 77);
+  }
 
-    sqlite_destroy_n(arr, 3);
-    assert(MyStruct::destruct_count == 3);
-    sqlite_delete_array(arr);
+  sqlite_destroy_n(arr, 3);
+  assert(MyStruct::destruct_count == 3);
+  sqlite_delete_array(arr);
 
-    // 3. Nullptr and zero count safety
-    sqlite_construct_n<MyStruct>(nullptr, 0);
-    sqlite_construct_n<MyStruct>(nullptr, 5);
+  // 3. Nullptr and zero count safety
+  sqlite_construct_n<MyStruct>(nullptr, 0);
+  sqlite_construct_n<MyStruct>(nullptr, 5);
 }
 
 void test_type_traits() {
-    // 1. sqlite_remove_reference
-    static_assert(sqlite_is_same<sqlite_remove_reference<int>::type, int>::value, "remove_reference<int> must be int");
-    static_assert(sqlite_is_same<sqlite_remove_reference<int&>::type, int>::value, "remove_reference<int&> must be int");
-    static_assert(sqlite_is_same<sqlite_remove_reference<int&&>::type, int>::value, "remove_reference<int&&> must be int");
-    static_assert(sqlite_is_same<sqlite_remove_reference<const char*&>::type, const char*>::value, "remove_reference<const char*&>");
+  // 1. sqlite_remove_reference
+  static_assert(sqlite_is_same<sqlite_remove_reference<int>::type, int>::value,
+                "remove_reference<int> must be int");
+  static_assert(
+      sqlite_is_same<sqlite_remove_reference<int &>::type, int>::value,
+      "remove_reference<int&> must be int");
+  static_assert(
+      sqlite_is_same<sqlite_remove_reference<int &&>::type, int>::value,
+      "remove_reference<int&&> must be int");
+  static_assert(sqlite_is_same<sqlite_remove_reference<const char *&>::type,
+                               const char *>::value,
+                "remove_reference<const char*&>");
 
-    // 2. sqlite_is_same
-    static_assert(sqlite_is_same<int, int>::value, "is_same<int, int> must be true");
-    static_assert(!sqlite_is_same<int, double>::value, "is_same<int, double> must be false");
-    static_assert(!sqlite_is_same<int, const int>::value, "is_same<int, const int> must be false");
+  // 2. sqlite_is_same
+  static_assert(sqlite_is_same<int, int>::value,
+                "is_same<int, int> must be true");
+  static_assert(!sqlite_is_same<int, double>::value,
+                "is_same<int, double> must be false");
+  static_assert(!sqlite_is_same<int, const int>::value,
+                "is_same<int, const int> must be false");
 
-    // 3. sqlite_enable_if
-    typedef sqlite_enable_if<true, long>::type enabled_long;
-    static_assert(sqlite_is_same<enabled_long, long>::value, "enable_if<true, long> must be long");
+  // 3. sqlite_enable_if
+  typedef sqlite_enable_if<true, long>::type enabled_long;
+  static_assert(sqlite_is_same<enabled_long, long>::value,
+                "enable_if<true, long> must be long");
 
-    // 4. sqlite_is_trivially_copyable
-    static_assert(sqlite_is_trivially_copyable<int>::value, "int must be trivially copyable");
-    static_assert(sqlite_is_trivially_copyable<double>::value, "double must be trivially copyable");
-    static_assert(!sqlite_is_trivially_copyable<MyStruct>::value, "MyStruct with custom dtor is not trivially copyable");
+  // 4. sqlite_is_trivially_copyable
+  static_assert(sqlite_is_trivially_copyable<int>::value,
+                "int must be trivially copyable");
+  static_assert(sqlite_is_trivially_copyable<double>::value,
+                "double must be trivially copyable");
+  static_assert(!sqlite_is_trivially_copyable<MyStruct>::value,
+                "MyStruct with custom dtor is not trivially copyable");
 }
 
 void test_integer_overflow_protection() {
-    size_t overflow_count = static_cast<size_t>(-1) / sizeof(MyStruct) + 1;
+  size_t overflow_count = static_cast<size_t>(-1) / sizeof(MyStruct) + 1;
 
-    // 1. sqlite_new_array overflow
-    assert(sqlite_new_array<MyStruct>(overflow_count) == nullptr);
+  // 1. sqlite_new_array overflow
+  assert(sqlite_new_array<MyStruct>(overflow_count) == nullptr);
 
-    // 2. sqlite_new_array_zeroed overflow
-    assert(sqlite_new_array_zeroed<MyStruct>(overflow_count) == nullptr);
+  // 2. sqlite_new_array_zeroed overflow
+  assert(sqlite_new_array_zeroed<MyStruct>(overflow_count) == nullptr);
 
-    // 3. sqlite_reallocate_array overflow
-    assert(sqlite_reallocate_array<MyStruct>(nullptr, overflow_count) == nullptr);
+  // 3. sqlite_reallocate_array overflow
+  assert(sqlite_reallocate_array<MyStruct>(nullptr, overflow_count) == nullptr);
 
-    // 4. sqlite_reallocate_array_zeroed overflow
-    assert(sqlite_reallocate_array_zeroed<MyStruct>(nullptr, 0, overflow_count) == nullptr);
+  // 4. sqlite_reallocate_array_zeroed overflow
+  assert(sqlite_reallocate_array_zeroed<MyStruct>(nullptr, 0, overflow_count) ==
+         nullptr);
 }
 
 void test_fast_memcpy() {
-    char src[64];
-    char dst[64];
-    for (int i = 0; i < 64; ++i) src[i] = static_cast<char>(i + 1);
-    memset(dst, 0, 64);
+  char src[64];
+  char dst[64];
+  for (int i = 0; i < 64; ++i)
+    src[i] = static_cast<char>(i + 1);
+  memset(dst, 0, 64);
 
-    SQLITE_FAST_MEMCPY(dst, src, 64);
-    for (int i = 0; i < 64; ++i) {
-        assert(dst[i] == static_cast<char>(i + 1));
-    }
+  SQLITE_FAST_MEMCPY(dst, src, 64);
+  for (int i = 0; i < 64; ++i) {
+    assert(dst[i] == static_cast<char>(i + 1));
+  }
 }
 
 static SQLITE_THREAD_LOCAL int g_tls_int = 0;
@@ -426,52 +555,328 @@ static SQLITE_THREAD_LOCAL double g_tls_double = 0.0;
 static SQLITE_THREAD_LOCAL char g_tls_buf[32] = {0};
 
 void test_sqlite_thread_local() {
-    // 1. Primitive scalar TLS
-    assert(g_tls_int == 0);
-    g_tls_int = 42;
-    assert(g_tls_int == 42);
+  // 1. Primitive scalar TLS
+  assert(g_tls_int == 0);
+  g_tls_int = 42;
+  assert(g_tls_int == 42);
 
-    assert(g_tls_double == 0.0);
-    g_tls_double = 3.14159;
-    assert(g_tls_double > 3.14 && g_tls_double < 3.15);
+  assert(g_tls_double == 0.0);
+  g_tls_double = 3.14159;
+  assert(g_tls_double > 3.14 && g_tls_double < 3.15);
 
-    // 2. POD buffer TLS (used for scratch buffers and mutable dummy sinks)
-    for (int i = 0; i < 32; ++i) {
-        g_tls_buf[i] = static_cast<char>(i + 1);
-    }
-    for (int i = 0; i < 32; ++i) {
-        assert(g_tls_buf[i] == static_cast<char>(i + 1));
-    }
+  // 2. POD buffer TLS (used for scratch buffers and mutable dummy sinks)
+  for (int i = 0; i < 32; ++i) {
+    g_tls_buf[i] = static_cast<char>(i + 1);
+  }
+  for (int i = 0; i < 32; ++i) {
+    assert(g_tls_buf[i] == static_cast<char>(i + 1));
+  }
 
-    // 3. Local function-scope static SQLITE_THREAD_LOCAL variable
-    static SQLITE_THREAD_LOCAL unsigned long long s_local_tls = 100ULL;
-    assert(s_local_tls == 100ULL);
-    s_local_tls += 50;
-    assert(s_local_tls == 150ULL);
+  // 3. Local function-scope static SQLITE_THREAD_LOCAL variable
+  static SQLITE_THREAD_LOCAL unsigned long long s_local_tls = 100ULL;
+  assert(s_local_tls == 100ULL);
+  s_local_tls += 50;
+  assert(s_local_tls == 150ULL);
 
-    // Reset for cleanliness
-    g_tls_int = 0;
-    g_tls_double = 0.0;
-    memset(g_tls_buf, 0, sizeof(g_tls_buf));
+  // Reset for cleanliness
+  g_tls_int = 0;
+  g_tls_double = 0.0;
+  memset(g_tls_buf, 0, sizeof(g_tls_buf));
+}
+
+void test_memory_limit_and_allocation_failure() {
+  reset_counts();
+  sqlite3_initialize();
+
+  sqlite3_int64 mem_baseline = sqlite3_memory_used();
+
+  // 1. Set a restrictive hard heap limit equal to current usage + 1 byte
+  //    Any allocation exceeding 1 byte will be blocked by SQLite's memory
+  //    manager.
+  sqlite3_hard_heap_limit64(mem_baseline + 1);
+
+  // 2. sqlite_new<T>() should fail, return nullptr, and NOT invoke constructor
+  MyStruct *obj = sqlite_new<MyStruct>(999);
+  assert(obj == nullptr);
+  assert(MyStruct::construct_count == 0);
+
+  // 3. sqlite_new_array<T>() should fail and return nullptr
+  MyStruct *arr = sqlite_new_array<MyStruct>(10);
+  assert(arr == nullptr);
+
+  // 4. sqlite_new_zeroed<T>() should fail and return nullptr
+  MyStruct *zeroed = sqlite_new_zeroed<MyStruct>();
+  assert(zeroed == nullptr);
+
+  // 5. sqlite_new_array_zeroed<T>() should fail and return nullptr
+  MyStruct *arr_zeroed = sqlite_new_array_zeroed<MyStruct>(10);
+  assert(arr_zeroed == nullptr);
+
+  // 6. Raw byte allocations should fail and return nullptr
+  void *raw = sqlite_malloc_zeroed(1024);
+  assert(raw == nullptr);
+
+  // 7. Reallocations should fail and return nullptr
+  void *realloc_ptr = sqlite_realloc_zeroed(nullptr, 0, 1024);
+  assert(realloc_ptr == nullptr);
+
+  MyStruct *realloc_arr = sqlite_reallocate_array<MyStruct>(nullptr, 10);
+  assert(realloc_arr == nullptr);
+
+  // 8. SqliteAllocator<T> STL interface should return nullptr without throwing
+  SqliteAllocator<MyStruct> alloc;
+  MyStruct *alloc_buf = alloc.allocate(5);
+  assert(alloc_buf == nullptr);
+
+  MyStruct *alloc_zeroed_buf = alloc.allocate_zeroed(5);
+  assert(alloc_zeroed_buf == nullptr);
+
+  // 9. Remove hard heap limit (set to 0 for unlimited)
+  sqlite3_hard_heap_limit64(0);
+
+  // 10. Verify allocations succeed normally after removing the limit
+  MyStruct *valid_obj = sqlite_new<MyStruct>(42);
+  assert(valid_obj != nullptr);
+  assert(valid_obj->data == 42);
+  assert(MyStruct::construct_count == 1);
+  sqlite_delete(valid_obj);
+  assert(MyStruct::destruct_count == 1);
+
+  MyStruct *valid_arr = alloc.allocate(3);
+  assert(valid_arr != nullptr);
+  alloc.deallocate(valid_arr, 3);
+
+  // Verify clean memory baseline
+  assert(sqlite3_memory_used() == mem_baseline);
+}
+
+void test_sqlite_status_and_result() {
+  reset_counts();
+  sqlite3_initialize();
+
+  // 1. SqliteStatus default & explicit construction
+  SqliteStatus s_ok;
+  assert(s_ok.is_ok());
+  assert(!s_ok.is_err());
+  assert(static_cast<bool>(s_ok));
+  assert(s_ok.err_code() == SQLITE_OK);
+  assert(s_ok == SQLITE_OK);
+  assert(s_ok.err_message() == nullptr);
+
+  SqliteStatus s_err(SQLITE_BUSY, "Database is locked by another transaction");
+  assert(!s_err.is_ok());
+  assert(s_err.is_err());
+  assert(!static_cast<bool>(s_err));
+  assert(s_err.err_code() == SQLITE_BUSY);
+  assert(s_err == SQLITE_BUSY);
+  assert(s_err != SQLITE_OK);
+  assert(s_err.err_message() != nullptr);
+  assert(strcmp(s_err.err_message(),
+                "Database is locked by another transaction") == 0);
+  assert(strcmp(s_err.err_msg(), "Database is locked by another transaction") == 0);
+  assert(strcmp(s_err.msg(), "Database is locked by another transaction") == 0);
+
+  // Factory methods
+  SqliteStatus s_nomem = SqliteStatus::nomem("Custom out of memory message");
+  assert(s_nomem.err_code() == SQLITE_NOMEM);
+  assert(strcmp(s_nomem.err_msg(), "Custom out of memory message") == 0);
+
+  // 2. SqliteResult<T> with primitive types
+  SqliteResult<int> r_int = SqliteResult<int>::ok(42);
+  assert(r_int.is_ok());
+  assert(!r_int.is_err());
+  assert(static_cast<bool>(r_int));
+  assert(r_int.unwrap() == 42);
+  assert(r_int.value() == 42);
+  assert(*r_int == 42);
+  assert(r_int.err_code() == SQLITE_OK);
+
+  SqliteResult<int> r_fail =
+      SqliteResult<int>::err(SQLITE_CORRUPT, "Corrupt database disk image");
+  assert(r_fail.is_err());
+  assert(!r_fail.is_ok());
+  assert(r_fail.err_code() == SQLITE_CORRUPT);
+  assert(strcmp(r_fail.err_message(), "Corrupt database disk image") == 0);
+  assert(strcmp(r_fail.err_msg(), "Corrupt database disk image") == 0);
+  assert(strcmp(r_fail.msg(), "Corrupt database disk image") == 0);
+
+  // 3. Fallbacks: unwrap_or, unwrap_or_default, unwrap_or_else, expect
+  assert(r_int.unwrap_or(10) == 42);
+  assert(r_fail.unwrap_or(10) == 10);
+  assert(r_fail.unwrap_or_default() == 0);
+  assert(r_fail.unwrap_or_else([](const SqliteStatus &st) {
+    return st.err_code() * 2;
+  }) == SQLITE_CORRUPT * 2);
+  assert(r_int.expect("should not panic") == 42);
+
+  // 4. Pointer operator semantics (-> and *)
+  SqliteResult<MyStruct> r_struct = SqliteResult<MyStruct>::ok(MyStruct(99));
+  assert(r_struct.is_ok());
+  assert(r_struct->data == 99);
+  assert((*r_struct).data == 99);
+
+  // 5. Monadic combinators: map, and_then, or_else, inspect, inspect_err
+  SqliteResult<int> mapped_ok = r_int.map([](int x) { return x * 2; });
+  assert(mapped_ok.is_ok());
+  assert(mapped_ok.unwrap() == 84);
+
+  SqliteResult<int> mapped_err = r_fail.map([](int x) { return x * 2; });
+  assert(mapped_err.is_err());
+  assert(mapped_err.err_code() == SQLITE_CORRUPT);
+
+  SqliteResult<int> chained_ok = r_int.and_then([](int x) {
+    return SqliteResult<int>::ok(x + 100);
+  });
+  assert(chained_ok.is_ok());
+  assert(chained_ok.unwrap() == 142);
+
+  SqliteResult<int> chained_err = r_int.and_then([](int) {
+    return SqliteResult<int>::err(SQLITE_ERROR, "failed in chain");
+  });
+  assert(chained_err.is_err());
+  assert(chained_err.err_code() == SQLITE_ERROR);
+
+  SqliteResult<int> recovered = r_fail.or_else([](const SqliteStatus &) {
+    return SqliteResult<int>::ok(777);
+  });
+  assert(recovered.is_ok());
+  assert(recovered.unwrap() == 777);
+
+  int inspect_val = 0;
+  r_int.inspect([&inspect_val](int x) { inspect_val = x; });
+  assert(inspect_val == 42);
+
+  int inspect_err_code = 0;
+  r_fail.inspect_err([&inspect_err_code](const SqliteStatus &st) {
+    inspect_err_code = st.err_code();
+  });
+  assert(inspect_err_code == SQLITE_CORRUPT);
+
+  // 6. SqliteResult<void> Specialization
+  SqliteResult<void> v_ok = SqliteResult<void>::ok();
+  assert(v_ok.is_ok());
+  assert(!v_ok.is_err());
+  assert(static_cast<bool>(v_ok));
+
+  SqliteResult<void> v_err = SqliteResult<void>::err(SQLITE_NOMEM, "OOM in void");
+  assert(v_err.is_err());
+  assert(v_err.err_code() == SQLITE_NOMEM);
+
+  SqliteResult<int> v_chained = v_ok.and_then([]() {
+    return SqliteResult<int>::ok(505);
+  });
+  assert(v_chained.is_ok());
+  assert(v_chained.unwrap() == 505);
+
+  // 7. SQLITE_TRY_ASSIGN & SQLITE_TRY macro test
+  auto try_helper = [](bool fail) -> SqliteStatus {
+    int target = 0;
+    auto step1 = [fail]() -> SqliteResult<int> {
+      if (fail) return SqliteResult<int>::err(SQLITE_IOERR, "io fail");
+      return SqliteResult<int>::ok(123);
+    };
+    SQLITE_TRY_ASSIGN(target, step1());
+    assert(target == 123);
+    return SqliteStatus::ok();
+  };
+  assert(try_helper(false).is_ok());
+  assert(try_helper(true).err_code() == SQLITE_IOERR);
+
+#if defined(__GNUC__) || defined(__clang__)
+  auto try_macro_helper = [](bool fail) -> SqliteStatus {
+    auto step1 = [fail]() -> SqliteResult<int> {
+      if (fail) return SqliteResult<int>::err(SQLITE_MISMATCH, "mismatch");
+      return SqliteResult<int>::ok(456);
+    };
+    int val = SQLITE_TRY(step1());
+    assert(val == 456);
+    return SqliteStatus::ok();
+  };
+  assert(try_macro_helper(false).is_ok());
+  assert(try_macro_helper(true).err_code() == SQLITE_MISMATCH);
+#endif
+
+  // 8. sqlite_try_new<T>() success path
+  SqliteResult<MyStruct *> r_new = sqlite_try_new<MyStruct>(77);
+  assert(r_new.is_ok());
+  assert(r_new.unwrap() != nullptr);
+  assert(r_new.unwrap()->data == 77);
+  sqlite_delete(r_new.unwrap());
+
+  // 9. sqlite_try_new_array<T>() success & overflow paths
+  SqliteResult<MyStruct *> r_arr = sqlite_try_new_array<MyStruct>(4);
+  assert(r_arr.is_ok());
+  assert(r_arr.unwrap() != nullptr);
+  sqlite_delete_array(r_arr.unwrap());
+
+  SqliteResult<MyStruct *> r_zero = sqlite_try_new_array<MyStruct>(0);
+  assert(r_zero.is_ok());
+  assert(r_zero.unwrap() == nullptr);
+
+  size_t overflow_sz = (static_cast<size_t>(-1) / sizeof(MyStruct)) + 1;
+  SqliteResult<MyStruct *> r_overflow =
+      sqlite_try_new_array<MyStruct>(overflow_sz);
+  assert(r_overflow.is_err());
+  assert(r_overflow.err_code() == SQLITE_TOOBIG);
+  assert(r_overflow.err_message() != nullptr);
+
+  // 10. sqlite_try_new_zeroed<T>()
+  SqliteResult<MyStruct *> r_new_z = sqlite_try_new_zeroed<MyStruct>();
+  assert(r_new_z.is_ok());
+  assert(r_new_z.unwrap() != nullptr);
+  assert(r_new_z.unwrap()->data == 0);
+  const unsigned char *raw_z =
+      reinterpret_cast<const unsigned char *>(r_new_z.unwrap());
+  for (size_t i = 0; i < sizeof(MyStruct); ++i) {
+    assert(raw_z[i] == 0x00);
+  }
+  sqlite3_free(r_new_z.unwrap());
+
+  // 11. sqlite_try_new_array_zeroed<T>()
+  SqliteResult<MyStruct *> r_arr_z = sqlite_try_new_array_zeroed<MyStruct>(4);
+  assert(r_arr_z.is_ok());
+  assert(r_arr_z.unwrap() != nullptr);
+  for (size_t i = 0; i < 4; ++i) {
+    assert(r_arr_z.unwrap()[i].data == 0);
+  }
+  sqlite_delete_array(r_arr_z.unwrap());
+
+  // 12. sqlite_try_reallocate_array_zeroed()
+  MyStruct *arr_initial = sqlite_new_array_zeroed<MyStruct>(2);
+  assert(arr_initial != nullptr);
+  arr_initial[0].data = 11;
+  arr_initial[1].data = 22;
+  SqliteResult<MyStruct *> r_realloc_arr =
+      sqlite_try_reallocate_array_zeroed<MyStruct>(arr_initial, 2, 4);
+  assert(r_realloc_arr.is_ok());
+  assert(r_realloc_arr.unwrap() != nullptr);
+  assert(r_realloc_arr.unwrap()[0].data == 11);
+  assert(r_realloc_arr.unwrap()[1].data == 22);
+  assert(r_realloc_arr.unwrap()[2].data == 0);
+  assert(r_realloc_arr.unwrap()[3].data == 0);
+  sqlite_delete_array(r_realloc_arr.unwrap());
 }
 
 int main() {
-    test_type_traits();
-    test_single_object();
-    test_array_allocation();
-    test_reallocate_array();
-    test_move_forwarding();
-    test_forwarding();
-    test_destroy_at();
-    test_sqlite_allocator();
-    test_zeroed_allocations();
-    test_reallocate_zeroed();
-    test_sqlite_allocator_zeroed();
-    test_construct_n();
-    test_integer_overflow_protection();
-    test_fast_memcpy();
-    test_sqlite_thread_local();
-    
-    printf("All allocator tests passed successfully (100%% coverage)!\n");
-    return 0;
+  test_type_traits();
+  test_single_object();
+  test_array_allocation();
+  test_reallocate_array();
+  test_move_forwarding();
+  test_forwarding();
+  test_destroy_at();
+  test_sqlite_allocator();
+  test_allocator_class_comprehensive();
+  test_zeroed_allocations();
+  test_reallocate_zeroed();
+  test_sqlite_allocator_zeroed();
+  test_construct_n();
+  test_integer_overflow_protection();
+  test_fast_memcpy();
+  test_sqlite_thread_local();
+  test_memory_limit_and_allocation_failure();
+  test_sqlite_status_and_result();
+
+  printf("All allocator tests passed successfully (100%% coverage)!\n");
+  return 0;
 }

@@ -68,7 +68,7 @@ private:
     };
 
     static Entry* registry_head;
-    static SqliteMutex* registry_mutex;
+    static sqlite3_mutex* registry_mutex;
 
     /**
      * @brief Resolves the database path for use as a registry key.
@@ -90,11 +90,11 @@ private:
     static void ensure_mutex_init() {
         if (!registry_mutex) {
             sqlite3_mutex *master = sqlite3_mutex_alloc(SQLITE_MUTEX_STATIC_MASTER);
-            sqlite3_mutex_enter(master);
+            if (master) sqlite3_mutex_enter(master);
             if (!registry_mutex) {
-                registry_mutex = sqlite_new<SqliteMutex>(SQLITE_MUTEX_STATIC_APP1);
+                registry_mutex = sqlite3_mutex_alloc(SQLITE_MUTEX_STATIC_APP1);
             }
-            sqlite3_mutex_leave(master);
+            if (master) sqlite3_mutex_leave(master);
         }
     }
 
@@ -115,10 +115,10 @@ private:
      */
     static void entry_free(Entry *entry) {
         ensure_mutex_init();
-        registry_mutex->lock();
+        if (registry_mutex) sqlite3_mutex_enter(registry_mutex);
         
         if (sqlite_atomic_load_32(&entry->refcount) > 0) {
-            registry_mutex->unlock();
+            if (registry_mutex) sqlite3_mutex_leave(registry_mutex);
             return;
         }
         
@@ -130,7 +130,7 @@ private:
             }
             curr = &(*curr)->next;
         }
-        registry_mutex->unlock();
+        if (registry_mutex) sqlite3_mutex_leave(registry_mutex);
         
         sqlite_delete(entry);
     }
@@ -155,8 +155,8 @@ private:
     static Entry* entry_alloc(const char *db_path, void (*init_fn)(T*)) {
         Entry *entry = sqlite_new<Entry>();
         if (entry) {
-            int path_len = (int)strlen(db_path);
-            entry->db_path = (char*)sqlite3_malloc(path_len + 1);
+            size_t path_len = strlen(db_path);
+            entry->db_path = (char*)sqlite3_malloc64(path_len + 1);
             if (entry->db_path) {
                 memcpy(entry->db_path, db_path, path_len + 1);
             } else {
@@ -199,9 +199,9 @@ private:
      */
     static Entry* entry_get(const char *db_path) {
         ensure_mutex_init();
-        registry_mutex->lock();
+        if (registry_mutex) sqlite3_mutex_enter(registry_mutex);
         Entry *entry = entry_find_locked(db_path);
-        registry_mutex->unlock();
+        if (registry_mutex) sqlite3_mutex_leave(registry_mutex);
         return entry;
     }
 
@@ -211,12 +211,12 @@ private:
      */
     static Entry* entry_get_or_create(const char *db_path, void (*init_fn)(T*)) {
         ensure_mutex_init();
-        registry_mutex->lock();
+        if (registry_mutex) sqlite3_mutex_enter(registry_mutex);
         Entry *entry = entry_find_locked(db_path);
         if (!entry) {
             entry = entry_alloc(db_path, init_fn);
         }
-        registry_mutex->unlock();
+        if (registry_mutex) sqlite3_mutex_leave(registry_mutex);
         return entry;
     }
 
@@ -251,12 +251,12 @@ public:
         char resolved_path[128];
         const char *db_path = get_db_path(db, resolved_path);
         ensure_mutex_init();
-        registry_mutex->lock();
+        if (registry_mutex) sqlite3_mutex_enter(registry_mutex);
         Entry *entry = entry_find_locked(db_path);
         if (entry) {
             entry_release(entry);
         }
-        registry_mutex->unlock();
+        if (registry_mutex) sqlite3_mutex_leave(registry_mutex);
         return entry ? &entry->state : nullptr;
     }
 
@@ -266,6 +266,34 @@ public:
         char resolved_path[128];
         const char *db_path = get_db_path(db, resolved_path);
         return (void*)entry_get_or_create(db_path, init_fn);
+    }
+
+    /**
+     * @brief Attempts to retrieve or create the strongly-typed shared state, returning SqliteResult.
+     */
+    static SqliteResult<T*> try_get_or_create(sqlite3 *db, void (*init_fn)(T*) = nullptr) {
+        if (!db) {
+            return SqliteResult<T*>::err(SQLITE_MISUSE, "Null database connection in SqliteExtState::try_get_or_create");
+        }
+        T* state = get_or_create(db, init_fn);
+        if (!state) {
+            return SqliteResult<T*>::nomem("Failed to allocate shared extension state in SqliteExtState::try_get_or_create");
+        }
+        return SqliteResult<T*>::ok(state);
+    }
+
+    /**
+     * @brief Attempts to initialize the shared state for the attached database, returning raw entry handle wrapped in SqliteResult.
+     */
+    static SqliteResult<void*> try_init(sqlite3 *db, void (*init_fn)(T*) = nullptr) {
+        if (!db) {
+            return SqliteResult<void*>::err(SQLITE_MISUSE, "Null database connection in SqliteExtState::try_init");
+        }
+        void* raw = init(db, init_fn);
+        if (!raw) {
+            return SqliteResult<void*>::nomem("Failed to allocate shared extension state in SqliteExtState::try_init");
+        }
+        return SqliteResult<void*>::ok(raw);
     }
 
     /** @brief Fetches state for the current query using the optimized 3-layer lookup. */
@@ -385,7 +413,7 @@ template <typename T, typename LockPolicy>
 typename SqliteExtState<T, LockPolicy>::Entry* SqliteExtState<T, LockPolicy>::registry_head = nullptr;
 
 template <typename T, typename LockPolicy>
-SqliteMutex* SqliteExtState<T, LockPolicy>::registry_mutex = nullptr;
+sqlite3_mutex* SqliteExtState<T, LockPolicy>::registry_mutex = nullptr;
 
 // Convenient Type Aliases for Lock Policies
 template <typename T>

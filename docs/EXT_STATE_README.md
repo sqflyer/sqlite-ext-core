@@ -80,6 +80,10 @@ static void test_counter_func(sqlite3_context *ctx, int argc, sqlite3_value **ar
 // In your init function:
 // void* raw_state = SqliteExtState<SharedState>::init(db);
 // sqlite3_create_function_v2(..., raw_state, ..., SqliteExtState<SharedState>::destructor);
+
+// Fallible variant returning SqliteResult:
+// SqliteResult<void*> init_res = SqliteExtState<SharedState>::try_init(db);
+// if (init_res.is_err()) return init_res.err_code();
 ```
 
 ### 3 (Alternative). Use it in your Functions (Pure C)

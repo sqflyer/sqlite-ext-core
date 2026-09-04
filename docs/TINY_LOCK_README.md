@@ -58,4 +58,5 @@ void do_work() {
 ```
 
 ## Integration
-TinyLock is currently used as the foundational locking primitive for the `SqliteSharedPtr` memory management system, embedding directly into the control block to save a heap allocation.
+TinyLock is used across extension subsystems as a high-performance, 1-byte critical section primitive, offering zero heap allocations and full `-nostdlib++` compatibility.
+

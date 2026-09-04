@@ -279,3 +279,15 @@ There are two critical dimensions to understanding **0 vs. NULL** in `sqlite-ext
 │ Container-Level Heap     │ Dynamic Heap ($N = 0$)                    │ Dynamic Runtime Spill ($\text{sz}>N$)│
 └──────────────────────────┴───────────────────────────────────────────┴──────────────────────────────────────┘
 ```
+
+---
+
+## 9. Fallible Container Operations & Rust-Style Error Architecture
+
+`SqliteValueVec<N>` provides complete fallible zero-exception alternatives for all operations that may trigger heap allocation or vector reallocation:
+
+- **`try_push_back(...)`**: Returns [`SqliteStatus`](file:///c:/msys64/home/dilipvamsi/works/repos/sqlite-ext-core/include/sqlite3_allocator.hpp#L775-L863). Guarantees strong exception safety (vector remains uncorrupted if heap reservation fails).
+- **`try_resize(new_count)`** and **`try_reserve(new_cap)`**: Return [`SqliteStatus`](file:///c:/msys64/home/dilipvamsi/works/repos/sqlite-ext-core/include/sqlite3_allocator.hpp#L775-L863).
+- **`try_clone()`**: Returns [`SqliteResult<SqliteValueVec<N>>`](file:///c:/msys64/home/dilipvamsi/works/repos/sqlite-ext-core/include/sqlite3_allocator.hpp#L882-L994).
+- Adheres strictly to the Rust-style error model: `is_err()`, `err_code()`, `err_message()`, and `SqliteResult::err()`.
+- Seamlessly interoperates with `SQLITE_TRY_ASSIGN(target, expr)` and `SQLITE_TRY(expr)` macros.

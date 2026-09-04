@@ -244,6 +244,49 @@ void test_cpp_weak_ptr() {
     assert(MyStruct::delete_count == 8);
 }
 
+void test_cpp_make_and_try_factories() {
+    // 1. sqlite_make_shared
+    {
+        SqliteSharedPtr<MyStruct> sp = sqlite_make_shared<MyStruct>();
+        assert(sp);
+        assert(sp.use_count() == 1);
+        sp->data = 77;
+        assert(sp->data == 77);
+    }
+    assert(MyStruct::delete_count == 9);
+
+    // 2. sqlite_make_unique
+    {
+        SqliteUniquePtr<MyStruct> up = sqlite_make_unique<MyStruct>();
+        assert(up);
+        up->data = 88;
+        assert(up->data == 88);
+    }
+    assert(MyStruct::delete_count == 10);
+
+    // 3. sqlite_try_make_shared
+    {
+        SqliteResult<SqliteSharedPtr<MyStruct>> res_sp = sqlite_try_make_shared<MyStruct>();
+        assert(res_sp.is_ok());
+        SqliteSharedPtr<MyStruct> sp = res_sp.unwrap();
+        assert(sp);
+        sp->data = 99;
+        assert(sp->data == 99);
+    }
+    assert(MyStruct::delete_count == 11);
+
+    // 4. sqlite_try_make_unique
+    {
+        SqliteResult<SqliteUniquePtr<MyStruct>> res_up = sqlite_try_make_unique<MyStruct>();
+        assert(res_up.is_ok());
+        SqliteUniquePtr<MyStruct> up = res_up.take_value();
+        assert(up);
+        up->data = 111;
+        assert(up->data == 111);
+    }
+    assert(MyStruct::delete_count == 12);
+}
+
 int main() {
     sqlite3_initialize();
     
@@ -255,7 +298,11 @@ int main() {
     
     test_cpp_weak_ptr();
     printf("C++ Weak Pointer Tests Passed!\n");
+
+    test_cpp_make_and_try_factories();
+    printf("C++ Make / Try Make Factories Tests Passed!\n");
     
     sqlite3_shutdown();
     return 0;
 }
+

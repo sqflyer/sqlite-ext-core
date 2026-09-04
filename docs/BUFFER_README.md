@@ -87,3 +87,28 @@ if (str) {
     // String is valid and ready to use
 }
 ```
+
+## 5. Fallible APIs & `SqliteResult<SqliteString>`
+
+For environments where memory limits are strictly enforced, `sqlite3_buffer.hpp` provides fallible methods returning [`SqliteResult`](file:///c:/msys64/home/dilipvamsi/works/repos/sqlite-ext-core/include/sqlite3_allocator.hpp#L882-L994) or [`SqliteStatus`](file:///c:/msys64/home/dilipvamsi/works/repos/sqlite-ext-core/include/sqlite3_allocator.hpp#L775-L863):
+
+```cpp
+// 1. Fallible string creation
+SqliteResult<SqliteString> res = SqliteString::try_create("Initial text data");
+if (res.is_err()) {
+    return res.status();
+}
+SqliteString str = res.take_value();
+
+// 2. Fallible buffer operations
+SqliteBuffer buf;
+SqliteStatus reserve_stat = buf.try_reserve(1024);
+if (reserve_stat.is_err()) {
+    return reserve_stat;
+}
+
+SqliteStatus append_stat = buf.try_append(data, data_len);
+if (append_stat.is_err()) {
+    printf("Buffer append failed [%d]: %s\n", append_stat.err_code(), append_stat.err_msg());
+}
+```

@@ -274,7 +274,33 @@ Base template class for all custom aggregate implementations:
 
 ---
 
-## 5. Deep-Dive Architecture Documentation
+## 5. Zero-Exception Error Propagation & Fallible Aggregation
+
+When executing under `-fno-exceptions`, aggregate steps or finalizers encountering allocation errors or invalid input can propagate error states directly using `SqliteContext::result_error` or `res.set_sqlite_err(ctx.get())`:
+
+```cpp
+struct FallibleConcat : public SqliteAggregateBase<void> {
+    SqliteString str;
+
+    void step(SqliteContext ctx, SqliteUdfArgs args) {
+        if (args.size() < 1) return;
+        SqliteStringView text = args[0].as_text();
+        SqliteStatus stat = str.try_append(text.data(), text.length());
+        if (stat.is_err()) {
+            stat.set_sqlite_err(ctx.get());
+        }
+    }
+
+    void finalize(SqliteContext ctx) {
+        ctx.result_text(str.c_str(), str.length());
+    }
+};
+```
+
+---
+
+## 6. Deep-Dive Architecture Documentation
 
 For memory layouts, alignment guarantees, 4-tier tag dispatching, and empty-set handling:
 - **[`docs/AGGREGATE_ARCHITECTURE.md`](AGGREGATE_ARCHITECTURE.md)**: Deep dive into `sqlite3_aggregate_context` storage, SFINAE return rank dispatching, and RAII destruction.
+

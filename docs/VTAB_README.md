@@ -368,7 +368,7 @@ SqliteFunctionDef findFunction(int nArg, const char* zName) override {
 
 // Called N times for N rows in the table
 static void my_match_udf(SqliteContext& ctx, SqliteUdfArgs args) {
-    const char* search_term = args[0].text();
+    const char* search_term = args[0].as_text().data();
     // Manual evaluation...
     ctx.result_int(1); // Keep row
 }
@@ -402,12 +402,13 @@ int bestIndex(SqliteIndexInfo& info) override {
 // Called EXACTLY ONCE per query
 int filter(int idxNum, const char* idxStr, SqliteUdfArgs args) override {
     if (idxNum == 42) {
-        const char* search_term = args[0].text(); 
+        const char* search_term = args[0].as_text().data(); 
         
-        // 1. Instantly lookup rows in a C++ std::unordered_map
+        // 1. Instantly lookup rows in a C++ data structure
         // 2. Set cursor limits to yield exactly those rows
     }
     return SQLITE_OK;
 }
 ```
+
 *Performance: O(1) or O(log N). This is exactly how FTS5 achieves blazing fast search.*

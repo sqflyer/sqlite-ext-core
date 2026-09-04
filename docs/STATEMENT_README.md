@@ -88,7 +88,7 @@ void store_column_in_map(sqlite3* db, std::map<SqliteValueOwned, int, std::less<
     while (stmt.next()) {
         // Extract directly into an owned polymorphic key (SBO for ints/floats, dup for text/blob)
         SqliteValueOwned key = stmt.column_value_owned(0);
-        my_map.emplace(std::move(key), 1);
+        my_map.emplace(sqlite_move(key), 1);
     }
 }
 ```

@@ -138,10 +138,19 @@ struct SqlTableBuffer {
      * @param row Rvalue reference to the `SqliteValueVec<8>` row to append.
      */
     void add_row(SqliteValueVec<8>&& row) {
+        try_add_row(sqlite_move(row));
+    }
+
+    /**
+     * @brief Attempts to append a new row vector to the table buffer, returning SqliteStatus.
+     */
+    SqliteStatus try_add_row(SqliteValueVec<8>&& row) {
         if (count >= capacity) {
             int new_cap = (capacity == 0) ? 8 : capacity * 2;
             SqliteValueVec<8>* new_rows = sqlite_new_array<SqliteValueVec<8>>((size_t)new_cap);
-            if (!new_rows) return;
+            if (!new_rows) {
+                return SqliteStatus::nomem("Failed to grow rows buffer in SqliteSqlTable::try_add_row");
+            }
             for (int i = 0; i < count; ++i) {
                 new (static_cast<void*>(&new_rows[i]), sqlite_new_tag()) SqliteValueVec<8>(sqlite_move(rows[i]));
             }
@@ -153,6 +162,7 @@ struct SqlTableBuffer {
             capacity = new_cap;
         }
         new (static_cast<void*>(&rows[count++]), sqlite_new_tag()) SqliteValueVec<8>(sqlite_move(row));
+        return SqliteStatus::ok();
     }
 };
 

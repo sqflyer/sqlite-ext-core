@@ -138,3 +138,18 @@ This matrix details which macro synthesizers are implemented by each class:
 | **`std::map<SqliteRowOwnedView, T>`** | N/A | N/A | `SqliteRowLess` | `SqliteRowOwnedView`, `SqliteRowOwnedWrapper`, `SqliteValueTuple<N>`, `SqliteValueVec<N>`, `SqliteRowView`, `SqliteValueOwned`, primitives |
 | **`std::unordered_map<SqliteStringOwned, T>`** | `SqliteValueHash` | `SqliteValueEqual` | N/A | `SqliteStringOwned`, `SqliteStringView`, `const char*` |
 | **`std::map<SqliteStringOwned, T>`** | N/A | N/A | `SqliteValueLess` | `SqliteStringOwned`, `SqliteStringView`, `const char*` |
+
+---
+
+## 11. Error Handling, Status & Fallible APIs Matrix (`sqlite3_allocator.hpp`)
+
+`sqlite-ext-core` strictly implements zero-exception, Rust-style error management:
+
+| Type / Primitive | Storage / Size | Payload | Monadic Methods | Pointer Operators | Key Methods | Primary Use Case |
+| :--- | :---: | :---: | :---: | :---: | :--- | :--- |
+| **`SqliteStatus`** | 16 Bytes (int code + const char* msg) | None | N/A | N/A | `is_ok()`, `is_err()`, `err_code()`, `err_message()`, `set_sqlite_err(ctx)`, `to_sqlite_code()` | Fallible void operations (`try_reserve`, `try_resize`, `try_push_back`, `try_init`). |
+| **`SqliteResult<T>`** | `sizeof(T)` + 16 Bytes | Typed `T` | `map()`, `map_err()`, `and_then()`, `or_else()`, `inspect()`, `inspect_err()` | `operator->()`, `operator*()` | `is_ok()`, `is_err()`, `unwrap()`, `take_value()`, `unwrap_or()`, `unwrap_or_default()`, `unwrap_or_else()`, `expect()`, `set_sqlite_err(ctx)` | Value-producing fallible operations (`try_create`, `try_clone`, `try_from_text`, `try_from_blob`, `try_get_or_create`, `sqlite_try_make_shared`, `sqlite_try_make_unique`, `sqlite_try_new`). |
+| **`SqliteResult<void>`** | 16 Bytes | None | `map()`, `map_err()`, `and_then()`, `or_else()`, `inspect()`, `inspect_err()` | N/A | `is_ok()`, `is_err()`, `unwrap()`, `expect()`, `set_sqlite_err(ctx)` | Monadic chaining over fallible void operations. |
+| **`SQLITE_TRY_ASSIGN(target, expr)`** | Macro | N/A | N/A | N/A | Cross-platform `do { ... } while(0)` early return | Evaluates `expr`, early-returns if `is_err() == true`, unwraps and assigns to `target`. |
+| **`SQLITE_TRY(expr)`** | Macro | N/A | N/A | N/A | Statement expression / Early return | Evaluates `expr`, early-returns if `is_err() == true`, unwraps expression result. |
+

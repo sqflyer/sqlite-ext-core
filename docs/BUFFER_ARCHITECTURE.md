@@ -42,3 +42,11 @@ In freestanding C++ without exceptions, runtime allocators (`sqlite3_realloc64`)
 1. **Non-Throwing Geometric Growth**: If `ensure_capacity()` fails during an append, the method cleanly returns `false` without corrupting existing buffered data.
 2. **Deterministic Null States**: Empty or unallocated buffers maintain `m_data == nullptr` and `m_size == 0`. Hashing an empty buffer safely hashes a null pointer (`SqliteHashUtil::hash(nullptr, 0)`), and comparisons against null or empty slices succeed deterministically.
 3. **Explicit Verification (`is_valid()`)**: Callers can verify allocation status via `is_valid()` or explicit boolean conversions (`if (buffer)` / `if (str)`).
+
+## Fallible Operations & Rust-Style Error Architecture
+
+For strict zero-exception environments:
+- **`SqliteString::try_create(str)`**: Returns [`SqliteResult<SqliteString>`](file:///c:/msys64/home/dilipvamsi/works/repos/sqlite-ext-core/include/sqlite3_allocator.hpp#L882-L994).
+- **`SqliteBuffer::try_reserve(cap)`** and **`SqliteBuffer::try_append(...)`**: Return [`SqliteStatus`](file:///c:/msys64/home/dilipvamsi/works/repos/sqlite-ext-core/include/sqlite3_allocator.hpp#L775-L863).
+- Conforms to standard Rust-style conventions: `is_err()`, `err_code()`, `err_message()`, and `SqliteResult::err()`.
+- Supports monadic chaining (`.map()`, `.and_then()`, `.or_else()`) and early-return macro propagation (`SQLITE_TRY_ASSIGN`, `SQLITE_TRY`).

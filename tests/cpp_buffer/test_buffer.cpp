@@ -242,15 +242,51 @@ void test_string() {
     assert(str3 == "Moved");
 }
 
+void test_try_methods() {
+    printf("3. Testing SqliteBuffer and SqliteString try_* methods...\n");
+    
+    SqliteBuffer buf;
+    SqliteStatus st = buf.try_reserve(64);
+    assert(st.is_ok());
+    assert(buf.capacity() >= 64);
+    
+    st = buf.try_append("Hello World", 11);
+    assert(st.is_ok());
+    assert(buf.bytes() == 11);
+    assert(memcmp(buf.data(), "Hello World", 11) == 0);
+    
+    SqliteResult<void*> res_uninit = buf.try_append_uninitialized(5);
+    assert(res_uninit.is_ok());
+    assert(res_uninit.unwrap() != nullptr);
+    memcpy(res_uninit.unwrap(), "12345", 5);
+    assert(buf.bytes() == 16);
+    
+    // SqliteString try_ methods
+    SqliteResult<SqliteString> res_str = SqliteString::try_create("Initial Value");
+    assert(res_str.is_ok());
+    SqliteString str = sqlite_move(res_str.unwrap());
+    assert(str == "Initial Value");
+    
+    st = str.try_append(" - Appended");
+    assert(st.is_ok());
+    assert(str == "Initial Value - Appended");
+    
+    SqliteResult<SqliteString> empty_res = SqliteString::try_create(nullptr);
+    assert(empty_res.is_ok());
+    assert(empty_res.unwrap().length() == 0);
+}
+
 int main() {
     // sqlite3_malloc requires initialization
     sqlite3_initialize();
 
     test_buffer();
     test_string();
+    test_try_methods();
 
     sqlite3_shutdown();
 
-    printf("\nAll 2 SqliteBuffer/SqliteString Test Suites Passed Successfully!\n");
+    printf("\nAll 3 SqliteBuffer/SqliteString Test Suites Passed Successfully!\n");
     return 0;
 }
+

@@ -16,7 +16,7 @@ The `SqliteBlobStream` wrapper adheres to our strict `-nostdlib++` constraints:
 
 1. **No Memory Allocations**: It holds exactly one 8-byte pointer (`sqlite3_blob*`). No dynamic memory is used.
 2. **Exception Safety**: The destructor guarantees that `sqlite3_blob_close` is called. Failing to close a blob handle leaves a long-lived read/write lock on the database, which will cause `SQLITE_BUSY` deadlocks on subsequent queries. RAII completely eliminates this class of bugs.
-3. **Move Semantics**: The copy constructors are explicitly deleted to prevent double-free bugs (`SQLITE_MISUSE`). The stream can be safely passed across scopes using `std::move`.
+3. **Move Semantics**: The copy constructors are explicitly deleted to prevent double-free bugs (`SQLITE_MISUSE`). The stream can be safely passed across scopes using `sqlite_move`.
 4. **Manual Override**: For complex threading scenarios where a lock must be yielded before the block scope exits, developers can call `.close()` manually. The destructor detects this and safely no-ops.
 
 ## Performance Heuristics

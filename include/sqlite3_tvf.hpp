@@ -112,6 +112,7 @@ struct SqliteTvfModule {
         if (rc == SQLITE_OK) {
             // Allocate the VTab using our zero-dependency memory allocator
             VTab* pTab = sqlite_new<VTab>();
+            if (!pTab) return SQLITE_NOMEM;
             // Capture the shared state pointer (pAux) on the VTab instance for xColumn injection
             pTab->raw_state = pAux;
             *ppVtab = &pTab->base;
@@ -158,8 +159,13 @@ struct SqliteTvfModule {
     // 4. xOpen
     static int xOpen(sqlite3_vtab* /*pVtab*/, sqlite3_vtab_cursor** ppCursor) {
         Cursor* pCur = sqlite_new<Cursor>();
+        if (!pCur) return SQLITE_NOMEM;
         // Instantiate the user's iterator
         pCur->iter = sqlite_new<T>();
+        if (!pCur->iter) {
+            sqlite_delete(pCur);
+            return SQLITE_NOMEM;
+        }
         *ppCursor = &pCur->base;
         return SQLITE_OK;
     }

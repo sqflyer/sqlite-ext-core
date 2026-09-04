@@ -1639,6 +1639,142 @@ public:
   }
 
   /**
+   * @brief Attempts to pre-allocate buffer capacity for at least `new_cap` elements, returning SqliteStatus.
+   */
+  inline SqliteStatus try_reserve(int new_cap) {
+    if (new_cap <= capacity())
+      return SqliteStatus::ok();
+    int current_sz = size();
+    uint32_t target_cap = static_cast<uint32_t>(new_cap);
+
+    if (!is_heap()) {
+      SqliteValueOwned *heap_buf =
+          sqlite_new_array_zeroed<SqliteValueOwned>(target_cap);
+      if (!heap_buf) {
+        return SqliteStatus::nomem("Failed to allocate heap buffer in SqliteValueVec::try_reserve");
+      }
+      if (current_sz > 0) {
+        memcpy(static_cast<void *>(heap_buf),
+               static_cast<const void *>(m_inline),
+               current_sz * sizeof(SqliteValueOwned));
+      }
+      init_empty();
+
+      m_heap.ptr = heap_buf;
+      m_heap.capacity = static_cast<uint16_t>(target_cap);
+      m_heap.size = static_cast<uint32_t>(current_sz);
+      m_heap.tag.clear();
+    } else {
+      SqliteValueOwned *new_buf =
+          sqlite_new_array_zeroed<SqliteValueOwned>(target_cap);
+      if (!new_buf) {
+        return SqliteStatus::nomem("Failed to allocate heap buffer in SqliteValueVec::try_reserve");
+      }
+      if (m_heap.size > 0 && m_heap.ptr) {
+        memcpy(static_cast<void *>(new_buf),
+               static_cast<const void *>(m_heap.ptr),
+               m_heap.size * sizeof(SqliteValueOwned));
+      }
+      if (m_heap.ptr) {
+        sqlite_delete_array(m_heap.ptr);
+      }
+      m_heap.ptr = new_buf;
+      m_heap.capacity = static_cast<uint16_t>(target_cap);
+    }
+    return SqliteStatus::ok();
+  }
+
+  /**
+   * @brief Attempts to resize vector buffer, returning SqliteStatus.
+   */
+  inline SqliteStatus try_resize(int new_count) {
+    if (new_count < 0)
+      new_count = 0;
+    if (new_count > capacity()) {
+      SqliteStatus stat = try_reserve(new_count);
+      if (stat.is_err())
+        return stat;
+    }
+    resize(new_count);
+    return SqliteStatus::ok();
+  }
+
+  /**
+   * @brief Attempts to append an element to the end of the vector by copy, returning SqliteStatus.
+   */
+  inline SqliteStatus try_push_back(const SqliteValueOwned &val) {
+    int sz = size();
+    if (sz >= capacity()) {
+      int new_cap = (sz == 0)
+                        ? (static_cast<int>(N) > 0 ? static_cast<int>(N) : 4)
+                        : sz * 2;
+      if (new_cap <= static_cast<int>(N))
+        new_cap = static_cast<int>(N) + 1;
+      SqliteStatus stat = try_reserve(new_cap);
+      if (stat.is_err())
+        return stat;
+    }
+    if (!is_heap()) {
+      sqlite_construct_at(&m_inline[sz], val.clone());
+    } else {
+      sqlite_construct_at(&m_heap.ptr[sz], val.clone());
+      m_heap.size++;
+    }
+    return SqliteStatus::ok();
+  }
+
+  /**
+   * @brief Attempts to append an element to the end of the vector by move, returning SqliteStatus.
+   */
+  inline SqliteStatus try_push_back(SqliteValueOwned &&val) {
+    int sz = size();
+    if (sz >= capacity()) {
+      int new_cap = (sz == 0)
+                        ? (static_cast<int>(N) > 0 ? static_cast<int>(N) : 4)
+                        : sz * 2;
+      if (new_cap <= static_cast<int>(N))
+        new_cap = static_cast<int>(N) + 1;
+      SqliteStatus stat = try_reserve(new_cap);
+      if (stat.is_err())
+        return stat;
+    }
+    if (!is_heap()) {
+      sqlite_construct_at(&m_inline[sz], sqlite_move(val));
+    } else {
+      sqlite_construct_at(&m_heap.ptr[sz], sqlite_move(val));
+      m_heap.size++;
+    }
+    return SqliteStatus::ok();
+  }
+
+  /**
+   * @brief Attempts to append a primitive or convertible value to the end of the vector, returning SqliteStatus.
+   */
+  template <typename TValueType> inline SqliteStatus try_push_back(TValueType &&val) {
+    return try_push_back(SqliteValueOwned(sqlite_forward<TValueType>(val)));
+  }
+
+  /**
+   * @brief Attempts to in-place construct a new element at the end of the vector, returning SqliteStatus.
+   */
+  template <typename... Args> inline SqliteStatus try_emplace_back(Args &&...args) {
+    return try_push_back(SqliteValueOwned(sqlite_forward<Args>(args)...));
+  }
+
+  /**
+   * @brief Attempts to duplicate/clone this vector, returning SqliteResult.
+   */
+  inline SqliteResult<SqliteValueVec<N>> try_clone() const {
+    SqliteValueVec<N> copy;
+    for (int i = 0; i < size(); ++i) {
+      SqliteStatus stat = copy.try_push_back((*this)[i]);
+      if (stat.is_err())
+        return SqliteResult<SqliteValueVec<N>>::err(stat.err_code(), stat.err_message());
+    }
+    return SqliteResult<SqliteValueVec<N>>::ok(sqlite_move(copy));
+  }
+
+  /**
    * @brief In-place constructs a new element at the end of the vector.
    *
    * Forwards constructor arguments directly into `SqliteValueOwned`
@@ -2042,6 +2178,102 @@ public:
   }
 
   /**
+   * @brief Attempts to pre-allocate heap buffer capacity for at least `new_cap` elements, returning SqliteStatus.
+   */
+  inline SqliteStatus try_reserve(int new_cap) {
+    if (new_cap <= static_cast<int>(m_capacity))
+      return SqliteStatus::ok();
+    uint32_t target_cap = static_cast<uint32_t>(new_cap);
+    SqliteValueOwned *new_buf =
+        sqlite_new_array_zeroed<SqliteValueOwned>(target_cap);
+    if (!new_buf) {
+      return SqliteStatus::nomem("Failed to allocate heap buffer in SqliteValueVec<0>::try_reserve");
+    }
+    if (m_size > 0 && m_data) {
+      memcpy(static_cast<void *>(new_buf), static_cast<const void *>(m_data),
+             m_size * sizeof(SqliteValueOwned));
+    }
+    if (m_data) {
+      sqlite_delete_array(m_data);
+    }
+    m_data = new_buf;
+    m_capacity = target_cap;
+    return SqliteStatus::ok();
+  }
+
+  /**
+   * @brief Attempts to resize the heap vector buffer, returning SqliteStatus.
+   */
+  inline SqliteStatus try_resize(int new_count) {
+    if (new_count < 0)
+      new_count = 0;
+    if (static_cast<uint32_t>(new_count) > m_capacity) {
+      SqliteStatus stat = try_reserve(new_count);
+      if (stat.is_err())
+        return stat;
+    }
+    resize(new_count);
+    return SqliteStatus::ok();
+  }
+
+  /**
+   * @brief Attempts to append an element to the end of the heap vector by copy, returning SqliteStatus.
+   */
+  inline SqliteStatus try_push_back(const SqliteValueOwned &val) {
+    if (m_size >= m_capacity) {
+      int new_cap = (m_capacity == 0) ? 8 : static_cast<int>(m_capacity * 2);
+      SqliteStatus stat = try_reserve(new_cap);
+      if (stat.is_err())
+        return stat;
+    }
+    sqlite_construct_at(&m_data[m_size], val.clone());
+    m_size++;
+    return SqliteStatus::ok();
+  }
+
+  /**
+   * @brief Attempts to append an element to the end of the heap vector by move, returning SqliteStatus.
+   */
+  inline SqliteStatus try_push_back(SqliteValueOwned &&val) {
+    if (m_size >= m_capacity) {
+      int new_cap = (m_capacity == 0) ? 8 : static_cast<int>(m_capacity * 2);
+      SqliteStatus stat = try_reserve(new_cap);
+      if (stat.is_err())
+        return stat;
+    }
+    sqlite_construct_at(&m_data[m_size], sqlite_move(val));
+    m_size++;
+    return SqliteStatus::ok();
+  }
+
+  /**
+   * @brief Attempts to append a primitive or convertible value to the end of the heap vector, returning SqliteStatus.
+   */
+  template <typename TValueType> inline SqliteStatus try_push_back(TValueType &&val) {
+    return try_push_back(SqliteValueOwned(sqlite_forward<TValueType>(val)));
+  }
+
+  /**
+   * @brief Attempts to in-place construct a new element at the end of the heap vector, returning SqliteStatus.
+   */
+  template <typename... Args> inline SqliteStatus try_emplace_back(Args &&...args) {
+    return try_push_back(SqliteValueOwned(sqlite_forward<Args>(args)...));
+  }
+
+  /**
+   * @brief Attempts to duplicate/clone this heap vector, returning SqliteResult.
+   */
+  inline SqliteResult<SqliteValueVec<0>> try_clone() const {
+    SqliteValueVec<0> copy;
+    for (int i = 0; i < size(); ++i) {
+      SqliteStatus stat = copy.try_push_back((*this)[i]);
+      if (stat.is_err())
+        return SqliteResult<SqliteValueVec<0>>::err(stat.err_code(), stat.err_message());
+    }
+    return SqliteResult<SqliteValueVec<0>>::ok(sqlite_move(copy));
+  }
+
+  /**
    * @brief In-place constructs a new element at the end of the heap vector.
    *
    * @tparam Args Constructor argument types.
@@ -2132,6 +2364,18 @@ public:
   SQLITE_DERIVE_CONTAINER_RELATIONAL_OPS(SqliteRowView)
   SQLITE_DERIVE_ALL_SCALAR_RELATIONAL_OPS
 };
+
+template <>
+inline SqliteResult<SqliteValueVec<0>>
+SqliteValueVec<0>::try_clone() const {
+  SqliteValueVec<0> copy;
+  for (int i = 0; i < size(); ++i) {
+    SqliteStatus stat = copy.try_push_back((*this)[i]);
+    if (stat.is_err())
+      return SqliteResult<SqliteValueVec<0>>::err(stat.err_code(), stat.err_message());
+  }
+  return SqliteResult<SqliteValueVec<0>>::ok(sqlite_move(copy));
+}
 
 // Symmetrical cross-container relational operators
 SQLITE_DERIVE_TEMPLATE_REVERSE_RELATIONAL_OPS(SqliteRowOwnedView, SqliteValueTuple)

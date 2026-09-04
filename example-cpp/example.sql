@@ -32,8 +32,16 @@ SELECT math_hypot(8.0, 15.0) AS pythagorean_17;
 -- |:---------------|
 -- | 17.0000        |
 
--- %% Scenario 2: Per-Connection Stateful Scalar Function (analytics_ping)
+-- %% Scenario 2: Fallible String Function (text_repeat)
+SELECT text_repeat('SQLite', 3) AS repeated_text;
+-- @snapshot
+-- | repeated_text |
+-- |:--------------|
+-- | SQLiteSQLiteSQLite |
+
+-- %% Scenario 3: Per-Connection Stateful Scalar Function (analytics_ping)
 SELECT analytics_ping() AS query_count_1;
+
 -- @snapshot
 -- | query_count_1 |
 -- |:--------------|
@@ -51,7 +59,7 @@ SELECT analytics_ping() AS query_count_3;
 -- |:--------------|
 -- | 3             |
 
--- %% Scenario 3: Object-Oriented Aggregate Function (geo_mean)
+-- %% Scenario 4: Object-Oriented Aggregate Function (geo_mean)
 CREATE TEMP TABLE sample_numbers(val REAL);
 INSERT INTO sample_numbers VALUES (2.0), (8.0), (32.0);
 
@@ -75,7 +83,7 @@ FROM sample_numbers;
 -- |:-----------|:---------------|
 -- | 5          | 32.0000        |
 
--- %% Scenario 4: Table-Valued Function (fibonacci)
+-- %% Scenario 5: Table-Valued Function (fibonacci)
 SELECT 
     idx AS term, 
     val AS fibonacci_number 
@@ -101,7 +109,7 @@ FROM fibonacci(12);
 -- |:------------|:------------------|
 -- | 12          | 144               |
 
--- %% Scenario 5: CTE and Relational Filtering with TVF
+-- %% Scenario 6: CTE and Relational Filtering with TVF
 WITH EvenFibs AS (
     SELECT idx, val 
     FROM fibonacci(10) 
@@ -117,5 +125,6 @@ ORDER BY val;
 -- | 6             | 8        |
 -- | 9             | 34       |
 
--- %% Scenario 6: Clean Teardown
+-- %% Scenario 7: Clean Teardown
 DROP TABLE sample_numbers;
+

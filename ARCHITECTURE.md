@@ -124,8 +124,21 @@ The repository maintains strict parity across two native build pipelines:
 
 ## 7. OOM Resilience & Multi-Translation-Unit (Multi-TU) Safety
 
-### Exception-Free OOM Hardening
-Because all code compiles with `-fno-exceptions` (`/EHs-c-`), allocation failures in constructors never throw `std::bad_alloc`. 
+### Exception-Free OOM Hardening & Pure Rust-Style Error Model
+Because all code compiles with `-fno-exceptions` (`/EHs-c-`), allocation failures never throw `std::bad_alloc`. We implement a comprehensive, pure Rust-style error handling model:
+- **Rust-Style Result Types (`SqliteResult<T>` & `SqliteStatus`)**: Tagged return structs bundling typed return payloads with SQLite integer error codes and custom error messages.
+  - Query state via `.is_ok()` and `.is_err()`.
+  - Unpack payloads safely with `.unwrap()`, `.unwrap_or(default_val)`, `.unwrap_or_default()`, and `.take_value()`.
+  - Monadic error inspect and handling with `.inspect_err([](SqliteStatus s) { ... })`, `.or_else([](SqliteStatus s) { ... })`, and `.and_then([]() { ... })`.
+  - Zero-boilerplate error setting on SQLite function execution contexts via `.set_sqlite_err(ctx.get())`, automatically mapping `SQLITE_NOMEM` to `sqlite3_result_error_nomem(ctx)`, `SQLITE_TOOBIG` to `sqlite3_result_error_toobig(ctx)`, and custom codes to `sqlite3_result_error` + `sqlite3_result_error_code`.
+- **Fallible Allocations (`sqlite_try_new`, `sqlite_try_new_array`)**:
+  - `sqlite_try_new<T>(args...)` constructs objects via `sqlite3_malloc64` and in-place placement-new, returning `SqliteResult<T*>`.
+  - `sqlite_try_new_array<T>(count)` allocates uninitialized array buffers, returning `SqliteResult<SqliteBufferView<T>>`.
+- **Portable Early-Return Macro (`SQLITE_TRY_ASSIGN`)**:
+  - Replaces tedious if-check error propagation with a portable 1-line macro:
+    ```cpp
+    SQLITE_TRY_ASSIGN(MyObj* obj, sqlite_try_new<MyObj>(args...));
+    ```
 - **Non-Throwing Valid States**: `SqliteValueOwned`, `SqliteStringOwned`, `SqliteBlobOwned`, `SqliteBuffer`, `SqliteString`, and `SqliteStatement` guarantee non-null / valid checking via `.is_valid()` and `explicit operator bool()`.
 - **Safe Degradation**: Operations on empty or unallocated objects return deterministic error codes (`SQLITE_NOMEM`, `SQLITE_MISUSE`) or safe default representations without dereferencing null pointers.
 

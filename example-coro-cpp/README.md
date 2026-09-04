@@ -127,63 +127,87 @@ Host App                 DB Connection 1          DB Connection 2        SqliteE
 // Unique tag type identifying this extension's worker pool
 struct CoroCppExtTag {};
 
+### A. Tag Definition & Process-Wide Atomic Metrics
+```cpp
+#include "sqlite3_ext_creator.hpp"
+#include "async/sqlite3_coro_ext_pool.hpp"
+#include "sqlite3_atomic.hpp"
+
+// Unique tag type identifying this extension's worker pool
+struct CoroCppExtTag {};
+using ExampleCoroPool = SqliteExtCoroPool<CoroCppExtTag>;
+
 // Extension-Presence Shared State (process-wide metrics)
-static SqliteAtomicInt g_total_tasks(0);
-static SqliteAtomicInt g_global_sum(0);
+static SqliteAtomicInt g_cpp_total_tasks(0);
+static SqliteAtomicInt g_cpp_global_sum(0);
 ```
 
 ### B. Capturing Lambda Closure Spawning
 ```cpp
-static void sql_coro_cpp_spawn(sqlite3_context* ctx, int argc, sqlite3_value** argv) {
-    int db_id = sqlite3_value_int(argv[0]);
-    int item_id = sqlite3_value_int(argv[1]);
-    int multiplier = sqlite3_value_int(argv[2]);
-
-    // Spawn stateful capturing lambda closure into tagged extension pool
-    bool enqueued = sqlite_coro_ext_spawn<CoroCppExtTag>([db_id, item_id, multiplier]() {
-        // Stage 1: Initial local calculation
-        int intermediate = item_id * multiplier;
-
-        // Cooperatively yield CPU control to let other fibers run
-        SqliteCoroScheduler::yield();
-
-        // Stage 2: Second processing phase
-        intermediate += 100;
-
-        // Cooperatively yield again
-        SqliteCoroScheduler::yield();
-
-        // Stage 3: Atomic aggregation into extension metrics
-        g_global_sum += intermediate;
-        g_total_tasks += 1;
-    });
-
-    if (!enqueued) {
-        sqlite3_result_error(ctx, "Failed to enqueue task in C++ extension pool", -1);
+static void sql_coro_cpp_spawn(SqliteContext ctx, SqliteUdfArgs args) {
+    if (args.size() < 3) {
+        ctx.result_error("coro_cpp_spawn requires (db_id, item_id, multiplier)");
         return;
     }
 
-    sqlite3_result_text(ctx, "ENQUEUED_IN_CPP_EXTENSION_POOL", -1, SQLITE_STATIC);
+    int db_id = (int)args[0].as_int64();
+    int item_id = (int)args[1].as_int64();
+    int multiplier = (int)args[2].as_int64();
+
+    // Universal type-safe template spawn into this extension's tagged pool
+    bool ok = sqlite_coro_ext_spawn<CoroCppExtTag>([db_id, item_id, multiplier]() {
+        (void)db_id;
+        // Stage 1: Initial computation for the calling database
+        int intermediate = item_id * multiplier;
+
+        // Cooperatively yield CPU control so other database fibers can run
+        SqliteCoroScheduler::yield();
+
+        // Stage 2: Second processing phase
+        intermediate += 200;
+
+        SqliteCoroScheduler::yield();
+
+        // Stage 3: Atomic accumulation into extension metrics
+        g_cpp_global_sum += intermediate;
+        g_cpp_total_tasks += 1;
+    });
+
+    if (!ok) {
+        ctx.result_error("Failed to enqueue closure in extension pool");
+        return;
+    }
+
+    ctx.result_text("ENQUEUED_IN_CPP_EXTENSION_POOL");
 }
 ```
 
 ### C. Synchronous Barrier & Metric Getters
 ```cpp
 // SQL: SELECT coro_cpp_wait();
-static void sql_coro_cpp_wait(sqlite3_context* ctx, int argc, sqlite3_value** argv) {
+static void sql_coro_cpp_wait(SqliteContext ctx, SqliteUdfArgs args) {
+    (void)args;
     // Blocks calling thread until all queued and executing tasks finish
-    SqliteExtCoroPool<CoroCppExtTag>::wait_all();
-    sqlite3_result_text(ctx, "CPP_EXTENSION_POOL_DRAINED", -1, SQLITE_STATIC);
+    ExampleCoroPool::wait_all();
+    ctx.result_text("CPP_EXTENSION_POOL_DRAINED");
 }
 
 // SQL: SELECT coro_cpp_global_sum();
-static void sql_coro_cpp_global_sum(sqlite3_context* ctx, int argc, sqlite3_value** argv) {
-    sqlite3_result_int(ctx, g_global_sum.load());
+static void sql_coro_cpp_global_sum(SqliteContext ctx, SqliteUdfArgs args) {
+    (void)args;
+    ctx.result_int(g_cpp_global_sum.load());
+}
+
+// SQL: SELECT coro_cpp_tasks_completed();
+static void sql_coro_cpp_tasks_completed(SqliteContext ctx, SqliteUdfArgs args) {
+    (void)args;
+    ctx.result_int(g_cpp_total_tasks.load());
 }
 
 // SQL: SELECT coro_cpp_ref_count();
-static void sql_coro_cpp_ref_count(sqlite3_context* ctx, int argc, sqlite3_value** argv) {
-    sqlite3_result_int(ctx, SqliteExtCoroPool<CoroCppExtTag>::ref_count());
+static void sql_coro_cpp_ref_count(SqliteContext ctx, SqliteUdfArgs args) {
+    (void)args;
+    ctx.result_int(ExampleCoroPool::ref_count());
 }
 ```
 
@@ -191,28 +215,45 @@ static void sql_coro_cpp_ref_count(sqlite3_context* ctx, int argc, sqlite3_value
 ```cpp
 static void on_db_disconnect(void* arg) {
     (void)arg;
-    // Release reference from this database connection
-    SqliteExtCoroPool<CoroCppExtTag>::release();
+    // Decrement database connection reference count for this extension tag
+    ExampleCoroPool::release();
 }
 
-static int register_coro_cpp_extension(sqlite3* db) {
-    // Acquire the shared extension presence worker pool (4 background OS threads)
-    SqliteCoroScheduler* pool = SqliteExtCoroPool<CoroCppExtTag>::acquire(4);
+static int register_coro_cpp_extension(SqliteDatabaseView db) {
+    // 1. Acquire reference to the tagged extension presence worker pool (4 workers)
+    SqliteCoroScheduler* pool = ExampleCoroPool::acquire(4);
     if (!pool) return SQLITE_NOMEM;
 
-    // Register scalar functions with disconnection callback attached
-    sqlite3_create_function_v2(db, "coro_cpp_spawn", 3, SQLITE_UTF8, nullptr,
-                               sql_coro_cpp_spawn, nullptr, nullptr, on_db_disconnect);
-    sqlite3_create_function(db, "coro_cpp_wait", 0, SQLITE_UTF8, nullptr,
-                            sql_coro_cpp_wait, nullptr, nullptr);
-    sqlite3_create_function(db, "coro_cpp_global_sum", 0, SQLITE_UTF8, nullptr,
-                            sql_coro_cpp_global_sum, nullptr, nullptr);
-    sqlite3_create_function(db, "coro_cpp_tasks_completed", 0, SQLITE_UTF8, nullptr,
-                            sql_coro_cpp_tasks_completed, nullptr, nullptr);
-    sqlite3_create_function(db, "coro_cpp_ref_count", 0, SQLITE_UTF8, nullptr,
-                            sql_coro_cpp_ref_count, nullptr, nullptr);
+    // 2. Register scalar functions with disconnection callback attached
+    sqlite3_create_function_v2(
+        db.get(), "coro_cpp_spawn", 3, SQLITE_UTF8, nullptr,
+        [](sqlite3_context* c, int argc, sqlite3_value** argv) {
+            SqliteContext ctx(c);
+            SqliteUdfArgs args(argv, argc);
+            sql_coro_cpp_spawn(ctx, args);
+        },
+        nullptr, nullptr, on_db_disconnect
+    );
+
+    SqliteExt::define_scalar(db, "coro_cpp_wait", 0, sql_coro_cpp_wait);
+    SqliteExt::define_scalar(db, "coro_cpp_global_sum", 0, sql_coro_cpp_global_sum);
+    SqliteExt::define_scalar(db, "coro_cpp_tasks_completed", 0, sql_coro_cpp_tasks_completed);
+    SqliteExt::define_scalar(db, "coro_cpp_ref_count", 0, sql_coro_cpp_ref_count);
 
     return SQLITE_OK;
+}
+
+// Named Entrypoints & Default Entrypoint
+SQLITE_EXTENSION_ENTRYPOINT(libcoro_cpp_example, db) {
+    return register_coro_cpp_extension(db);
+}
+
+SQLITE_EXTENSION_ENTRYPOINT(coro_cpp_example, db) {
+    return register_coro_cpp_extension(db);
+}
+
+SQLITE_DEFAULT_EXTENSION_ENTRYPOINT(db) {
+    return register_coro_cpp_extension(db);
 }
 ```
 
@@ -260,23 +301,26 @@ make example-coro-cpp
 SELECT coro_cpp_ref_count() AS active_db_connections; -- 1
 
 -- 2. Dispatch batch of capturing lambda fibers from Database 1
-SELECT coro_cpp_spawn(1, 10, 2) AS db1_t1,
-       coro_cpp_spawn(1, 20, 2) AS db1_t2,
-       coro_cpp_spawn(1, 30, 2) AS db1_t3,
-       coro_cpp_spawn(1, 40, 2) AS db1_t4,
-       coro_cpp_spawn(1, 50, 2) AS db1_t5;
+SELECT 
+    coro_cpp_spawn(1, 1, 10) AS db1_t1,
+    coro_cpp_spawn(1, 2, 10) AS db1_t2,
+    coro_cpp_spawn(1, 3, 10) AS db1_t3;
 
 -- 3. Dispatch batch of capturing lambda fibers from Database 2
-SELECT coro_cpp_spawn(2, 60, 2) AS db2_t6,
-       coro_cpp_spawn(2, 70, 2) AS db2_t7,
-       coro_cpp_spawn(2, 80, 2) AS db2_t8,
-       coro_cpp_spawn(2, 90, 2) AS db2_t9,
-       coro_cpp_spawn(2, 100, 2) AS db2_t10;
+SELECT 
+    coro_cpp_spawn(2, 4, 10) AS db2_t4,
+    coro_cpp_spawn(2, 5, 10) AS db2_t5;
 
--- 4. Synchronously drain all 10 capturing lambda tasks
+-- 4. Synchronously drain all 5 capturing lambda tasks
 SELECT coro_cpp_wait() AS synchronization_status; -- 'CPP_EXTENSION_POOL_DRAINED'
 
--- 5. Validate aggregate metrics
-SELECT coro_cpp_tasks_completed() AS total_tasks_completed; -- 10
-SELECT coro_cpp_global_sum() AS global_accumulated_sum;     -- 2550
+-- 5. Validate aggregate metrics (intermediate values: 210 + 220 + 230 + 240 + 250 = 1150)
+SELECT coro_cpp_tasks_completed() AS total_tasks_completed; -- 5
+SELECT coro_cpp_global_sum()      AS global_accumulated_sum;     -- 1150
+
+-- 6. Secondary Batch Enqueue and Verification (Task 6: 60 + 200 = 260)
+SELECT coro_cpp_spawn(1, 6, 10) AS db1_t6;
+SELECT coro_cpp_wait() AS synchronization_status;
+SELECT coro_cpp_tasks_completed() AS total_tasks_completed; -- 6
+SELECT coro_cpp_global_sum()      AS global_accumulated_sum;     -- 1410
 ```

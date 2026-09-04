@@ -146,3 +146,29 @@ public:
 ```
 
 All methods are marked `inline` and compile down to direct SQLite C-API calls with zero indirection overhead.
+
+---
+
+## 6. Zero-Exception Error Propagation (`SqliteResult` & `set_sqlite_err`)
+
+In environments compiling with `-fno-exceptions`, fallible subsystems and memory allocations return `SqliteResult<T>` or `SqliteStatus`. When a fallible call fails inside a UDF handler, `res.set_sqlite_err(ctx.get())` sets the SQLite context error code and message without heap allocation or runtime exceptions:
+
+```cpp
+static void udf_transform(SqliteContext ctx, SqliteUdfArgs args) {
+    if (args.size() < 1) {
+        ctx.result_error("udf_transform requires 1 argument");
+        return;
+    }
+
+    SqliteResult<SqliteString> res = SqliteString::try_create(256);
+    if (res.is_err()) {
+        res.set_sqlite_err(ctx.get());
+        return;
+    }
+    SqliteString str = res.take_value();
+    str.append("processed: ");
+    str.append(args[0].as_text().data(), args[0].as_text().length());
+    ctx.result_text(str.c_str(), str.length());
+}
+```
+

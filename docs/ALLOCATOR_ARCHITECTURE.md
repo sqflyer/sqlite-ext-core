@@ -75,3 +75,33 @@ For contiguous arrays, `sqlite3_allocator.hpp` adopts a strict "decoupled memory
 5. **`sqlite_uninitialized_copy_n` / `sqlite_uninitialized_move_n`**: Range copy and move algorithms for uninitialized storage with trivial type copy elision fast-paths.
 
 By isolating these pure memory primitives into `sqlite3_allocator.hpp`, higher-level abstractions like `sqlite3_row.hpp` and `sqlite3_value_containers.hpp` maintain 100% C ABI compatibility and zero-std compliance.
+
+---
+
+## 5. Explicit Error Handling: `SqliteStatus` & `SqliteResult<T>`
+
+To support zero-exception architectures and explicit error bubbling without throwing C++ exceptions:
+
+### `SqliteStatus`
+A lightweight C-compatible status struct bundling an integer SQLite return code (`code`) and an optional custom error message (`message`).
+- Status checking: `is_ok()`, `is_err()`
+- Error extraction: `err_code()`, `err_message()`, `err_msg()`, `msg()`
+- Comparison: `operator==(int)`, `operator!=(int)`
+- Factories: `SqliteStatus::ok()`, `SqliteStatus::err(code, msg)`, `SqliteStatus::nomem(msg)`
+
+### `SqliteResult<T>` & `SqliteResult<void>`
+A product-type struct holding a typed payload `T val` alongside `SqliteStatus stat`:
+- **Pointer Operators**: `operator->()`, `operator*()` for pointer-like ergonomics.
+- **Value Extraction & Fallbacks**: `unwrap()`, `take_value()`, `unwrap_or(default_val)`, `unwrap_or_default()`, `unwrap_or_else(fn)`, `expect(msg)`.
+- **Monadic Combinators**:
+  - `map(fn)`: Transforms payload `T -> U` on success; propagates error status on failure.
+  - `and_then(fn)`: Chains with fallible operations returning `SqliteResult<U>`.
+  - `or_else(fn)`: Error recovery with fallback callable.
+  - `map_err(fn)`: Transforms error metadata.
+  - `inspect(fn)` / `inspect_err(fn)`: Non-intrusive side-effect inspection callbacks.
+- **SQLite Extension Integration**: `set_sqlite_err(sqlite3_context *ctx)` to route errors directly into SQLite query contexts.
+- **`SqliteResult<void>`**: Specialized value-less result for pure effect/fallible execution with chaining support.
+
+### Propagation Macros
+- `SQLITE_TRY_ASSIGN(target, expr)`: Cross-compiler portable (MSVC / GCC / Clang) early-return propagation macro.
+- `SQLITE_TRY(expr)`: Expression-based propagation macro for GCC and Clang (`__GNUC__`).

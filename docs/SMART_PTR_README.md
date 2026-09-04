@@ -87,7 +87,22 @@ void weak_example() {
     if (locked) {
         locked->id = 20;
     }
+### 4. Fallible Constructors (`sqlite_try_make_shared`, `sqlite_try_make_unique`)
+
+For memory-constrained environments where allocation failures must be caught explicitly:
+
+```cpp
+SqliteResult<SqliteSharedPtr<MyPayload>> res_sp = sqlite_try_make_shared<MyPayload>();
+if (res_sp.is_err()) {
+    return res_sp.status();
 }
+SqliteSharedPtr<MyPayload> sp = res_sp.take_value();
+
+SqliteResult<SqliteUniquePtr<MyPayload>> res_up = sqlite_try_make_unique<MyPayload>();
+if (res_up.is_err()) {
+    return res_up.status();
+}
+SqliteUniquePtr<MyPayload> up = res_up.take_value();
 ```
 
 ---

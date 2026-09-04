@@ -457,3 +457,25 @@ All classes strictly adhere to freestanding `-nostdlib++` requirements:
 - Dynamic heap vectors use `sqlite3_malloc64` / `sqlite3_free` via placement new/destroy utilities from `sqlite3_allocator.hpp`.
 - Move operations utilize `sqlite_move` from `sqlite3_allocator.hpp` with zero dependency on `<utility>`.
 - Exceptions are disabled (`-fno-exceptions`); memory failures produce safe deterministic null states verified via `.is_valid()` and `explicit operator bool()`.
+
+---
+
+## 12. Fallible Allocation & Zero-Exception Error Architecture
+
+For strict zero-exception environments where allocation failures must be propagated explicitly:
+
+### Fallible Factories & Methods
+- `SqliteValueOwned::try_from_text(...)`: Returns `SqliteResult<SqliteValueOwned>`, yielding `SQLITE_NOMEM` on allocation failure.
+- `SqliteValueOwned::try_from_blob(...)`: Returns `SqliteResult<SqliteValueOwned>`.
+- `SqliteValueOwned::try_from_json(...)`: Returns `SqliteResult<SqliteValueOwned>`.
+- `SqliteValueOwned::try_set_text(...)`: Returns `SqliteStatus`, maintaining strong exception safety (leaves original value uncorrupted on `SQLITE_NOMEM` or `SQLITE_READONLY`).
+- `SqliteValueOwned::try_set_blob(...)`: Returns `SqliteStatus`.
+- `SqliteStringOwned::try_append(...)` / `try_appendall(...)`: Returns `SqliteStatus`.
+- `SqliteStringOwned::try_create(...)`: Returns `SqliteResult<SqliteStringOwned>`.
+
+### Error Propagation Standard
+All fallible methods return [`SqliteResult<T>`](file:///c:/msys64/home/dilipvamsi/works/repos/sqlite-ext-core/include/sqlite3_allocator.hpp#L882-L994) or [`SqliteStatus`](file:///c:/msys64/home/dilipvamsi/works/repos/sqlite-ext-core/include/sqlite3_allocator.hpp#L775-L863) conforming to the Rust-style error model:
+- `res.is_err()` and `res.is_ok()` for status checking.
+- `res.err_code()` and `res.err_message()` / `res.err_msg()` for error metadata.
+- Monadic chaining via `.map()`, `.and_then()`, `.or_else()`, and `.inspect_err()`.
+- Seamless macro propagation with `SQLITE_TRY_ASSIGN(target, expr)` and `SQLITE_TRY(expr)`.

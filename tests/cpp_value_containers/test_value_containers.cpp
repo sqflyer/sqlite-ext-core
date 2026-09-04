@@ -1987,7 +1987,67 @@ static void test_container_pointer_traits_and_passing() {
   assert(row_view_ptr.as_pointer<SqliteRowOwnedView>()->size() == 2);
   assert((*row_view_ptr.as_pointer<SqliteRowOwnedView>())[0].as_int64() == 777LL);
 
-  printf("   [PASS] Container Pointer Traits & Semantic Equivalence verified.\n");
+  printf("   [PASS] Container Pointer Traits and Passing verified.\n");
+}
+
+static void test_value_vec_try_methods() {
+  printf("14. Testing SqliteValueVec try_* fallible methods...\n");
+
+  // 1. Stack SBO (N=4)
+  SqliteValueVec<4> v4;
+  SqliteStatus st = v4.try_reserve(10);
+  assert(st.is_ok());
+  assert(v4.capacity() >= 10);
+
+  st = v4.try_push_back(SqliteValueOwned(42));
+  assert(st.is_ok());
+  assert(v4.size() == 1);
+  assert(v4[0].as_int() == 42);
+
+  st = v4.try_emplace_back(100);
+  assert(st.is_ok());
+  assert(v4.size() == 2);
+  assert(v4[1].as_int() == 100);
+
+  st = v4.try_resize(5);
+  assert(st.is_ok());
+  assert(v4.size() == 5);
+  assert(v4[4].is_null());
+
+  SqliteResult<SqliteValueVec<4>> clone_res = v4.try_clone();
+  assert(clone_res.is_ok());
+  SqliteValueVec<4> v4_clone = clone_res.unwrap();
+  assert(v4_clone.size() == 5);
+  assert(v4_clone[0].as_int() == 42);
+
+  // 2. Direct Heap Vector (N=0)
+  SqliteValueVec<0> v0;
+  st = v0.try_reserve(8);
+  assert(st.is_ok());
+  assert(v0.capacity() >= 8);
+
+  st = v0.try_push_back(SqliteValueOwned("heap_vec_str"));
+  assert(st.is_ok());
+  assert(v0.size() == 1);
+  assert(v0[0].as_text() == SqliteStringView("heap_vec_str"));
+
+  st = v0.try_emplace_back(3.14159);
+  assert(st.is_ok());
+  assert(v0.size() == 2);
+  assert(v0[1].as_double() > 3.14);
+
+  st = v0.try_resize(4);
+  assert(st.is_ok());
+  assert(v0.size() == 4);
+  assert(v0[3].is_null());
+
+  SqliteResult<SqliteValueVec<0>> clone0_res = v0.try_clone();
+  assert(clone0_res.is_ok());
+  SqliteValueVec<0> v0_clone = clone0_res.unwrap();
+  assert(v0_clone.size() == 4);
+  assert(v0_clone[0].as_text() == SqliteStringView("heap_vec_str"));
+
+  printf("   [PASS] SqliteValueVec try_* fallible methods verified.\n");
 }
 
 int main() {
@@ -2008,9 +2068,11 @@ int main() {
   test_exhaustive_edge_cases_and_coverage();
   test_std_array_and_vector_alignment();
   test_container_pointer_traits_and_passing();
+  test_value_vec_try_methods();
 
   printf("=================================================================\n");
   printf("All Value Container Core Tests Passed Successfully (100%%)!\n");
   printf("=================================================================\n");
   return 0;
 }
+

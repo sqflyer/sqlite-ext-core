@@ -72,6 +72,9 @@ struct SeriesIterator : public SqliteTvfIterator {
 };
 ```
 
+> [!TIP]
+> **Error Propagation**: If a column calculation or data fetching operation fails, use `SqliteResult<T>` or `SqliteStatus` with `res.set_sqlite_err(ctx.get())` to set the appropriate SQLite engine error code without throwing exceptions.
+
 ---
 
 ## 3. Registering and Executing the TVF

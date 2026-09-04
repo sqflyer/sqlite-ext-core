@@ -24,7 +24,7 @@ SQLITE_UNIQUE_PTR_DEFINE(MyStruct, MyStruct, my_free)
 int main() {
     sqlite3_initialize();
     
-    MyStruct* raw = (MyStruct*)sqlite3_malloc(sizeof(MyStruct));
+    MyStruct* raw = (MyStruct*)sqlite3_malloc64(sizeof(MyStruct));
     raw->data = 42;
     raw->freed = 0;
     
@@ -42,14 +42,22 @@ int main() {
     assert(sp_moved.cb != 0);
     assert(sp_moved.cb->strong_count == 2); // Ref count didn't change
     
-    MyStruct_release(&sp_moved);
+    // Test C SharedPtr Assign Move
+    MyStruct_SharedPtr sp_assigned;
+    sp_assigned.cb = 0;
+    MyStruct_assign_move(&sp_assigned, &sp_moved);
+    assert(sp_moved.cb == 0);
+    assert(sp_assigned.cb != 0);
+    assert(sp_assigned.cb->strong_count == 2);
+    
+    MyStruct_release(&sp_assigned);
     assert(sp2.cb->strong_count == 1);
     
     MyStruct_release(&sp2);
     assert(g_last_freed == raw);
     
     // Test C SharedPtr Reset
-    MyStruct* raw3 = (MyStruct*)sqlite3_malloc(sizeof(MyStruct));
+    MyStruct* raw3 = (MyStruct*)sqlite3_malloc64(sizeof(MyStruct));
     raw3->data = 33;
     MyStruct_SharedPtr sp3 = MyStruct_make_shared(raw3);
     MyStruct_reset(&sp3);
@@ -77,7 +85,7 @@ int main() {
     
     printf("C Shared Pointer Tests Passed!\n");
     
-    MyStruct* raw2 = (MyStruct*)sqlite3_malloc(sizeof(MyStruct));
+    MyStruct* raw2 = (MyStruct*)sqlite3_malloc64(sizeof(MyStruct));
     raw2->data = 100;
     raw2->freed = 0;
     
@@ -105,7 +113,7 @@ int main() {
     printf("C Unique Pointer Tests Passed!\n");
     
     // Test C WeakPtr
-    MyStruct* raw4 = (MyStruct*)sqlite3_malloc(sizeof(MyStruct));
+    MyStruct* raw4 = (MyStruct*)sqlite3_malloc64(sizeof(MyStruct));
     raw4->data = 44;
     MyStruct_SharedPtr sp4 = MyStruct_make_shared(raw4);
     
@@ -154,7 +162,7 @@ int main() {
     MyStruct_weak_reset(&wp_null_moved); // shouldn't crash
     MyStruct_weak_release(0); // shouldn't crash
     
-    MyStruct* raw5 = (MyStruct*)sqlite3_malloc(sizeof(MyStruct));
+    MyStruct* raw5 = (MyStruct*)sqlite3_malloc64(sizeof(MyStruct));
     raw5->data = 55;
     MyStruct_SharedPtr sp5_valid = MyStruct_make_shared(raw5);
     MyStruct_WeakPtr wp_valid = MyStruct_weak_create(sp5_valid);

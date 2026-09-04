@@ -43,7 +43,10 @@ $(TARGET): example.cpp | $(BUILD_DIR)
 run: $(TARGET)
 	sqlite3 :memory: ".read example.sql"
 
+test: run
+
 clean:
 	rm -rf $(BUILD_DIR)
 
-.PHONY: all run clean
+.PHONY: all run test clean
+

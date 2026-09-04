@@ -78,3 +78,29 @@ Use `sqlite_move` (or `sqlite_move_ptr`) in place of `std::move` to transfer own
 ```cpp
 MyClass new_obj = sqlite_move(old_obj);
 ```
+
+### 6. Fallible APIs & Monadic `SqliteResult<T>`
+
+`sqlite3_allocator.hpp` includes zero-exception, Go/Rust-style status and result types for explicit error handling:
+
+```cpp
+// 1. Allocations returning SqliteResult
+SqliteResult<MyClass*> res = sqlite_try_new<MyClass>(10, "test");
+if (res.is_err()) {
+    printf("Allocation failed [%d]: %s\n", res.err_code(), res.err_msg());
+    return res.status();
+}
+
+// 2. Pointer operator access
+MyClass* obj = *res;
+res->do_something();
+
+// 3. Monadic chaining & lazy fallbacks
+SqliteResult<int> val = res.map([](MyClass* o) { return o->calculate(); })
+                           .and_then([](int v) { return compute_next(v); });
+
+int count = val.unwrap_or_else([](const SqliteStatus& st) { return fallback_calc(); });
+
+// 4. Early-return propagation macro
+SQLITE_TRY_ASSIGN(auto ptr, sqlite_try_new<MyClass>(20, "another"));
+```

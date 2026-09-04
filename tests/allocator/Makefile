@@ -27,10 +27,14 @@ CXXFLAGS := -std=c++11 -Wall -Wextra -I../../include -fno-exceptions -fno-rtti $
 LDFLAGS_CXX := -lsqlite3 $(SAN_FLAGS)
 BIN_DIR = bin
 
-test: $(BIN_DIR)/test_allocator
+test: $(BIN_DIR)/test_allocator $(BIN_DIR)/test_allocator_oom
 	./$(BIN_DIR)/test_allocator
+	./$(BIN_DIR)/test_allocator_oom
 
 $(BIN_DIR)/test_allocator: test_allocator.cpp | $(BIN_DIR)
+	$(CXX) $(CXXFLAGS) -o $@ $< $(LDFLAGS_CXX)
+
+$(BIN_DIR)/test_allocator_oom: test_allocator_oom.cpp | $(BIN_DIR)
 	$(CXX) $(CXXFLAGS) -o $@ $< $(LDFLAGS_CXX)
 
 $(BIN_DIR):

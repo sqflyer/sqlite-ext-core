@@ -58,6 +58,39 @@ static void analytics_ping(SqliteContext ctx, SqliteUdfArgs args) {
     ctx.result_int(count);
 }
 
+// Fallible Scalar: text_repeat(str, count) -> repeats string using SqliteResult<SqliteString>
+static void text_repeat(SqliteContext ctx, SqliteUdfArgs args) {
+    if (args.size() < 2) {
+        ctx.result_error("text_repeat requires (text, count)");
+        return;
+    }
+    SqliteStringView text = args[0].as_text();
+    int count = static_cast<int>(args[1].as_int64());
+    if (count < 0) count = 0;
+
+    // Fallible buffer allocation returning SqliteResult<SqliteString>
+    auto res_buf = SqliteString::try_create();
+    if (res_buf.is_err()) {
+        res_buf.set_sqlite_err(ctx.get());
+        return;
+    }
+    SqliteString str = res_buf.take_value();
+    SqliteStatus reserve_stat = str.try_reserve(text.length() * count + 1);
+    if (reserve_stat.is_err()) {
+        reserve_stat.set_sqlite_err(ctx.get());
+        return;
+    }
+    for (int i = 0; i < count; ++i) {
+        SqliteStatus stat = str.try_append(text.data(), text.length());
+        if (stat.is_err()) {
+            stat.set_sqlite_err(ctx.get());
+            return;
+        }
+    }
+    ctx.result_text(str.c_str(), str.length());
+}
+
+
 // ============================================================================
 // 3. Object-Oriented Aggregate Function
 // ============================================================================
@@ -151,8 +184,12 @@ static int register_all_components(SqliteDatabaseView db) {
     int rc = SqliteExt::define_scalar(db, "math_hypot", 2, math_hypot);
     if (rc != SQLITE_OK) return rc;
 
+    rc = SqliteExt::define_scalar(db, "text_repeat", 2, text_repeat);
+    if (rc != SQLITE_OK) return rc;
+
     rc = SqliteExt::define_scalar_with_state<AnalyticsState, analytics_ping>(db, "analytics_ping", 0);
     if (rc != SQLITE_OK) return rc;
+
 
     // 3. Register Aggregate
     rc = SqliteExt::define_aggregate<GeometricMeanAgg>(db, "geo_mean", 1);

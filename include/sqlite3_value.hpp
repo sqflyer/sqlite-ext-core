@@ -412,8 +412,7 @@ public:
         return m_str ? sqlite3_str_value(m_str) : nullptr;
     }
     
-    /**
-     * @brief Finishes the string and surrenders memory ownership to the caller.
+    /** @brief Finishes the string and surrenders memory ownership to the caller.
      * @return The raw char* array. The caller must manually call `sqlite3_free()` on it.
      */
     char* finish() {
@@ -421,6 +420,53 @@ public:
         char* result = sqlite3_str_finish(m_str);
         m_str = nullptr; 
         return result;
+    }
+
+    /** @brief Attempts to append N bytes of text, returning SqliteStatus. */
+    SqliteStatus try_append(const char* zIn, int N) {
+        if (!m_str) return SqliteStatus::nomem("String builder is null");
+        sqlite3_str_append(m_str, zIn, N);
+        if (sqlite3_str_errcode(m_str) != SQLITE_OK) {
+            return SqliteStatus::err(sqlite3_str_errcode(m_str), "SqliteStringOwned::try_append failed");
+        }
+        return SqliteStatus::ok();
+    }
+
+    /** @brief Attempts to append a null-terminated string, returning SqliteStatus. */
+    SqliteStatus try_appendall(const char* zIn) {
+        if (!m_str) return SqliteStatus::nomem("String builder is null");
+        sqlite3_str_appendall(m_str, zIn);
+        if (sqlite3_str_errcode(m_str) != SQLITE_OK) {
+            return SqliteStatus::err(sqlite3_str_errcode(m_str), "SqliteStringOwned::try_appendall failed");
+        }
+        return SqliteStatus::ok();
+    }
+
+    /** @brief Attempts to clone the string builder, returning SqliteResult. */
+    SqliteResult<SqliteStringOwned> try_clone() const {
+        SqliteStringOwned copy(*this);
+        if (!copy.is_valid()) {
+            return SqliteResult<SqliteStringOwned>::nomem("Failed to clone SqliteStringOwned");
+        }
+        return SqliteResult<SqliteStringOwned>::ok(sqlite_move(copy));
+    }
+
+    /** @brief Attempts to create a new string builder, returning SqliteResult. */
+    static inline SqliteResult<SqliteStringOwned> try_create(const char* text = nullptr, int len = -1) {
+        SqliteStringOwned str;
+        if (!str.is_valid()) {
+            return SqliteResult<SqliteStringOwned>::nomem("Failed to create SqliteStringOwned");
+        }
+        if (text) {
+            if (len >= 0) {
+                SqliteStatus stat = str.try_append(text, len);
+                if (stat.is_err()) return SqliteResult<SqliteStringOwned>::err(stat.err_code(), stat.err_message());
+            } else {
+                SqliteStatus stat = str.try_appendall(text);
+                if (stat.is_err()) return SqliteResult<SqliteStringOwned>::err(stat.err_code(), stat.err_message());
+            }
+        }
+        return SqliteResult<SqliteStringOwned>::ok(sqlite_move(str));
     }
 
     /** @brief Computes the MurmurHash2 of the built string. */
@@ -630,10 +676,12 @@ public:
      */
     SqliteBlobOwned(const void* data, int size) : m_data(nullptr), m_size(0) {
         if (size > 0) {
-            m_data = sqlite3_malloc(size);
+            m_data = sqlite3_malloc64(static_cast<sqlite3_uint64>(size));
             if (m_data) {
                 m_size = size;
                 if (data) memcpy(m_data, data, size);
+            } else {
+                m_size = -1;
             }
         }
     }
@@ -650,6 +698,30 @@ public:
     /** @brief Clones the owned blob via deep memory allocation. */
     inline SqliteBlobOwned clone() const {
         return SqliteBlobOwned(m_data, m_size);
+    }
+
+    /** @brief Attempts to clone the owned blob via deep memory allocation, returning SqliteResult. */
+    inline SqliteResult<SqliteBlobOwned> try_clone() const {
+        if (m_size <= 0 || !m_data) {
+            return SqliteResult<SqliteBlobOwned>::ok(SqliteBlobOwned());
+        }
+        SqliteBlobOwned blob(m_data, m_size);
+        if (!blob.is_valid()) {
+            return SqliteResult<SqliteBlobOwned>::nomem("Failed to clone SqliteBlobOwned");
+        }
+        return SqliteResult<SqliteBlobOwned>::ok(sqlite_move(blob));
+    }
+
+    /** @brief Attempts to create a new heap-allocated blob, returning SqliteResult. */
+    static inline SqliteResult<SqliteBlobOwned> try_create(const void* data, int size) {
+        if (size <= 0 || !data) {
+            return SqliteResult<SqliteBlobOwned>::ok(SqliteBlobOwned());
+        }
+        SqliteBlobOwned blob(data, size);
+        if (!blob.is_valid()) {
+            return SqliteResult<SqliteBlobOwned>::nomem("Failed to allocate SqliteBlobOwned");
+        }
+        return SqliteResult<SqliteBlobOwned>::ok(sqlite_move(blob));
     }
 
     /** @brief Creates a zero-allocation view over this owned blob. */
@@ -678,11 +750,11 @@ public:
     const void* data() const noexcept { return m_data; }
     
     /** @brief Returns the size of the owned binary payload in bytes. */
-    int size() const noexcept { return m_size; }
+    int size() const noexcept { return m_size > 0 ? m_size : 0; }
 
     /** @brief Checks if the owned blob holds a valid allocation (or is cleanly empty). */
     bool is_valid() const noexcept {
-        return m_size == 0 || m_data != nullptr;
+        return m_size >= 0;
     }
 
     /** @brief Explicit boolean conversion checking validity. */
@@ -2144,6 +2216,103 @@ public:
         return from_blob(compressed_data, byte_len, SQLITE_SUBTYPE_COMPRESSED, is_immutable);
     }
 
+    /** @brief Attempts to construct an inline or heap-backed string value, returning SqliteResult. */
+    static inline SqliteResult<SqliteValueOwned> try_from_text(const char* text, int len = -1, uint8_t subtype = SQLITE_SUBTYPE_NONE, bool is_immutable = false) {
+        SqliteValueOwned val;
+        SqliteStatus stat = val.try_set_text(text, len, subtype);
+        if (stat.is_err()) {
+            return SqliteResult<SqliteValueOwned>::err(stat.err_code(), stat.err_message());
+        }
+        if (is_immutable) val.mark_immutable();
+        return SqliteResult<SqliteValueOwned>::ok(sqlite_move(val));
+    }
+
+    /** @brief Attempts to construct an inline or heap-backed blob value, returning SqliteResult. */
+    static inline SqliteResult<SqliteValueOwned> try_from_blob(const void* data, int len, uint8_t subtype = SQLITE_SUBTYPE_NONE, bool is_immutable = false) {
+        SqliteValueOwned val;
+        SqliteStatus stat = val.try_set_blob(data, len, subtype);
+        if (stat.is_err()) {
+            return SqliteResult<SqliteValueOwned>::err(stat.err_code(), stat.err_message());
+        }
+        if (is_immutable) val.mark_immutable();
+        return SqliteResult<SqliteValueOwned>::ok(sqlite_move(val));
+    }
+
+    /** @brief Attempts to construct a JSON text value with SQLITE_SUBTYPE_JSON ('J'), returning SqliteResult. */
+    static inline SqliteResult<SqliteValueOwned> try_from_json(const char* json_str, int len = -1, bool is_immutable = false) {
+        return try_from_text(json_str, len, SQLITE_SUBTYPE_JSON, is_immutable);
+    }
+
+    /** @brief Attempts to construct a JSONB binary value with SQLITE_SUBTYPE_JSON ('J'), returning SqliteResult. */
+    static inline SqliteResult<SqliteValueOwned> try_from_jsonb(const void* blob, int len, bool is_immutable = false) {
+        return try_from_blob(blob, len, SQLITE_SUBTYPE_JSON, is_immutable);
+    }
+
+    /** @brief Attempts to construct a Decimal text value with SQLITE_SUBTYPE_DECIMAL ('D'), returning SqliteResult. */
+    static inline SqliteResult<SqliteValueOwned> try_from_decimal(const char* decimal_str, int len = -1, bool is_immutable = false) {
+        return try_from_text(decimal_str, len, SQLITE_SUBTYPE_DECIMAL, is_immutable);
+    }
+
+    /** @brief Attempts to construct a UUID text value with SQLITE_SUBTYPE_UUID ('U'), returning SqliteResult. */
+    static inline SqliteResult<SqliteValueOwned> try_from_uuid(const char* uuid_str, int len = -1, bool is_immutable = false) {
+        return try_from_text(uuid_str, len, SQLITE_SUBTYPE_UUID, is_immutable);
+    }
+
+    /** @brief Attempts to construct a binary AI Vector embedding with SQLITE_SUBTYPE_VECTOR ('V'), returning SqliteResult. */
+    static inline SqliteResult<SqliteValueOwned> try_from_vector(const void* float_data, int byte_len, bool is_immutable = false) {
+        return try_from_blob(float_data, byte_len, SQLITE_SUBTYPE_VECTOR, is_immutable);
+    }
+
+    /** @brief Attempts to construct a binary Geometry blob with SQLITE_SUBTYPE_GEOMETRY ('G'), returning SqliteResult. */
+    static inline SqliteResult<SqliteValueOwned> try_from_geometry(const void* geom_data, int byte_len, bool is_immutable = false) {
+        return try_from_blob(geom_data, byte_len, SQLITE_SUBTYPE_GEOMETRY, is_immutable);
+    }
+
+    /** @brief Attempts to construct a Compressed binary blob with SQLITE_SUBTYPE_COMPRESSED ('Z'), returning SqliteResult. */
+    static inline SqliteResult<SqliteValueOwned> try_from_compressed(const void* compressed_data, int byte_len, bool is_immutable = false) {
+        return try_from_blob(compressed_data, byte_len, SQLITE_SUBTYPE_COMPRESSED, is_immutable);
+    }
+
+    /** @brief Attempts to duplicate transient view into an owned value, returning SqliteResult. */
+    static inline SqliteResult<SqliteValueOwned> try_from_value(const sqlite3_value* val, bool is_immutable = false) {
+        if (!val) {
+            return SqliteResult<SqliteValueOwned>::ok(SqliteValueOwned(nullptr, is_immutable));
+        }
+        uint8_t sub = static_cast<uint8_t>(sqlite3_value_subtype(const_cast<sqlite3_value*>(val)));
+        int t = sqlite3_value_type(const_cast<sqlite3_value*>(val));
+        switch (t) {
+            case SQLITE_INTEGER:
+                return SqliteResult<SqliteValueOwned>::ok(SqliteValueOwned(sqlite3_value_int64(const_cast<sqlite3_value*>(val)), sub, SQLITE_AFF_INTEGER, is_immutable));
+            case SQLITE_FLOAT:
+                return SqliteResult<SqliteValueOwned>::ok(SqliteValueOwned(sqlite3_value_double(const_cast<sqlite3_value*>(val)), sub, SQLITE_AFF_REAL, is_immutable));
+            case SQLITE_TEXT: {
+                const char* text = reinterpret_cast<const char*>(sqlite3_value_text(const_cast<sqlite3_value*>(val)));
+                int len = text ? sqlite3_value_bytes(const_cast<sqlite3_value*>(val)) : 0;
+                return try_from_text(text, len, sub, is_immutable);
+            }
+            case SQLITE_BLOB: {
+                const void* blob = sqlite3_value_blob(const_cast<sqlite3_value*>(val));
+                int len = blob ? sqlite3_value_bytes(const_cast<sqlite3_value*>(val)) : 0;
+                return try_from_blob(blob, len, sub, is_immutable);
+            }
+            case SQLITE_NULL:
+            default: {
+                SqliteValueOwned n_val(nullptr, is_immutable);
+                n_val.set_subtype(sub);
+                return SqliteResult<SqliteValueOwned>::ok(sqlite_move(n_val));
+            }
+        }
+    }
+
+    /** @brief Attempts to parse an unquoted or quoted string literal with automatic SQL type inference, returning SqliteResult. */
+    static inline SqliteResult<SqliteValueOwned> try_from_literal(SqliteStringView str, bool is_immutable = false) {
+        SqliteValueOwned val = from_literal(str, is_immutable);
+        if (!val.is_valid()) {
+            return SqliteResult<SqliteValueOwned>::nomem("Failed to allocate literal payload in SqliteValueOwned::try_from_literal");
+        }
+        return SqliteResult<SqliteValueOwned>::ok(sqlite_move(val));
+    }
+
     /** @brief Constructs an owned 24-byte value wrapping an opaque pointer with optional immutability. */
     template <typename T>
     static inline SqliteValueOwned from_pointer(T* ptr, bool is_immutable = false) noexcept {
@@ -2459,6 +2628,83 @@ public:
         if (is_immutable()) return;
         free_heap();
         init_blob(data, len, sub);
+    }
+
+    /** @brief Attempts to set value to a string, returning SqliteStatus. */
+    inline SqliteStatus try_set_text(const char* text, int len = -1, uint8_t sub = SQLITE_SUBTYPE_NONE) {
+        if (is_immutable()) return SqliteStatus::err(SQLITE_READONLY, "Value is marked immutable");
+        if (!text) {
+            set_null();
+            return SqliteStatus::ok();
+        }
+        int n = (len >= 0) ? len : SqliteStringUtil::sqlite_strlen(text);
+        if (n <= 21) {
+            free_heap();
+            init_text(text, n, sub);
+            return SqliteStatus::ok();
+        }
+        char* buf = static_cast<char*>(sqlite3_malloc64(static_cast<sqlite3_uint64>(n)));
+        if (!buf) {
+            return SqliteStatus::nomem("Failed to allocate string buffer in SqliteValueOwned::try_set_text");
+        }
+        memcpy(buf, text, n);
+        free_heap();
+        m_sqlite.payload.pData = buf;
+        m_sqlite.heap_len = n;
+        m_sqlite.affinity = SQLITE_AFF_TEXT;
+        memset(m_sqlite.reserved, 0, sizeof(m_sqlite.reserved));
+        m_sqlite.subtag.set(sub, false);
+        set_tag(SQLITE_TEXT, true, 0);
+        return SqliteStatus::ok();
+    }
+
+    /** @brief Attempts to set value to a binary blob, returning SqliteStatus. */
+    inline SqliteStatus try_set_blob(const void* data, int len, uint8_t sub = SQLITE_SUBTYPE_NONE) {
+        if (is_immutable()) return SqliteStatus::err(SQLITE_READONLY, "Value is marked immutable");
+        if (!data) {
+            set_null();
+            return SqliteStatus::ok();
+        }
+        if (sub == SQLITE_SUBTYPE_UUID && len == 16) {
+            free_heap();
+            init_uuid(data, SqliteUuidUtil::UUID_FORMAT_BLOB, false);
+            return SqliteStatus::ok();
+        }
+        if (len <= 22) {
+            free_heap();
+            init_blob(data, len, sub);
+            return SqliteStatus::ok();
+        }
+        char* buf = static_cast<char*>(sqlite3_malloc64(static_cast<sqlite3_uint64>(len)));
+        if (!buf) {
+            return SqliteStatus::nomem("Failed to allocate blob buffer in SqliteValueOwned::try_set_blob");
+        }
+        memcpy(buf, data, len);
+        free_heap();
+        m_sqlite.payload.pData = buf;
+        m_sqlite.heap_len = len;
+        m_sqlite.affinity = SQLITE_AFF_BLOB;
+        memset(m_sqlite.reserved, 0, sizeof(m_sqlite.reserved));
+        m_sqlite.subtag.set(sub, false);
+        set_tag(SQLITE_BLOB, true, 0);
+        return SqliteStatus::ok();
+    }
+
+    /** @brief Attempts to clone this owned value, returning SqliteResult. */
+    inline SqliteResult<SqliteValueOwned> try_clone() const {
+        if (!is_heap_allocated() || !m_sqlite.payload.pData || m_sqlite.heap_len <= 0) {
+            return SqliteResult<SqliteValueOwned>::ok(SqliteValueOwned(*this));
+        }
+        size_t alloc_sz = static_cast<size_t>(m_sqlite.heap_len);
+        char* buf = static_cast<char*>(sqlite3_malloc64(static_cast<sqlite3_uint64>(alloc_sz)));
+        if (!buf) {
+            return SqliteResult<SqliteValueOwned>::nomem("Failed to clone heap buffer in SqliteValueOwned::try_clone");
+        }
+        memcpy(buf, m_sqlite.payload.pData, alloc_sz);
+        SqliteValueOwned res;
+        memcpy(static_cast<void*>(&res), this, sizeof(SqliteValueOwned));
+        res.m_sqlite.payload.pData = buf;
+        return SqliteResult<SqliteValueOwned>::ok(sqlite_move(res));
     }
 
     /** @brief Sets value to an opaque pointer, freeing any prior heap allocation. */

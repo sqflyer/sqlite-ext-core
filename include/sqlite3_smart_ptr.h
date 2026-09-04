@@ -25,16 +25,16 @@
         int weak_count; \
     }; \
     \
-    \
-    \
-    \
     /** @brief Creates a shared pointer taking ownership of the given pointer. */ \
     static inline Prefix##_SharedPtr Prefix##_make_shared(Type* ptr) { \
         Prefix##_SharedPtr sp; \
         sp.cb = 0; \
         if (!ptr) return sp; \
-        Prefix##_ControlBlock* cb = (Prefix##_ControlBlock*)sqlite3_malloc(sizeof(Prefix##_ControlBlock)); \
-        if (!cb) return sp; \
+        Prefix##_ControlBlock* cb = (Prefix##_ControlBlock*)sqlite3_malloc64(sizeof(Prefix##_ControlBlock)); \
+        if (!cb) { \
+            Destructor(ptr); \
+            return sp; \
+        } \
         cb->ptr = ptr; \
         cb->strong_count = 1; \
         cb->weak_count = 1; /* The strong references collectively hold 1 weak reference */ \

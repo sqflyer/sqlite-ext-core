@@ -249,3 +249,13 @@ SELECT * FROM my_tvf WHERE arg1 = 10 AND arg2 = 20;
    ```
 
 By default, `SqliteTvfIterator::estimated_cost` returns $\frac{100000.0}{\text{usable\_constraints} + 1}$, ensuring the query optimizer always favors execution plans that provide the maximum number of input arguments.
+
+---
+
+## 7. Zero-Exception Error Propagation Architecture
+
+TVF operations execute in a strict zero-exception context (`-fno-exceptions`). Errors occurring during iterator construction, filtering, or column evaluation are handled explicitly:
+
+1. **Initialization Failures**: When iterator preparation or memory allocation fails, return error codes via `SQLITE_ERROR`, `SQLITE_NOMEM`, or `SQLITE_CONSTRAINT`.
+2. **Column Extraction Errors**: When evaluating derived expressions or extracting fallible payloads returning [`SqliteResult<T>`](file:///c:/msys64/home/dilipvamsi/works/repos/sqlite-ext-core/include/sqlite3_allocator.hpp#L882-L994), route failures directly using `res.set_sqlite_err(ctx.get())`.
+3. **Rust-Style Status Model**: Follows `res.is_err()`, `res.err_code()`, and `res.err_msg()` to bubble diagnostic error messages back into the SQLite query engine.

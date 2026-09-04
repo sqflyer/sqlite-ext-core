@@ -296,3 +296,27 @@ Synthesizes transparent hash, equality, and ordering structs with `using is_tran
 | **`SqliteValueTuple<N>`** | `std::array` + `fill()` | Forward + Reverse | `front`, `back`, `at`, `[]` | `SQLITE_DERIVE_ARRAY_ACCESSORS` | Container + All Scalar | `SQLITE_DERIVE_ALL_REVERSE_RELATIONAL_OPS` | `SqliteRowHash`, `SqliteRowEqual`, `SqliteRowLess` |
 | **`SqliteValueVec<N>`** | `std::vector` | Forward + Reverse | `front`, `back`, `at`, `[]` | `SQLITE_DERIVE_ARRAY_ACCESSORS` | Container + All Scalar | `SQLITE_DERIVE_ALL_REVERSE_RELATIONAL_OPS` | `SqliteRowHash`, `SqliteRowEqual`, `SqliteRowLess` |
 
+---
+
+## 8. Rust-Style Error Propagation & Early Return Macros (`include/sqlite3_allocator.hpp`)
+
+To eliminate error-handling boilerplate under `-fno-exceptions`, `sqlite-ext-core` provides macros mirroring Rust's `?` try operator:
+
+### 8.1 `SQLITE_TRY_ASSIGN(target, expr)`
+
+Evaluates `expr` (which returns a `SqliteResult<T>` or `SqliteStatus`). If the result is an error (`is_err() == true`), immediately returns the error from the enclosing function; otherwise assigns the unwrapped value to `target`.
+
+```cpp
+SqliteResult<SqliteValueVec<4>> process_rows() {
+    SqliteValueVec<4> vec;
+    SQLITE_TRY_ASSIGN(auto val, SqliteValueOwned::try_from_text("hello"));
+    SQLITE_TRY(vec.try_push_back(sqlite_move(val)));
+    return SqliteResult<SqliteValueVec<4>>::ok(sqlite_move(vec));
+}
+```
+
+### 8.2 `SQLITE_TRY(expr)`
+
+Evaluates `expr`. If `expr` returns `SqliteStatus` with an error or `SqliteResult<T>` with an error, early-returns `SqliteStatus` or `SqliteResult::err()` from the enclosing function. Under GCC/Clang (`__GNUC__`), evaluates as an expression returning the unwrapped value via statement expressions.
+
+

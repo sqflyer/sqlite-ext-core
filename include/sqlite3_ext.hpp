@@ -34,6 +34,9 @@
  */
 class SqliteExt {
 public:
+    using Status = SqliteStatus;
+    template <typename T>
+    using Result = SqliteResult<T>;
     template <typename T>
     using Allocator = SqliteAllocator<T>;
     // ========================================================================

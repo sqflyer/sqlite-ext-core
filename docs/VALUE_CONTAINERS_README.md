@@ -221,3 +221,32 @@ auto it_lb = index.lower_bound(100);
 - **Type Encoding in High Bits (5..7)**: Every valid SQLite datatype (`INTEGER=1`, `FLOAT=2`, `TEXT=3`, `BLOB=4`, `NULL=5`) has a code in [1..5], yielding tag values $\ge \text{0x20}$ (`0b001_00000 = 0x20`).
 - **Unused Slots**: Unused/cleared slots are zeroed (`0x00 < 0x20`).
 - **Backward Scanning**: `vec.size()` scans backwards checking `tag.is_active()`, finding the exact active column count with 0 heap overhead.
+
+---
+
+## 6. Fallible Container APIs (`SqliteResult`, `SqliteStatus`)
+
+For zero-exception and memory-limited environments:
+
+```cpp
+SqliteValueVec<4> vec;
+
+// 1. Fallible push_back returning SqliteStatus
+SqliteStatus push_stat = vec.try_push_back("data value");
+if (push_stat.is_err()) {
+    return push_stat;
+}
+
+// 2. Fallible resize and reserve
+SqliteStatus res_stat = vec.try_resize(100);
+if (res_stat.is_err()) {
+    printf("Vector resize failed [%d]: %s\n", res_stat.err_code(), res_stat.err_msg());
+}
+
+// 3. Fallible cloning returning SqliteResult
+SqliteResult<SqliteValueVec<4>> clone_res = vec.try_clone();
+if (clone_res.is_err()) {
+    return clone_res.status();
+}
+SqliteValueVec<4> copy = clone_res.take_value();
+```

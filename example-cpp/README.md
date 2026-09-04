@@ -10,10 +10,11 @@ This directory contains a complete, production-ready demonstration of building, 
 3. [Deep-Dive Code Walkthrough](#3-deep-dive-code-walkthrough)
    - [3.1 Connection Shared State (`AnalyticsState`)](#31-connection-shared-state-analyticsstate)
    - [3.2 Stateless Scalar UDF (`math_hypot`)](#32-stateless-scalar-udf-math_hypot)
-   - [3.3 Stateful Scalar UDF (`analytics_ping`)](#33-stateful-scalar-udf-analytics_ping)
-   - [3.4 Object-Oriented Aggregate (`geo_mean`)](#34-object-oriented-aggregate-geo_mean)
-   - [3.5 Table-Valued Function (`fibonacci`)](#35-table-valued-function-fibonacci)
-   - [3.6 Unified Entrypoints & Facade Registration](#36-unified-entrypoints--facade-registration)
+   - [3.3 Fallible String UDF (`text_repeat`)](#33-fallible-string-udf-text_repeat)
+   - [3.4 Stateful Scalar UDF (`analytics_ping`)](#34-stateful-scalar-udf-analytics_ping)
+   - [3.5 Object-Oriented Aggregate (`geo_mean`)](#35-object-oriented-aggregate-geo_mean)
+   - [3.6 Table-Valued Function (`fibonacci`)](#36-table-valued-function-fibonacci)
+   - [3.7 Unified Entrypoints & Facade Registration](#37-unified-entrypoints--facade-registration)
 4. [Compilation Architecture & Build Commands](#4-compilation-architecture--build-commands)
 5. [Running the Interactive Demo](#5-running-the-interactive-demo)
 6. [Expected Terminal Output & Verification](#6-expected-terminal-output--verification)
@@ -44,7 +45,7 @@ Traditional C extensions require tedious, error-prone boilerplate:
 example-cpp/
 ├── build/                      <-- Created during build (contains libexample.dll / .so)
 ├── example.cpp                 <-- Complete C++ extension implementation
-├── example.sql                 <-- SQL test script exercising all 4 subsystems
+├── example.sql                 <-- SQL test script exercising all 5 subsystems
 ├── Makefile                    <-- Automated build & execution Makefile
 └── README.md                   <-- This comprehensive documentation guide
 ```
@@ -53,7 +54,7 @@ example-cpp/
 
 ## 3. Deep-Dive Code Walkthrough
 
-The example extension ([`example.cpp`](example.cpp)) demonstrates all four core extensibility pillars in SQLite:
+The example extension ([`example.cpp`](example.cpp)) demonstrates all core extensibility pillars in SQLite:
 
 ### 3.1 Connection Shared State (`AnalyticsState`)
 
@@ -107,7 +108,49 @@ static void math_hypot(SqliteContext ctx, SqliteUdfArgs args) {
 
 ---
 
-### 3.3 Stateful Scalar UDF (`analytics_ping`)
+### 3.3 Fallible String UDF (`text_repeat`)
+
+Demonstrates fallible memory allocation and dynamic string buffer manipulation with Rust-style `SqliteResult<SqliteString>` and `SqliteStatus`:
+
+```cpp
+static void text_repeat(SqliteContext ctx, SqliteUdfArgs args) {
+    if (args.size() < 2) {
+        ctx.result_error("text_repeat requires (text, count)");
+        return;
+    }
+    SqliteStringView text = args[0].as_text();
+    int count = static_cast<int>(args[1].as_int64());
+    if (count < 0) count = 0;
+
+    // Fallible buffer allocation returning SqliteResult<SqliteString>
+    auto res_buf = SqliteString::try_create();
+    if (res_buf.is_err()) {
+        res_buf.set_sqlite_err(ctx.get());
+        return;
+    }
+    SqliteString str = res_buf.take_value();
+    SqliteStatus reserve_stat = str.try_reserve(text.length() * count + 1);
+    if (reserve_stat.is_err()) {
+        reserve_stat.set_sqlite_err(ctx.get());
+        return;
+    }
+    for (int i = 0; i < count; ++i) {
+        SqliteStatus stat = str.try_append(text.data(), text.length());
+        if (stat.is_err()) {
+            stat.set_sqlite_err(ctx.get());
+            return;
+        }
+    }
+    ctx.result_text(str.c_str(), str.length());
+}
+```
+
+- `SqliteString::try_create()` and `try_reserve()` gracefully propagate out-of-memory errors via `res.set_sqlite_err(ctx.get())`.
+- `SqliteString::try_append()` dynamically expands the buffer without throwing exceptions or risking null-pointer dereferences.
+
+---
+
+### 3.4 Stateful Scalar UDF (`analytics_ping`)
 
 A stateful scalar function that mutates and returns the per-connection query counter:
 
@@ -134,7 +177,7 @@ static void analytics_ping(SqliteContext ctx, SqliteUdfArgs args) {
 
 ---
 
-### 3.4 Object-Oriented Aggregate (`geo_mean`)
+### 3.5 Object-Oriented Aggregate (`geo_mean`)
 
 Computes the geometric mean $\left(\prod_{i=1}^n x_i\right)^{1/n}$ across an arbitrary column of numbers:
 
@@ -171,7 +214,7 @@ struct GeometricMeanAgg : public SqliteAggregateBase<double> {
 
 ---
 
-### 3.5 Table-Valued Function (`fibonacci`)
+### 3.6 Table-Valued Function (`fibonacci`)
 
 A streaming Table-Valued Function that yields Fibonacci numbers on the fly:
 
@@ -216,7 +259,7 @@ struct FibonacciIterator : public SqliteTvfIterator {
 
 ---
 
-### 3.6 Unified Entrypoints & Facade Registration
+### 3.7 Unified Entrypoints & Facade Registration
 
 Using the `SqliteExt` facade, all components are registered in a single clean function:
 
@@ -232,6 +275,7 @@ static int register_all_components(SqliteDatabaseView db) {
 
     // 2. Register Scalar UDFs
     SqliteExt::define_scalar(db, "math_hypot", 2, math_hypot);
+    SqliteExt::define_scalar(db, "text_repeat", 2, text_repeat);
     SqliteExt::define_scalar_with_state<AnalyticsState, analytics_ping>(db, "analytics_ping", 0);
 
     // 3. Register Aggregate
@@ -309,63 +353,70 @@ make example-cpp
 Executing `example.sql` against SQLite in-memory engine produces the following formatted results:
 
 ```
-┌──────────────────────────────────────────────────────────┐
-│                       test_banner                        │
-├──────────────────────────────────────────────────────────┤
-│ === 1. Stateless Scalar Function: math_hypot(3, 4) ===   │
-└──────────────────────────────────────────────────────────┘
-┌─────┬─────┬────────────┬──────────────────┐
-│  a  │  b  │ hypotenuse │ pythagorean_13   │
-├─────┼─────┼────────────┼──────────────────┤
-│ 3.0 │ 4.0 │ 5.0        │ 13.0             │
-└─────┴─────┴────────────┴──────────────────┘
-┌──────────────────────────────────────────────────────────┐
-│                       test_banner                        │
-├──────────────────────────────────────────────────────────┤
-│ === 2. Stateful Scalar Function: analytics_ping() ===    │
-└──────────────────────────────────────────────────────────┘
-┌───────────────┐
+╭───────────┬────────────┬────────────╮
+│ hypot_3_4 │ hypot_5_12 │ hypot_zero │
+╞═══════════╪════════════╪════════════╡
+│       5.0 │       13.0 │        0.0 │
+╰───────────┴────────────┴────────────╯
+╭────────────────╮
+│ pythagorean_17 │
+╞════════════════╡
+│           17.0 │
+╰────────────────╯
+╭────────────────────╮
+│   repeated_text    │
+╞════════════════════╡
+│ SQLiteSQLiteSQLite │
+╰────────────────────╯
+╭───────────────╮
 │ query_count_1 │
-├───────────────┤
-│ 1             │
-└───────────────┘
-┌───────────────┐
+╞═══════════════╡
+│             1 │
+╰───────────────╯
+╭───────────────╮
 │ query_count_2 │
-├───────────────┤
-│ 2             │
-└───────────────┘
-┌───────────────┐
+╞═══════════════╡
+│             2 │
+╰───────────────╯
+╭───────────────╮
 │ query_count_3 │
-├───────────────┤
-│ 3             │
-└───────────────┘
-┌──────────────────────────────────────────────────────────┐
-│                       test_banner                        │
-├──────────────────────────────────────────────────────────┤
-│ === 3. Custom Aggregate Function: geo_mean(x) ===        │
-└──────────────────────────────────────────────────────────┘
-┌────────────────┬────────────────┐
-│     inputs     │ geometric_mean │
-├────────────────┼────────────────┤
-│ 2.0, 8.0, 32.0 │ 8.0            │
-└────────────────┴────────────────┘
-┌──────────────────────────────────────────────────────────┐
-│                       test_banner                        │
-├──────────────────────────────────────────────────────────┤
-│ === 4. Table-Valued Function: fibonacci(8) ===           │
-└──────────────────────────────────────────────────────────┘
-┌──────┬──────────────────┐
+╞═══════════════╡
+│             3 │
+╰───────────────╯
+╭────────────┬────────────────╮
+│ item_count │ geometric_mean │
+╞════════════╪════════════════╡
+│          3 │            8.0 │
+╰────────────┴────────────────╯
+╭────────────┬────────────────────╮
+│ item_count │   geometric_mean   │
+╞════════════╪════════════════════╡
+│          5 │ 41538.374868278632 │
+╰────────────┴────────────────────╯
+╭──────┬──────────────────╮
 │ term │ fibonacci_number │
-├──────┼──────────────────┤
-│ 1    │ 1                │
-│ 2    │ 1                │
-│ 3    │ 2                │
-│ 4    │ 3                │
-│ 5    │ 5                │
-│ 6    │ 8                │
-│ 7    │ 13               │
-│ 8    │ 21               │
-└──────┴──────────────────┘
+╞══════╪══════════════════╡
+│    1 │                1 │
+│    2 │                1 │
+│    3 │                2 │
+│    4 │                3 │
+│    5 │                5 │
+│    6 │                8 │
+│    7 │               13 │
+│    8 │               21 │
+╰──────┴──────────────────╯
+╭─────────────┬───────────────────╮
+│ total_terms │ max_fibonacci_val │
+╞═════════════╪═══════════════════╡
+│          12 │               144 │
+╰─────────────┴───────────────────╯
+╭───────────────┬──────────╮
+│ even_term_idx │ even_val │
+╞═══════════════╪══════════╡
+│             3 │        2 │
+│             6 │        8 │
+│             9 │       34 │
+╰───────────────┴──────────╯
 ```
 
 ---

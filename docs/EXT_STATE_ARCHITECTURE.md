@@ -58,3 +58,20 @@ While C simply allocates structs using `sqlite3_malloc`, the C++ template (`Sqli
 
 1. **sqlite_new**: During the Cold Path initialization, the template allocates the entire state entry using `sqlite_new<Entry>()`. This forces the C++ compiler to automatically run the default constructors for all embedded objects (like the C++ state `T`, and the RAII locks), while bypassing the standard `<new>` header.
 2. **sqlite_delete**: During Garbage Collection, the template simply calls `sqlite_delete(entry)`. This guarantees that all embedded C++ objects and locks are safely torn down by standard C++ destructors, completely eliminating the need for manual teardown or a C-style `free_fn` callback in the C++ API.
+
+## 9. Fallible Registry Access (`SqliteResult` & `SqliteStatus`)
+
+For strict no-throw error handling and out-of-memory (OOM) resilience without C++ exceptions, `SqliteExtState<T>` provides fallible methods using the standard Rust-style `SqliteResult<T>` and `SqliteStatus` interfaces:
+
+- **`try_get_or_create(sqlite3 *db, sqlite3_context *ctx = nullptr)`**: Returns `SqliteResult<T*>`. On cold-path memory allocation failure, returns `SqliteResult<T*>::err(SQLITE_NOMEM, ...)`.
+- **`try_init(sqlite3 *db, sqlite3_context *ctx = nullptr)`**: Proactively allocates and registers state for the database connection, returning `SqliteStatus`.
+
+```cpp
+SqliteResult<MyState*> res = SqliteExtState<MyState>::try_get_or_create(db, ctx);
+if (res.is_err()) {
+    res.set_sqlite_err(ctx);
+    return;
+}
+MyState* state = res.unwrap();
+```
+
