@@ -188,6 +188,24 @@ SQL > SELECT sku, qty FROM items ORDER BY sku;
 
 ---
 
+### Type Inference & Snapshot Cell Value Conversions (`parse_cell_value` / `from_literal`)
+
+When validating Markdown snapshot tables, `SqliteSqlRunner::parse_cell_value` delegates to `SqliteValueOwned::from_literal(SqliteStringView)` to parse cell tokens with automatic SQL type inference:
+
+| Literal Syntax | Inferred SQLite Type | Value Representation / Notes |
+|---|---|---|
+| `""` (empty), `"null"`, `"NULL"`, `"Null"` | `SQLITE_NULL` | Unquoted empty cell or null keyword. |
+| `"true"`, `"yes"`, `"on"` (case-insensitive) | `SQLITE_INTEGER` | Tagged with `SQLITE_SUBTYPE_BOOL` (`'B' = 66`), value `1LL`. |
+| `"false"`, `"no"`, `"off"` (case-insensitive) | `SQLITE_INTEGER` | Tagged with `SQLITE_SUBTYPE_BOOL` (`'B' = 66`), value `0LL`. |
+| `X'...'` / `x'...'` (e.g. `X'DEADBEEF'`, `x'0102'`) | `SQLITE_BLOB` | Decoded raw hex bytes; $\le 22$ bytes fit in-situ (0 heap allocs); $> 22$ bytes allocate heap memory. |
+| `'text'` or `"text"` (e.g. `'Alice'`, `"'123'"`, `""`) | `SQLITE_TEXT` | Outer quotes stripped. Tokens looking like numbers/booleans remain pure `TEXT`. |
+| `"1024"`, `"+5"`, `"-42"`, `"9223372036854775807"` | `SQLITE_INTEGER` | 64-bit integer (`sqlite3_int64`). |
+| `"3.1415"`, `"-0.005"`, `"42."`, `"1.5e-3"`, `"+1E+6"` | `SQLITE_FLOAT` | IEEE 754 double precision (`double`). |
+| Multi-dot (`"1.2.3"`), malformed sci (`"1e2e3"`, `"1e"`) | `SQLITE_TEXT` | Malformed numeric strings safely fall through to `TEXT`. |
+| Unquoted text (`strict`, `2026-09-04`, `{}`, `@`) | `SQLITE_TEXT` | Identifiers, ISO-8601 strings, JSON tokens, and punctuation fallback to `TEXT`. |
+
+---
+
 ## API Reference
 
 ### `SqliteSqlRunner`
@@ -199,7 +217,7 @@ SQL > SELECT sku, qty FROM items ORDER BY sku;
 | `run_file_with_init(const char* filepath, InitFn&& init_fn, bool require_snapshots = true)` | Opens an in-memory DB, invokes `init_fn(sqlite3*)`, and runs a `.sql` file. |
 | `run_string_with_init(const char* script, const char* title, InitFn&& init_fn, bool require_snapshots = true)` | Opens an in-memory DB, invokes `init_fn(sqlite3*)`, and runs an in-memory script. |
 | `parse_snapshot_block(const char* text, SqlTableBuffer& out_snap)` | Parses a companion Markdown snapshot table block from SQL comment stream. |
-| `parse_cell_value(const char* str)` | Parses a string token into a typed `SqliteValueOwned` (`NULL`, `INTEGER`, `FLOAT`, or `TEXT`). |
+| `parse_cell_value(const char* str)` | Parses a string token into a typed `SqliteValueOwned` (`NULL`, `INTEGER`, `FLOAT`, `BLOB`, or `TEXT`) via `SqliteValueOwned::from_literal`. |
 | `format_value(const SqliteValueOwned& val, char* buf, size_t buf_size)` | Formats an individual SQLite value into display string. |
 | `is_table_divider(const char* line)` | Detects Markdown table separator lines (`|---|:---|`). |
 | `trim_whitespace(char* str)` | In-place trimming of leading and trailing whitespace. |

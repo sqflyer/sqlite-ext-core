@@ -146,7 +146,25 @@ void test_sql_runner_helpers() {
     assert(vt2.is_text() && vt2.as_text() == "123abc");
 
     SqliteValueOwned vt3 = SqliteSqlRunner::parse_cell_value("");
-    assert(vt3.is_text() && vt3.as_text().empty());
+    assert(vt3.is_null());
+
+    SqliteValueOwned vt4 = SqliteSqlRunner::parse_cell_value("''");
+    assert(vt4.is_text() && vt4.as_text().empty());
+
+    SqliteValueOwned vb1 = SqliteSqlRunner::parse_cell_value("true");
+    assert(vb1.is_bool() && vb1.as_bool());
+
+    SqliteValueOwned vb2 = SqliteSqlRunner::parse_cell_value("false");
+    assert(vb2.is_bool() && !vb2.as_bool());
+
+    SqliteValueOwned v_blob = SqliteSqlRunner::parse_cell_value("X'DEADBEEF'");
+    assert(v_blob.is_blob() && v_blob.as_blob().size() == 4);
+
+    SqliteValueOwned v_sci = SqliteSqlRunner::parse_cell_value("1.5e-3");
+    assert(v_sci.is_float());
+
+    SqliteValueOwned v_plus = SqliteSqlRunner::parse_cell_value("+42");
+    assert(v_plus.is_integer() && v_plus.as_int64() == 42);
 
     // 4. format_value tests
     char buf[128];

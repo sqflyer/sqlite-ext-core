@@ -247,19 +247,8 @@ public:
      * @return Initialized SqliteValueOwned instance.
      */
     static SqliteValueOwned parse_cell_value(const char* str) {
-        if (!str || strcmp(str, "NULL") == 0 || strcmp(str, "null") == 0) {
-            return SqliteValueOwned();
-        }
-        char* endptr = nullptr;
-        long long i_val = strtoll(str, &endptr, 10);
-        if (endptr && *endptr == '\0' && endptr != str) {
-            return SqliteValueOwned(static_cast<sqlite3_int64>(i_val));
-        }
-        double d_val = strtod(str, &endptr);
-        if (endptr && *endptr == '\0' && endptr != str) {
-            return SqliteValueOwned(d_val);
-        }
-        return SqliteValueOwned(str);
+        if (!str) return SqliteValueOwned();
+        return SqliteValueOwned::from_literal(SqliteStringView(str));
     }
 
     /**

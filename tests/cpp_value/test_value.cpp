@@ -1460,93 +1460,496 @@ void test_clone_and_deep_copy() {
 }
 
 /**
- * @brief Tests from_literal edge cases not covered by the existing test_from_literal():
- *        positive prefix numbers, empty quoted strings, mixed-case booleans,
- *        sized overload, partial number strings, SqliteStringView overload.
+ * @brief Tests from_literal edge cases covering all possible literal scenarios:
+ *        NULLs, Booleans (all casings/aliases/false friends), BLOB literals (SBO inline vs Heap, odd/invalid hex),
+ *        Quotes (single/double/empty/spaces/nested/unbalanced), Integers (signs, leading zeros, 64-bit boundaries),
+ *        Floats (trailing dot, scientific e/E, signed exponents), Malformed numbers (multi-dot, multi-exponent,
+ *        incomplete exponent, leading dot, sign anomalies, C-style hex/bin), Plain text keywords/identifiers/ISO-8601/JSON/symbols,
+ *        Sized buffer slices, SqliteStringView, and Immutability propagation.
  */
 void test_from_literal_edge_cases() {
-    // 1. Positive-prefix integer (+5 → INTEGER 5)
-    //    from_literal logic: p[0]=='+' → is_num=true → sscanf → 5
+    // =========================================================================
+    // 1. Positive and Negative Prefix Numbers & Signs
+    // =========================================================================
     SqliteValueOwned p1 = SqliteValueOwned::from_literal("+5");
-    assert(p1.is_integer());
-    assert(p1.as_int64() == 5);
+    assert(p1.is_integer() && p1.as_int64() == 5);
 
-    // 2. Positive-prefix float (+3.14 → FLOAT)
-    SqliteValueOwned p2 = SqliteValueOwned::from_literal("+3.14");
-    assert(p2.is_float());
+    SqliteValueOwned p2 = SqliteValueOwned::from_literal("+0");
+    assert(p2.is_integer() && p2.as_int64() == 0);
 
-    // 3. Empty single-quoted string → TEXT with length 0
+    SqliteValueOwned p3 = SqliteValueOwned::from_literal("-0");
+    assert(p3.is_integer() && p3.as_int64() == 0);
+
+    SqliteValueOwned p4 = SqliteValueOwned::from_literal("+42");
+    assert(p4.is_integer() && p4.as_int64() == 42);
+
+    SqliteValueOwned p5 = SqliteValueOwned::from_literal("+1000000");
+    assert(p5.is_integer() && p5.as_int64() == 1000000);
+
+    SqliteValueOwned p6 = SqliteValueOwned::from_literal("+3.14");
+    assert(p6.is_float());
+
+    SqliteValueOwned p7 = SqliteValueOwned::from_literal("+0.0");
+    assert(p7.is_float());
+
+    SqliteValueOwned p8 = SqliteValueOwned::from_literal("+0.5");
+    assert(p8.is_float());
+
+    SqliteValueOwned p9 = SqliteValueOwned::from_literal("-0.75");
+    assert(p9.is_float() && p9.as_double() == -0.75);
+
+    // =========================================================================
+    // 2. Quoted String Literals (Single, Double, Empty, Whitespace, Nested)
+    // =========================================================================
+    // Empty quotes
     SqliteValueOwned eq1 = SqliteValueOwned::from_literal("''");
-    assert(eq1.is_text());
-    assert(eq1.as_text().length() == 0);
+    assert(eq1.is_text() && eq1.as_text().length() == 0);
 
-    // 4. Empty double-quoted string → TEXT with length 0
     SqliteValueOwned eq2 = SqliteValueOwned::from_literal("\"\"");
-    assert(eq2.is_text());
-    assert(eq2.as_text().length() == 0);
+    assert(eq2.is_text() && eq2.as_text().length() == 0);
 
-    // 5. Mixed-case booleans (case-insensitive)
-    SqliteValueOwned bc1 = SqliteValueOwned::from_literal("TRUE");
-    assert(bc1.is_bool() && bc1.as_bool());
+    // Whitespace inside quotes
+    SqliteValueOwned ws1 = SqliteValueOwned::from_literal("' '");
+    assert(ws1.is_text() && ws1.as_text() == " ");
 
-    SqliteValueOwned bc2 = SqliteValueOwned::from_literal("FALSE");
-    assert(bc2.is_bool() && !bc2.as_bool());
+    SqliteValueOwned ws2 = SqliteValueOwned::from_literal("\"   \"");
+    assert(ws2.is_text() && ws2.as_text() == "   ");
 
-    SqliteValueOwned bc3 = SqliteValueOwned::from_literal("YES");
-    assert(bc3.is_bool() && bc3.as_bool());
+    // Number tokens inside quotes (remain TEXT, never coerced)
+    SqliteValueOwned qnum1 = SqliteValueOwned::from_literal("'123'");
+    assert(qnum1.is_text() && qnum1.as_text() == "123");
 
-    SqliteValueOwned bc4 = SqliteValueOwned::from_literal("No");
-    assert(bc4.is_bool() && !bc4.as_bool());
+    SqliteValueOwned qnum2 = SqliteValueOwned::from_literal("\"3.14\"");
+    assert(qnum2.is_text() && qnum2.as_text() == "3.14");
 
-    SqliteValueOwned bc5 = SqliteValueOwned::from_literal("ON");
-    assert(bc5.is_bool() && bc5.as_bool());
+    SqliteValueOwned qnum3 = SqliteValueOwned::from_literal("'-99'");
+    assert(qnum3.is_text() && qnum3.as_text() == "-99");
 
-    SqliteValueOwned bc6 = SqliteValueOwned::from_literal("OFF");
-    assert(bc6.is_bool() && !bc6.as_bool());
+    // Boolean tokens inside quotes (remain TEXT, never coerced)
+    SqliteValueOwned qb1 = SqliteValueOwned::from_literal("'true'");
+    assert(qb1.is_text() && qb1.as_text() == "true");
 
-    // 6. Partial number string ("3abc") → falls through to TEXT
-    SqliteValueOwned nt1 = SqliteValueOwned::from_literal("3abc");
-    assert(nt1.is_text());
+    SqliteValueOwned qb2 = SqliteValueOwned::from_literal("\"false\"");
+    assert(qb2.is_text() && qb2.as_text() == "false");
 
-    // 7. Lone sign → TEXT (not a number)
-    SqliteValueOwned lone_plus = SqliteValueOwned::from_literal("+");
-    // is_num = true (p[0]=='+'), but loop at i=1 finds no digits → is_num stays...
-    // Actually: len==1, loop never runs (i=1 not < 1), so is_num stays true.
-    // sscanf("+", "%lld") returns 0 → condition (==1) fails → falls to float check
-    // sscanf("+", "%lf") also returns 0 → falls to TEXT
-    assert(lone_plus.is_text());
+    SqliteValueOwned qb3 = SqliteValueOwned::from_literal("'yes'");
+    assert(qb3.is_text() && qb3.as_text() == "yes");
 
-    // 8. Scientific notation
-    SqliteValueOwned sci1 = SqliteValueOwned::from_literal("1e10");
-    assert(sci1.is_float());
+    SqliteValueOwned qb4 = SqliteValueOwned::from_literal("\"no\"");
+    assert(qb4.is_text() && qb4.as_text() == "no");
 
-    SqliteValueOwned sci2 = SqliteValueOwned::from_literal("2.5E-3");
-    assert(sci2.is_float());
+    // NULL tokens inside quotes (remain TEXT)
+    SqliteValueOwned qnull1 = SqliteValueOwned::from_literal("'null'");
+    assert(qnull1.is_text() && qnull1.as_text() == "null");
 
-    // 9. Sized overload (const char*, int len)
-    SqliteValueOwned sized_null = SqliteValueOwned::from_literal("null", 4);
-    assert(sized_null.is_null());
+    SqliteValueOwned qnull2 = SqliteValueOwned::from_literal("\"NULL\"");
+    assert(qnull2.is_text() && qnull2.as_text() == "NULL");
 
-    SqliteValueOwned sized_bool = SqliteValueOwned::from_literal("true", 4);
-    assert(sized_bool.is_bool() && sized_bool.as_bool());
+    // Nested quotes
+    SqliteValueOwned nq1 = SqliteValueOwned::from_literal("'\"hello\"'");
+    assert(nq1.is_text() && nq1.as_text() == "\"hello\"");
 
-    // Partial length: only "tru" from "true_extra" → falls to TEXT
-    SqliteValueOwned partial = SqliteValueOwned::from_literal("true_extra", 3);
-    assert(partial.is_text()); // "tru" is not "true"
+    SqliteValueOwned nq2 = SqliteValueOwned::from_literal("\"'world'\"");
+    assert(nq2.is_text() && nq2.as_text() == "'world'");
 
-    // 10. SqliteStringView overload
-    SqliteStringView sv_false("false", 5);
-    SqliteValueOwned from_sv_lit = SqliteValueOwned::from_literal(sv_false);
-    assert(from_sv_lit.is_bool() && !from_sv_lit.as_bool());
+    SqliteValueOwned nq3 = SqliteValueOwned::from_literal("'a\"b\"c'");
+    assert(nq3.is_text() && nq3.as_text() == "a\"b\"c");
 
-    SqliteStringView sv_int("1024", 4);
-    SqliteValueOwned from_sv_int = SqliteValueOwned::from_literal(sv_int);
-    assert(from_sv_int.is_integer() && from_sv_int.as_int64() == 1024);
+    SqliteValueOwned nq4 = SqliteValueOwned::from_literal("\"'\"");
+    assert(nq4.is_text() && nq4.as_text() == "'");
 
-    // 11. NULL (uppercase) via SqliteStringView
-    SqliteStringView sv_null("NULL", 4);
-    SqliteValueOwned from_sv_null = SqliteValueOwned::from_literal(sv_null);
-    assert(from_sv_null.is_null());
+    SqliteValueOwned nq5 = SqliteValueOwned::from_literal("'\"'");
+    assert(nq5.is_text() && nq5.as_text() == "\"");
+
+    // Unbalanced and mismatched quotes (fall back to raw TEXT)
+    SqliteValueOwned unbal1 = SqliteValueOwned::from_literal("'");
+    assert(unbal1.is_text() && unbal1.as_text() == "'");
+
+    SqliteValueOwned unbal2 = SqliteValueOwned::from_literal("\"");
+    assert(unbal2.is_text() && unbal2.as_text() == "\"");
+
+    SqliteValueOwned unbal3 = SqliteValueOwned::from_literal("'hello");
+    assert(unbal3.is_text() && unbal3.as_text() == "'hello");
+
+    SqliteValueOwned unbal4 = SqliteValueOwned::from_literal("hello'");
+    assert(unbal4.is_text() && unbal4.as_text() == "hello'");
+
+    SqliteValueOwned unbal5 = SqliteValueOwned::from_literal("\"world");
+    assert(unbal5.is_text() && unbal5.as_text() == "\"world");
+
+    SqliteValueOwned unbal6 = SqliteValueOwned::from_literal("world\"");
+    assert(unbal6.is_text() && unbal6.as_text() == "world\"");
+
+    SqliteValueOwned mism1 = SqliteValueOwned::from_literal("'hello\"");
+    assert(mism1.is_text() && mism1.as_text() == "'hello\"");
+
+    SqliteValueOwned mism2 = SqliteValueOwned::from_literal("\"hello'");
+    assert(mism2.is_text() && mism2.as_text() == "\"hello'");
+
+    // =========================================================================
+    // 3. Booleans (All casings, aliases, subtypes, affinities, and false friends)
+    // =========================================================================
+    // True variants
+    const char* true_aliases[] = {"true", "TRUE", "True", "tRuE", "TrUe", "yes", "YES", "Yes", "yEs", "on", "ON", "On", "oN"};
+    for (size_t i = 0; i < sizeof(true_aliases)/sizeof(true_aliases[0]); ++i) {
+        SqliteValueOwned b = SqliteValueOwned::from_literal(true_aliases[i]);
+        assert(b.is_bool());
+        assert(b.as_bool() == true);
+        assert(b.is_integer());
+        assert(b.as_int64() == 1);
+        assert(b.subtype() == SQLITE_SUBTYPE_BOOL);
+    }
+
+    // False variants
+    const char* false_aliases[] = {"false", "FALSE", "False", "fAlSe", "FaLsE", "no", "NO", "No", "nO", "off", "OFF", "Off", "oFf"};
+    for (size_t i = 0; i < sizeof(false_aliases)/sizeof(false_aliases[0]); ++i) {
+        SqliteValueOwned b = SqliteValueOwned::from_literal(false_aliases[i]);
+        assert(b.is_bool());
+        assert(b.as_bool() == false);
+        assert(b.is_integer());
+        assert(b.as_int64() == 0);
+        assert(b.subtype() == SQLITE_SUBTYPE_BOOL);
+    }
+
+    // False friends (strings starting with boolean words fall through to TEXT)
+    const char* bool_false_friends[] = {
+        "true1", "truer", "truth", "false0", "falsely", "falsify",
+        "yesterday", "yep", "yeah", "nope", "none", "normal", "not",
+        "only", "online", "onto", "offline", "offset", "offense"
+    };
+    for (size_t i = 0; i < sizeof(bool_false_friends)/sizeof(bool_false_friends[0]); ++i) {
+        SqliteValueOwned ff = SqliteValueOwned::from_literal(bool_false_friends[i]);
+        assert(ff.is_text());
+        assert(ff.as_text() == bool_false_friends[i]);
+    }
+
+    // =========================================================================
+    // 4. NULL Literals (Casings, empty string, nullptr, and false friends)
+    // =========================================================================
+    SqliteValueOwned n_empty = SqliteValueOwned::from_literal("");
+    assert(n_empty.is_null() && n_empty.type() == SQLITE_NULL);
+
+    const char* null_casings[] = {"null", "NULL", "Null", "NuLL", "nULl", "NulL"};
+    for (size_t i = 0; i < sizeof(null_casings)/sizeof(null_casings[0]); ++i) {
+        SqliteValueOwned n = SqliteValueOwned::from_literal(null_casings[i]);
+        assert(n.is_null());
+        assert(n.type() == SQLITE_NULL);
+    }
+
+    SqliteValueOwned n_ptr_null = SqliteValueOwned::from_literal((const char*)nullptr);
+    assert(n_ptr_null.is_null());
+
+    SqliteValueOwned n_ptr_null_0 = SqliteValueOwned::from_literal((const char*)nullptr, 0);
+    assert(n_ptr_null_0.is_null());
+
+    SqliteValueOwned n_ptr_null_neg = SqliteValueOwned::from_literal((const char*)nullptr, -1);
+    assert(n_ptr_null_neg.is_null());
+
+    SqliteStringView sv_empty;
+    assert(SqliteValueOwned::from_literal(sv_empty).is_null());
+
+    // NULL false friends (strings starting with 'null' fall through to TEXT)
+    const char* null_false_friends[] = {"nullify", "nullable", "null0", "nullptr", "null_value"};
+    for (size_t i = 0; i < sizeof(null_false_friends)/sizeof(null_false_friends[0]); ++i) {
+        SqliteValueOwned ff = SqliteValueOwned::from_literal(null_false_friends[i]);
+        assert(ff.is_text());
+        assert(ff.as_text() == null_false_friends[i]);
+    }
+
+    // =========================================================================
+    // 5. SQLite Standard BLOB Literals (X'...' and x'...')
+    // =========================================================================
+    // Empty BLOB literals (0 bytes)
+    SqliteValueOwned bl_emp_u = SqliteValueOwned::from_literal("X''");
+    assert(bl_emp_u.is_blob() && bl_emp_u.as_blob().size() == 0);
+
+    SqliteValueOwned bl_emp_l = SqliteValueOwned::from_literal("x''");
+    assert(bl_emp_l.is_blob() && bl_emp_l.as_blob().size() == 0);
+
+    // 1-byte BLOBs
+    SqliteValueOwned bl_1b_00 = SqliteValueOwned::from_literal("X'00'");
+    assert(bl_1b_00.is_blob() && bl_1b_00.as_blob().size() == 1);
+    assert(static_cast<const uint8_t*>(bl_1b_00.as_blob().data())[0] == 0x00);
+
+    SqliteValueOwned bl_1b_ff = SqliteValueOwned::from_literal("X'FF'");
+    assert(bl_1b_ff.is_blob() && bl_1b_ff.as_blob().size() == 1);
+    assert(static_cast<const uint8_t*>(bl_1b_ff.as_blob().data())[0] == 0xFF);
+
+    SqliteValueOwned bl_1b_7f = SqliteValueOwned::from_literal("x'7f'");
+    assert(bl_1b_7f.is_blob() && bl_1b_7f.as_blob().size() == 1);
+    assert(static_cast<const uint8_t*>(bl_1b_7f.as_blob().data())[0] == 0x7F);
+
+    SqliteValueOwned bl_1b_ab = SqliteValueOwned::from_literal("X'aB'");
+    assert(bl_1b_ab.is_blob() && bl_1b_ab.as_blob().size() == 1);
+    assert(static_cast<const uint8_t*>(bl_1b_ab.as_blob().data())[0] == 0xAB);
+
+    // 2-byte & 4-byte inline SBO BLOBs
+    SqliteValueOwned bl_cafe = SqliteValueOwned::from_literal("X'CAFE'");
+    assert(bl_cafe.is_blob() && bl_cafe.as_blob().size() == 2 && !bl_cafe.is_heap_allocated());
+    const uint8_t* p_cafe = static_cast<const uint8_t*>(bl_cafe.as_blob().data());
+    assert(p_cafe[0] == 0xCA && p_cafe[1] == 0xFE);
+
+    SqliteValueOwned bl_deadbeef = SqliteValueOwned::from_literal("x'deadbeef'");
+    assert(bl_deadbeef.is_blob() && bl_deadbeef.as_blob().size() == 4 && !bl_deadbeef.is_heap_allocated());
+    const uint8_t* p_db = static_cast<const uint8_t*>(bl_deadbeef.as_blob().data());
+    assert(p_db[0] == 0xDE && p_db[1] == 0xAD && p_db[2] == 0xBE && p_db[3] == 0xEF);
+
+    SqliteValueOwned bl_hello = SqliteValueOwned::from_literal("x'48656c6c6f'");
+    assert(bl_hello.is_blob() && bl_hello.as_blob().size() == 5 && !bl_hello.is_heap_allocated());
+    assert(memcmp(bl_hello.as_blob().data(), "Hello", 5) == 0);
+
+    // 16-byte binary (UUID size) -> in-situ SBO (16 <= 22)
+    SqliteValueOwned bl_uuid = SqliteValueOwned::from_literal("X'0102030405060708090a0b0c0d0e0f10'");
+    assert(bl_uuid.is_blob() && bl_uuid.as_blob().size() == 16 && !bl_uuid.is_heap_allocated());
+
+    // 22-byte binary (exact max SBO capacity) -> in-situ SBO
+    SqliteValueOwned bl_max_sbo = SqliteValueOwned::from_literal("X'000102030405060708090a0b0c0d0e0f101112131415'");
+    assert(bl_max_sbo.is_blob() && bl_max_sbo.as_blob().size() == 22 && !bl_max_sbo.is_heap_allocated());
+
+    // 23-byte binary (exceeds SBO -> heap allocated)
+    SqliteValueOwned bl_23b = SqliteValueOwned::from_literal("X'000102030405060708090a0b0c0d0e0f10111213141516'");
+    assert(bl_23b.is_blob() && bl_23b.as_blob().size() == 23 && bl_23b.is_heap_allocated());
+
+    // 32-byte binary (SHA-256 hash size = 64 hex chars) -> heap allocated
+    SqliteValueOwned bl_sha256 = SqliteValueOwned::from_literal("X'e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855'");
+    assert(bl_sha256.is_blob() && bl_sha256.as_blob().size() == 32 && bl_sha256.is_heap_allocated());
+    assert(static_cast<const uint8_t*>(bl_sha256.as_blob().data())[0] == 0xE3);
+    assert(static_cast<const uint8_t*>(bl_sha256.as_blob().data())[31] == 0x55);
+
+    // Invalid BLOB literals fall back to TEXT
+    const char* invalid_blobs[] = {
+        "X'1'", "X'123'", "x'a'", "x'abc'", "X'0102030'",
+        "X'GG'", "x'ZZ'", "X'12G4'", "X'--'", "X'  '", "X'01 02'", "X'01_02'",
+        "X\"0102\"", "x\"deadbeef\"", "X'0102", "X0102'", "X'", "x'", "X", "x"
+    };
+    for (size_t i = 0; i < sizeof(invalid_blobs)/sizeof(invalid_blobs[0]); ++i) {
+        SqliteValueOwned inv_bl = SqliteValueOwned::from_literal(invalid_blobs[i]);
+        assert(inv_bl.is_text());
+        assert(inv_bl.as_text() == invalid_blobs[i]);
+    }
+
+    // =========================================================================
+    // 6. Integers (Signs, Leading Zeros, 64-bit boundaries)
+    // =========================================================================
+    SqliteValueOwned iz1 = SqliteValueOwned::from_literal("0");
+    assert(iz1.is_integer() && iz1.as_int64() == 0);
+
+    SqliteValueOwned iz2 = SqliteValueOwned::from_literal("000");
+    assert(iz2.is_integer() && iz2.as_int64() == 0);
+
+    SqliteValueOwned iz3 = SqliteValueOwned::from_literal("+000");
+    assert(iz3.is_integer() && iz3.as_int64() == 0);
+
+    SqliteValueOwned iz4 = SqliteValueOwned::from_literal("-000");
+    assert(iz4.is_integer() && iz4.as_int64() == 0);
+
+    SqliteValueOwned i_lead1 = SqliteValueOwned::from_literal("007");
+    assert(i_lead1.is_integer() && i_lead1.as_int64() == 7);
+
+    SqliteValueOwned i_lead2 = SqliteValueOwned::from_literal("-007");
+    assert(i_lead2.is_integer() && i_lead2.as_int64() == -7);
+
+    SqliteValueOwned i_lead3 = SqliteValueOwned::from_literal("+0042");
+    assert(i_lead3.is_integer() && i_lead3.as_int64() == 42);
+
+    SqliteValueOwned i32_max = SqliteValueOwned::from_literal("2147483647");
+    assert(i32_max.is_integer() && i32_max.as_int64() == 2147483647LL);
+
+    SqliteValueOwned i32_min = SqliteValueOwned::from_literal("-2147483648");
+    assert(i32_min.is_integer() && i32_min.as_int64() == -2147483648LL);
+
+    SqliteValueOwned i64_max = SqliteValueOwned::from_literal("9223372036854775807");
+    assert(i64_max.is_integer() && i64_max.as_int64() == 9223372036854775807LL);
+
+    SqliteValueOwned i64_min = SqliteValueOwned::from_literal("-9223372036854775808");
+    assert(i64_min.is_integer() && i64_min.as_int64() == (-9223372036854775807LL - 1LL));
+
+    // =========================================================================
+    // 7. Floating-Point Numbers & Scientific Notation
+    // =========================================================================
+    SqliteValueOwned f_zero = SqliteValueOwned::from_literal("0.0");
+    assert(f_zero.is_float() && f_zero.as_double() == 0.0);
+
+    SqliteValueOwned f_nzero = SqliteValueOwned::from_literal("-0.0");
+    assert(f_nzero.is_float());
+
+    SqliteValueOwned f_pzero = SqliteValueOwned::from_literal("+0.0");
+    assert(f_pzero.is_float());
+
+    SqliteValueOwned f_trail1 = SqliteValueOwned::from_literal("42.");
+    assert(f_trail1.is_float() && f_trail1.as_double() == 42.0);
+
+    SqliteValueOwned f_trail2 = SqliteValueOwned::from_literal("-5.");
+    assert(f_trail2.is_float() && f_trail2.as_double() == -5.0);
+
+    SqliteValueOwned f_trail3 = SqliteValueOwned::from_literal("+0.");
+    assert(f_trail3.is_float() && f_trail3.as_double() == 0.0);
+
+    SqliteValueOwned f_prec = SqliteValueOwned::from_literal("3.141592653589793");
+    assert(f_prec.is_float());
+
+    SqliteValueOwned f_tz = SqliteValueOwned::from_literal("1.000000");
+    assert(f_tz.is_float() && f_tz.as_double() == 1.0);
+
+    // Scientific notation (e and E, positive/negative exponents)
+    const char* sci_floats[] = {
+        "1e0", "1E0", "1e5", "1E5", "1e-4", "1E-4", "1e+6", "1E+6",
+        "+1e5", "-1e5", "+1.5e-3", "-2.25E+4", "0e0", "0E0", "-0e5", "+0E-2",
+        "1e20", "1e-20", "3.14159e10"
+    };
+    for (size_t i = 0; i < sizeof(sci_floats)/sizeof(sci_floats[0]); ++i) {
+        SqliteValueOwned sc = SqliteValueOwned::from_literal(sci_floats[i]);
+        assert(sc.is_float());
+    }
+
+    // =========================================================================
+    // 8. Malformed Numbers (Fall through to TEXT)
+    // =========================================================================
+    // Multiple dots
+    const char* multi_dots[] = {"1.2.3", "1.2.3.4", "192.168.1.1", "..", "...", "1..2", "-1.2.3", "+1.2.3"};
+    for (size_t i = 0; i < sizeof(multi_dots)/sizeof(multi_dots[0]); ++i) {
+        SqliteValueOwned md = SqliteValueOwned::from_literal(multi_dots[i]);
+        assert(md.is_text() && md.as_text() == multi_dots[i]);
+    }
+
+    // Multiple exponents
+    const char* multi_e[] = {"1e2e3", "1E2E3", "1ee2", "1EE2", "1e+2e-3", "-1e2e3", "+1e2e3"};
+    for (size_t i = 0; i < sizeof(multi_e)/sizeof(multi_e[0]); ++i) {
+        SqliteValueOwned me = SqliteValueOwned::from_literal(multi_e[i]);
+        assert(me.is_text() && me.as_text() == multi_e[i]);
+    }
+
+    // Incomplete exponents (missing exponent digits)
+    const char* incomp_e[] = {"1e", "1E", "1e+", "1e-", "1E+", "1E-", "-3e", "+2E+", "-5e-"};
+    for (size_t i = 0; i < sizeof(incomp_e)/sizeof(incomp_e[0]); ++i) {
+        SqliteValueOwned ie = SqliteValueOwned::from_literal(incomp_e[i]);
+        assert(ie.is_text() && ie.as_text() == incomp_e[i]);
+    }
+
+    // Exponent without leading number
+    const char* lead_e[] = {"e10", "E10", "+e5", "-e5", "e", "E"};
+    for (size_t i = 0; i < sizeof(lead_e)/sizeof(lead_e[0]); ++i) {
+        SqliteValueOwned le = SqliteValueOwned::from_literal(lead_e[i]);
+        assert(le.is_text() && le.as_text() == lead_e[i]);
+    }
+
+    // Leading dot without sign/digit
+    SqliteValueOwned lead_dot1 = SqliteValueOwned::from_literal(".5");
+    assert(lead_dot1.is_text() && lead_dot1.as_text() == ".5");
+
+    SqliteValueOwned lead_dot2 = SqliteValueOwned::from_literal(".123");
+    assert(lead_dot2.is_text() && lead_dot2.as_text() == ".123");
+
+    // Invalid trailing/embedded characters
+    const char* invalid_num_chars[] = {"123a", "3abc", "1.2x", "1e2z", "1_000", "1,000", "$100", "100%"};
+    for (size_t i = 0; i < sizeof(invalid_num_chars)/sizeof(invalid_num_chars[0]); ++i) {
+        SqliteValueOwned inc = SqliteValueOwned::from_literal(invalid_num_chars[i]);
+        assert(inc.is_text() && inc.as_text() == invalid_num_chars[i]);
+    }
+
+    // Sign anomalies
+    const char* sign_anomalies[] = {"++5", "--5", "+-5", "-+5", "+", "-", "1+2", "1-2", "1.2+3", "1e2+3"};
+    for (size_t i = 0; i < sizeof(sign_anomalies)/sizeof(sign_anomalies[0]); ++i) {
+        SqliteValueOwned sa = SqliteValueOwned::from_literal(sign_anomalies[i]);
+        assert(sa.is_text() && sa.as_text() == sign_anomalies[i]);
+    }
+
+    // C-style hex/bin/oct literals (treated as standard text tokens)
+    const char* c_literals[] = {"0x10", "0xDEADBEEF", "0b101", "0o77"};
+    for (size_t i = 0; i < sizeof(c_literals)/sizeof(c_literals[0]); ++i) {
+        SqliteValueOwned cl = SqliteValueOwned::from_literal(c_literals[i]);
+        assert(cl.is_text() && cl.as_text() == c_literals[i]);
+    }
+
+    // =========================================================================
+    // 9. Plain Unquoted Text (Keywords, Identifiers, ISO-8601, JSON, Paths, Symbols)
+    // =========================================================================
+    const char* plain_texts[] = {
+        "SELECT", "FROM", "WHERE", "INSERT", "UPDATE", "DELETE", "CREATE", "TABLE",
+        "strict", "k", "user_id", "first_name", "created_at", "total_count_2",
+        "2026-09-04", "19:08:52", "19:08:52.123", "2026-09-04T19:08:52Z", "2026-09-04 19:08:52+05:30",
+        "{}", "[]", "{\"id\": 1}", "[1, 2, 3]",
+        "https://sqlite.org", "/var/log/syslog", "C:\\Windows\\System32",
+        "*", "/", "%", "^", "&", "|", "~", "!", "=", "<", ">", "<=", ">=", "!=", "<>", ",", ";", ":", "@", "#"
+    };
+    for (size_t i = 0; i < sizeof(plain_texts)/sizeof(plain_texts[0]); ++i) {
+        SqliteValueOwned pt = SqliteValueOwned::from_literal(plain_texts[i]);
+        assert(pt.is_text() && pt.as_text() == plain_texts[i]);
+    }
+
+    // =========================================================================
+    // 10. Sized Buffer / Substring Parsing Overloads (const char*, int len) & SqliteStringView
+    // =========================================================================
+    SqliteValueOwned slice_int = SqliteValueOwned::from_literal("12345extra", 5);
+    assert(slice_int.is_integer() && slice_int.as_int64() == 12345);
+
+    SqliteValueOwned slice_float = SqliteValueOwned::from_literal("3.1415extra", 6);
+    assert(slice_float.is_float());
+
+    SqliteValueOwned slice_bool_t = SqliteValueOwned::from_literal("true_extra", 4);
+    assert(slice_bool_t.is_bool() && slice_bool_t.as_bool());
+
+    SqliteValueOwned slice_bool_f = SqliteValueOwned::from_literal("false_extra", 5);
+    assert(slice_bool_f.is_bool() && !slice_bool_f.as_bool());
+
+    SqliteValueOwned slice_null_exact = SqliteValueOwned::from_literal("null_extra", 4);
+    assert(slice_null_exact.is_null());
+
+    SqliteValueOwned slice_null_cut = SqliteValueOwned::from_literal("null_extra", 5);
+    assert(slice_null_cut.is_text() && slice_null_cut.as_text() == "null_");
+
+    SqliteValueOwned slice_blob = SqliteValueOwned::from_literal("X'010203'extra", 9);
+    assert(slice_blob.is_blob() && slice_blob.as_blob().size() == 3);
+
+    SqliteValueOwned slice_blob_cut = SqliteValueOwned::from_literal("X'010203'extra", 8);
+    assert(slice_blob_cut.is_text() && slice_blob_cut.as_text() == "X'010203");
+
+    SqliteValueOwned slice_quoted = SqliteValueOwned::from_literal("'quoted'extra", 8);
+    assert(slice_quoted.is_text() && slice_quoted.as_text() == "quoted");
+
+    // Partial cuts falling back to TEXT
+    SqliteValueOwned cut_tru = SqliteValueOwned::from_literal("true", 3);
+    assert(cut_tru.is_text() && cut_tru.as_text() == "tru");
+
+    SqliteValueOwned cut_fals = SqliteValueOwned::from_literal("false", 4);
+    assert(cut_fals.is_text() && cut_fals.as_text() == "fals");
+
+    SqliteValueOwned cut_nul = SqliteValueOwned::from_literal("null", 3);
+    assert(cut_nul.is_text() && cut_nul.as_text() == "nul");
+
+    // SqliteStringView overloads
+    SqliteStringView sv_f("false", 5);
+    assert(SqliteValueOwned::from_literal(sv_f).is_bool());
+
+    SqliteStringView sv_i("1024", 4);
+    assert(SqliteValueOwned::from_literal(sv_i).is_integer() && SqliteValueOwned::from_literal(sv_i).as_int64() == 1024);
+
+    SqliteStringView sv_n("NULL", 4);
+    assert(SqliteValueOwned::from_literal(sv_n).is_null());
+
+    // =========================================================================
+    // 11. Immutability Propagation Across All Inferred Types
+    // =========================================================================
+    SqliteValueOwned imm_null = SqliteValueOwned::from_literal("null", 4, true);
+    assert(imm_null.is_null() && imm_null.is_immutable());
+
+    SqliteValueOwned imm_bool = SqliteValueOwned::from_literal("true", 4, true);
+    assert(imm_bool.is_bool() && imm_bool.as_bool() && imm_bool.is_immutable());
+
+    SqliteValueOwned imm_int = SqliteValueOwned::from_literal("42", 2, true);
+    assert(imm_int.is_integer() && imm_int.as_int64() == 42 && imm_int.is_immutable());
+
+    SqliteValueOwned imm_float = SqliteValueOwned::from_literal("3.14", 4, true);
+    assert(imm_float.is_float() && imm_float.is_immutable());
+
+    SqliteValueOwned imm_blob = SqliteValueOwned::from_literal("X'0102'", 7, true);
+    assert(imm_blob.is_blob() && imm_blob.is_immutable());
+
+    SqliteValueOwned imm_quoted = SqliteValueOwned::from_literal("'hello'", 7, true);
+    assert(imm_quoted.is_text() && imm_quoted.as_text() == "hello" && imm_quoted.is_immutable());
+
+    SqliteValueOwned imm_unquoted = SqliteValueOwned::from_literal("unquoted", 8, true);
+    assert(imm_unquoted.is_text() && imm_unquoted.as_text() == "unquoted" && imm_unquoted.is_immutable());
 }
 
 /**

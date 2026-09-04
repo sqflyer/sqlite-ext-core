@@ -2194,41 +2194,112 @@ public:
             return SqliteValueOwned::from_bool(false, is_immutable);
         }
 
-        // 3. Check for Quoted String Literal ('text' or "text")
+        // 3. Check for SQLite BLOB Literal: X'...' or x'...'
+        if (len >= 3 && (p[0] == 'X' || p[0] == 'x') && p[1] == '\'' && p[len - 1] == '\'') {
+            int hex_len = len - 3;
+            if ((hex_len % 2) == 0) {
+                const char* hex = p + 2;
+                bool valid_hex = true;
+                for (int i = 0; i < hex_len; ++i) {
+                    if (SqliteUuidUtil::parse_hex_digit(hex[i]) < 0) {
+                        valid_hex = false;
+                        break;
+                    }
+                }
+                if (valid_hex) {
+                    int byte_count = hex_len / 2;
+                    if (byte_count <= 22) {
+                        uint8_t raw[22];
+                        for (int i = 0; i < byte_count; ++i) {
+                            int hi = SqliteUuidUtil::parse_hex_digit(hex[i * 2]);
+                            int lo = SqliteUuidUtil::parse_hex_digit(hex[i * 2 + 1]);
+                            raw[i] = static_cast<uint8_t>((hi << 4) | lo);
+                        }
+                        return SqliteValueOwned::from_blob(raw, byte_count, SQLITE_SUBTYPE_NONE, is_immutable);
+                    } else {
+                        void* buf = sqlite3_malloc64(static_cast<sqlite3_uint64>(byte_count));
+                        if (buf) {
+                            uint8_t* out = static_cast<uint8_t*>(buf);
+                            for (int i = 0; i < byte_count; ++i) {
+                                int hi = SqliteUuidUtil::parse_hex_digit(hex[i * 2]);
+                                int lo = SqliteUuidUtil::parse_hex_digit(hex[i * 2 + 1]);
+                                out[i] = static_cast<uint8_t>((hi << 4) | lo);
+                            }
+                            SqliteValueOwned val = SqliteValueOwned::from_blob(buf, byte_count, SQLITE_SUBTYPE_NONE, is_immutable);
+                            sqlite3_free(buf);
+                            return val;
+                        }
+                    }
+                }
+            }
+        }
+
+        // 4. Check for Quoted String Literal ('text' or "text")
         if (len >= 2 && ((p[0] == '\'' && p[len - 1] == '\'') || (p[0] == '"' && p[len - 1] == '"'))) {
             return SqliteValueOwned::from_text(p + 1, len - 2, SQLITE_SUBTYPE_NONE, is_immutable);
         }
 
         // 4. Try parsing as Integer or Float
-        bool has_dot = false;
-        bool has_e = false;
+        int dot_count = 0;
+        int e_count = 0;
+        int e_pos = -1;
+        int digit_count = 0;
         bool is_num = (len > 0 && (p[0] == '-' || p[0] == '+' || (p[0] >= '0' && p[0] <= '9')));
         if (is_num) {
+            if (p[0] >= '0' && p[0] <= '9') {
+                digit_count++;
+            }
             for (int i = 1; i < len; ++i) {
                 if (p[i] == '.') {
-                    has_dot = true;
+                    dot_count++;
+                    if (dot_count > 1 || e_count > 0) { is_num = false; break; }
                 } else if (p[i] == 'e' || p[i] == 'E') {
-                    has_e = true;
+                    e_count++;
+                    e_pos = i;
+                    if (e_count > 1) { is_num = false; break; }
                 } else if ((p[i] == '-' || p[i] == '+') && (p[i - 1] == 'e' || p[i - 1] == 'E')) {
                     // Valid exponent sign
-                } else if (p[i] < '0' || p[i] > '9') {
+                } else if (p[i] >= '0' && p[i] <= '9') {
+                    digit_count++;
+                } else {
                     is_num = false;
                     break;
                 }
             }
         }
 
-        if (is_num && !has_dot && !has_e) {
-            long long i_val = 0;
-            if (sscanf(p, "%lld", &i_val) == 1) {
-                return SqliteValueOwned(i_val, SQLITE_SUBTYPE_NONE, SQLITE_AFF_INTEGER, is_immutable);
+        // Validate that there is at least one digit in the number and that an exponent has digits following it
+        if (is_num && digit_count > 0) {
+            if (e_count == 1) {
+                int digit_start = e_pos + 1;
+                if (digit_start < len && (p[digit_start] == '+' || p[digit_start] == '-')) {
+                    digit_start++;
+                }
+                if (digit_start >= len) {
+                    is_num = false;
+                }
             }
+        } else {
+            is_num = false;
         }
 
-        if (is_num && (has_dot || has_e)) {
-            double d_val = 0.0;
-            if (sscanf(p, "%lf", &d_val) == 1) {
-                return SqliteValueOwned(d_val, SQLITE_SUBTYPE_NONE, SQLITE_AFF_REAL, is_immutable);
+        if (is_num && len < 64) {
+            char num_buf[64];
+            memcpy(num_buf, p, len);
+            num_buf[len] = '\0';
+
+            if (dot_count == 0 && e_count == 0) {
+                long long i_val = 0;
+                if (sscanf(num_buf, "%lld", &i_val) == 1) {
+                    return SqliteValueOwned(i_val, SQLITE_SUBTYPE_NONE, SQLITE_AFF_INTEGER, is_immutable);
+                }
+            }
+
+            if (dot_count == 1 || e_count == 1) {
+                double d_val = 0.0;
+                if (sscanf(num_buf, "%lf", &d_val) == 1) {
+                    return SqliteValueOwned(d_val, SQLITE_SUBTYPE_NONE, SQLITE_AFF_REAL, is_immutable);
+                }
             }
         }
 

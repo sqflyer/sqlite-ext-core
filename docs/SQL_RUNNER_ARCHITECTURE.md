@@ -94,20 +94,65 @@ Within each cell body, the runner sequentially consumes SQL statements:
 
 ## 4. Snapshot Table Parser & Type Inference
 
-`parse_snapshot_block` extracts column headers, skips alignment dividers (`|:---|:---:|---:|`), and converts table cells into typed `SqliteValueOwned` instances:
+`parse_snapshot_block` extracts column headers, skips alignment dividers (`|:---|:---:|---:|`), and converts table cells into typed `SqliteValueOwned` instances via `SqliteSqlRunner::parse_cell_value` (which directly delegates to `SqliteValueOwned::from_literal`):
 
 ```
-Markdown Line: "-- | 100 | Alice | 95.5 | NULL |"
-                   |      |       |      |
-                   v      v       v      v
-Value Type:      INT    TEXT    FLOAT   NULL
+Markdown Line: "-- | 100 | Alice | 95.5 | true | X'DEADBEEF' | NULL |"
+                   |     |       |      |      |             |
+                   v     v       v      v      v             v
+Value Type:      INT   TEXT    FLOAT   BOOL   BLOB          NULL
 ```
 
-### Type Inference Rules (`parse_cell_value`):
-- `"NULL"` or `"null"` $\rightarrow$ `SQLITE_NULL`
-- Valid integer string matching `strtoll` $\rightarrow$ `SQLITE_INTEGER`
-- Valid floating-point string matching `strtod` $\rightarrow$ `SQLITE_FLOAT`
-- Default fallback $\rightarrow$ `SQLITE_TEXT`
+### 4.1 Type Inference State Machine (`SqliteValueOwned::from_literal`)
+
+The parsing pipeline evaluates input string tokens (`SqliteStringView`) through the following deterministic stages:
+
+```
++-------------------------------------------------------------------------------+
+|                       from_literal Parsing Pipeline                           |
++-------------------------------------------------------------------------------+
+| 1. Empty / "null" (case-insensitive)        ---> SQLITE_NULL                  |
+| 2. "true"/"yes"/"on" / "false"/"no"/"off"   ---> SQLITE_INTEGER (BOOL sub)    |
+| 3. X'...' / x'...' (even hex length)        ---> SQLITE_BLOB (SBO <=22B/Heap) |
+| 4. 'text' / "text" (matching outer quotes)  ---> SQLITE_TEXT (quotes stripped)|
+| 5. Signed Integer (is_num, dot=0, e=0)      ---> SQLITE_INTEGER (64-bit int)  |
+| 6. Floating-point (is_num, dot=1 or e=1)    ---> SQLITE_FLOAT (double)        |
+| 7. Fallback (unquoted text, malformed nums) ---> SQLITE_TEXT                  |
++-------------------------------------------------------------------------------+
+```
+
+### 4.2 Type Inference & Conversion Rules:
+
+1. **NULL Recognition**:
+   - `""` (empty string), `"null"`, `"NULL"`, `"Null"` $\rightarrow$ `SQLITE_NULL` (`type() == SQLITE_NULL`, `is_null() == true`).
+   - Slices cutting `"null"` (e.g. `"nul"`) or prefixed identifiers (`"nullify"`) fall through to `SQLITE_TEXT`.
+
+2. **Boolean Recognition**:
+   - Case-insensitive true tokens: `"true"`, `"yes"`, `"on"` $\rightarrow$ `SQLITE_INTEGER` with `1LL`, tagged with `SQLITE_SUBTYPE_BOOL ('B' = 66)`.
+   - Case-insensitive false tokens: `"false"`, `"no"`, `"off"` $\rightarrow$ `SQLITE_INTEGER` with `0LL`, tagged with `SQLITE_SUBTYPE_BOOL ('B' = 66)`.
+   - Identifiers with boolean prefixes (`"true1"`, `"yesterday"`, `"offline"`) safely fall through to `SQLITE_TEXT`.
+
+3. **SQLite Standard BLOB Literals (`X'...'` / `x'...'`)**:
+   - Uppercase `X'...'` and lowercase `x'...'` containing an even count of hex digits are decoded into binary byte arrays.
+   - **In-situ SBO Optimization**: $\le 22$ bytes (44 hex digits) are decoded directly into `InlineBufferRep` with **zero** heap allocations.
+   - **Heap Spillover**: $> 22$ bytes allocate memory via `sqlite3_malloc64` and transfer into owned heap buffer.
+   - Malformed BLOB literals (odd hex length like `X'123'`, invalid hex chars like `X'ZZ'`, unclosed quotes) safely fall through to `SQLITE_TEXT`.
+
+4. **Quoted String Stripping (`'...'` and `"..."`)**:
+   - Single-quoted (`'...'`) and double-quoted (`"..."`) string literals have their outer quotes stripped.
+   - Empty quotes (`''`, `""`) produce 0-length `SQLITE_TEXT`.
+   - Quoted numbers, booleans, and nulls (`'123'`, `"true"`, `'null'`) remain pure `SQLITE_TEXT` and are never coerced.
+   - Unbalanced or mismatched quotes (`'hello"`, `"world'`) are preserved as raw unquoted `SQLITE_TEXT`.
+
+5. **Integer Numbers**:
+   - Valid signed integer tokens (`"0"`, `"+5"`, `"-42"`, `"9223372036854775807"`, `"-9223372036854775808"`, `"007"`) are parsed via `sscanf` on a slice-safe null-terminated buffer into 64-bit `sqlite3_int64` (`SQLITE_AFF_INTEGER`).
+
+6. **Floating-Point Numbers**:
+   - Decimal tokens with a single dot (`"3.1415"`, `"-0.005"`, `"42."`) or standard scientific notation (`"1.5e-3"`, `"+1E+6"`, `"-2.5E-3"`) are parsed into IEEE 754 `double` (`SQLITE_AFF_REAL`).
+
+7. **Malformed Numbers & Plain Text Fallback**:
+   - Multi-dot strings (`"1.2.3"`, `"192.168.1.1"`), multi-exponent strings (`"1e2e3"`), incomplete scientific exponents (`"1e"`, `"1e+"`), sign anomalies (`"++5"`, `"+"`), leading dot (`".5"`), and C-style hex/bin literals (`"0x10"`, `"0b101"`) fall through to `SQLITE_TEXT`.
+   - SQL identifiers (`strict`, `user_id`), ISO-8601 timestamps (`2026-09-04T19:08:52Z`), JSON blocks (`{"id": 1}`), URLs, file paths, and punctuation symbols default to `SQLITE_TEXT`.
 
 ---
 
