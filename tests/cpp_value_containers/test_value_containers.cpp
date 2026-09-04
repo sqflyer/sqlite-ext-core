@@ -1916,6 +1916,59 @@ static void test_std_array_and_vector_alignment() {
   printf("   [PASS] Complete std::array & std::vector Standard Library Alignment verified.\n");
 }
 
+static void test_container_pointer_traits_and_passing() {
+  printf("Testing Container Pointer Traits and Passing (Semantic Equivalence)...\n");
+
+  // 1. Verify compile-time registered tags
+  assert(strcmp(SqlitePointerTraits<SqliteValueVec<4>>::name(), "SqliteValueVec") == 0);
+  assert(strcmp(SqlitePointerTraits<SqliteValueVec<>>::name(), "SqliteValueVec") == 0);
+  assert(strcmp(SqlitePointerTraits<SqliteValueTuple<2>>::name(), "SqliteValueTuple") == 0);
+  assert(strcmp(SqlitePointerTraits<SqliteValueTuple<>>::name(), "SqliteValueTuple") == 0);
+  assert(strcmp(SqlitePointerTraits<SqliteRowOwnedWrapper>::name(), "SqliteRowOwnedWrapper") == 0);
+  assert(strcmp(SqlitePointerTraits<SqliteRowView>::name(), "SqliteRowView") == 0);
+
+  // 2. Test active pointer with SqliteValueVec
+  SqliteValueVec<4> vec;
+  vec.push_back(42LL);
+  vec.push_back("test_data");
+
+  SqliteValueOwned vec_ptr = SqliteValueOwned::from_pointer(&vec);
+  assert(vec_ptr.is_pointer());
+  assert(vec_ptr.has_pointer());
+  assert(!vec_ptr.is_null());
+  assert(vec_ptr.as_pointer<SqliteValueVec<4>>() == &vec);
+  assert(vec_ptr.pointer<SqliteValueVec<4>>() == &vec);
+
+  // 3. Test null pointer with SqliteValueVec (Semantic Equivalence)
+  SqliteValueOwned null_vec_ptr = SqliteValueOwned::from_pointer<SqliteValueVec<4>>(nullptr);
+  SqliteValueOwned pure_null;
+
+  assert(null_vec_ptr.is_pointer());
+  assert(!null_vec_ptr.has_pointer());
+  assert(null_vec_ptr.is_null()); // Semantic Equivalence: nullptr is SQL NULL!
+  assert(!null_vec_ptr);           // Falsy in boolean context
+
+  // Equality (Semantic Equivalence)
+  assert(pure_null == null_vec_ptr);
+  assert(null_vec_ptr == pure_null);
+  assert(pure_null != vec_ptr);
+  assert(null_vec_ptr != vec_ptr);
+
+  // Less Operator (Semantic Equivalence)
+  assert(!(pure_null < null_vec_ptr));
+  assert(!(null_vec_ptr < pure_null));
+  assert(pure_null < vec_ptr);
+  assert(null_vec_ptr < vec_ptr);
+  assert(!(vec_ptr < pure_null));
+  assert(!(vec_ptr < null_vec_ptr));
+
+  // Hashing (Semantic Equivalence)
+  assert(pure_null.hash() == null_vec_ptr.hash());
+  assert(vec_ptr.hash() != null_vec_ptr.hash());
+
+  printf("   [PASS] Container Pointer Traits & Semantic Equivalence verified.\n");
+}
+
 int main() {
   printf("=================================================================\n");
   printf("Running Value Containers (sqlite3_value_containers.hpp) Core Tests\n");
@@ -1933,6 +1986,7 @@ int main() {
   test_value_vec_dynamic_growth_and_capacity();
   test_exhaustive_edge_cases_and_coverage();
   test_std_array_and_vector_alignment();
+  test_container_pointer_traits_and_passing();
 
   printf("=================================================================\n");
   printf("All Value Container Core Tests Passed Successfully (100%%)!\n");

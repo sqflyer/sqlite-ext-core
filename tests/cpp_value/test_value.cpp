@@ -1948,6 +1948,324 @@ void test_subtag_and_immutability() {
     assert(imm_clone.as_int64() == 66LL); // protected!
 }
 
+struct CustomContextTest {
+    int id;
+    double factor;
+};
+SQLITE_REGISTER_POINTER_TAG(CustomContextTest, "custom_context_tag");
+
+void test_pointer_passing(sqlite3* db) {
+    CustomContextTest ctx_obj = {42, 3.14};
+
+    // 1. Verify SqlitePointerTraits
+    assert(strcmp(SqlitePointerTraits<CustomContextTest>::name(), "custom_context_tag") == 0);
+
+    // 2. Test Pure SQL NULL vs Pointer Differentiation
+    SqliteValueOwned pure_null;
+    assert(pure_null.type() == SQLITE_NULL);
+    assert(pure_null.subtype() == SQLITE_SUBTYPE_NONE);
+    assert(pure_null.is_null() == true);
+    assert(pure_null.is_pointer() == false);
+    assert(pure_null.has_pointer() == false);
+    assert(!pure_null);
+    assert(pure_null.as_pointer<CustomContextTest>() == nullptr);
+
+    // 3. Test Active Non-Null Pointer
+    SqliteValueOwned owned_ptr = SqliteValueOwned::from_pointer(&ctx_obj);
+    assert(owned_ptr.type() == SQLITE_NULL);
+    assert(owned_ptr.subtype() == SQLITE_SUBTYPE_POINTER);
+    assert(owned_ptr.is_null() == false);      // Crucial: NOT pure SQL NULL!
+    assert(owned_ptr.is_pointer() == true);
+    assert(owned_ptr.has_pointer() == true);
+    assert(bool(owned_ptr) == true);          // Truthy: contains non-null pointer!
+    assert(owned_ptr.as_pointer<CustomContextTest>() == &ctx_obj);
+    assert(owned_ptr.as_pointer<CustomContextTest>()->id == 42);
+    assert(owned_ptr.as_pointer<CustomContextTest>()->factor == 3.14);
+    assert(owned_ptr.pointer<CustomContextTest>() == &ctx_obj);
+    assert(owned_ptr.as_pointer<CustomContextTest>("custom_context_tag") == &ctx_obj);
+
+    // 4. Test Null Pointer Passing (T* == nullptr)
+    SqliteValueOwned null_ptr = SqliteValueOwned::from_pointer<CustomContextTest>(nullptr);
+    assert(null_ptr.type() == SQLITE_NULL);
+    assert(null_ptr.subtype() == SQLITE_SUBTYPE_POINTER);
+    assert(null_ptr.is_null() == true);       // Semantic Equivalence: nullptr pointer is semantically SQL NULL!
+    assert(null_ptr.is_pointer() == true);
+    assert(null_ptr.has_pointer() == false);  // Address is nullptr
+    assert(!null_ptr);                        // Falsy in boolean context because address is nullptr!
+    assert(null_ptr.as_pointer<CustomContextTest>() == nullptr);
+
+    // 5. Test Mutation via set_pointer & set_null
+    SqliteValueOwned mut_val(12345LL);
+    assert(mut_val.is_integer());
+    mut_val.set_pointer(&ctx_obj);
+    assert(mut_val.is_pointer());
+    assert(mut_val.has_pointer());
+    assert(!mut_val.is_null());
+    assert(mut_val.as_pointer<CustomContextTest>() == &ctx_obj);
+    mut_val.set_null();
+    assert(mut_val.is_null());
+    assert(!mut_val.is_pointer());
+    assert(!mut_val.has_pointer());
+    // Test set_pointer(nullptr)
+    mut_val.set_pointer<CustomContextTest>(nullptr);
+    assert(mut_val.is_pointer());
+    assert(!mut_val.has_pointer());
+    assert(mut_val.is_null());                // Semantic Equivalence
+    assert(mut_val == pure_null);
+    assert(mut_val == null_ptr);
+
+    // 6. Test Equality Comparisons (Semantic Equivalence)
+    assert(pure_null != owned_ptr);
+    assert(owned_ptr != pure_null);
+    assert(pure_null == null_ptr);            // Semantic Equivalence: pure SQL NULL == null pointer!
+    assert(null_ptr == pure_null);            // Symmetric
+    assert(pure_null == pure_null);
+    assert(null_ptr == null_ptr);
+    assert(owned_ptr != null_ptr);
+    assert(null_ptr != owned_ptr);
+    SqliteValueOwned owned_ptr2 = SqliteValueOwned::from_pointer(&ctx_obj);
+    assert(owned_ptr == owned_ptr2);
+    CustomContextTest ctx_obj2 = {99, 2.718};
+    SqliteValueOwned owned_other = SqliteValueOwned::from_pointer(&ctx_obj2);
+    assert(owned_ptr != owned_other);
+
+    // 7. Test Less-Than Ordering (Strict Weak Ordering for std::map/std::set)
+    // Pure SQL NULL and null pointer (0x0) are semantically equivalent in ordering:
+    assert(!(pure_null < null_ptr));
+    assert(!(null_ptr < pure_null));
+    assert(!(pure_null < pure_null));
+    assert(!(null_ptr < null_ptr));
+
+    // Both pure SQL NULL and null pointer sort before any active non-null pointer:
+    assert(pure_null < owned_ptr);
+    assert(!(owned_ptr < pure_null));
+    assert(null_ptr < owned_ptr);
+    assert(!(owned_ptr < null_ptr));
+
+    // Pointer-to-pointer ordered by address
+    if (&ctx_obj < &ctx_obj2) {
+        assert(owned_ptr < owned_other);
+        assert(!(owned_other < owned_ptr));
+    } else {
+        assert(owned_other < owned_ptr);
+        assert(!(owned_ptr < owned_other));
+    }
+    // Equivalent pointer values have !(a < b) && !(b < a)
+    assert(!(owned_ptr < owned_ptr2));
+    assert(!(owned_ptr2 < owned_ptr));
+
+    // Heterogeneous less-than with other SQL types
+    // NULL/Pointer (rank 0) < Numeric (rank 1) < Text (rank 2) < Blob (rank 3)
+    SqliteValueOwned val_num(100LL);
+    assert(owned_ptr < val_num);
+    assert(pure_null < val_num);
+    assert(null_ptr < val_num);
+    assert(!(val_num < owned_ptr));
+    assert(!(val_num < pure_null));
+    assert(!(val_num < null_ptr));
+
+    // 8. Test Hashing (Semantic Equivalence)
+    assert(owned_ptr.hash() == owned_ptr2.hash());
+    assert(owned_ptr.hash() != owned_other.hash());
+    assert(pure_null.hash() != owned_ptr.hash());
+    assert(null_ptr.hash() != owned_ptr.hash());
+    assert(pure_null.hash() == null_ptr.hash()); // Both hash to DEFAULT_SEED!
+    assert(pure_null.hash() == SqliteHashUtil::DEFAULT_SEED);
+    assert(null_ptr.hash() == SqliteHashUtil::DEFAULT_SEED);
+
+    // 8. Test Immutable Pointer
+    SqliteValueOwned imm_ptr = SqliteValueOwned::from_pointer(&ctx_obj, true);
+    assert(imm_ptr.is_immutable());
+    assert(imm_ptr.is_pointer());
+    imm_ptr = 9999LL; // mutation attempt on immutable pointer
+    assert(imm_ptr.is_pointer());
+    assert(imm_ptr.as_pointer<CustomContextTest>() == &ctx_obj);
+
+    // 9. Test sqlite3_bind_pointer, SQLite Default Datatype & SqliteValueView
+    sqlite3_stmt* stmt = nullptr;
+    assert(sqlite3_prepare_v2(db, "SELECT ?1, ?2, ?3, NULL;", -1, &stmt, nullptr) == SQLITE_OK);
+    assert(sqlite3_bind_pointer(stmt, 1, &ctx_obj, "custom_context_tag", nullptr) == SQLITE_OK);
+    assert(sqlite3_bind_pointer(stmt, 2, &ctx_obj2, "custom_context_tag", nullptr) == SQLITE_OK);
+    assert(sqlite3_bind_pointer(stmt, 3, nullptr, "custom_context_tag", nullptr) == SQLITE_OK);
+    assert(sqlite3_step(stmt) == SQLITE_ROW);
+
+    // Verify native SQLite types for bound pointers:
+    // SQLite by default assigns datatype SQLITE_NULL (5) to any bound pointer (MEM_Null | MEM_Ptr)
+    assert(sqlite3_value_type(sqlite3_column_value(stmt, 0)) == SQLITE_NULL);
+    assert(sqlite3_value_type(sqlite3_column_value(stmt, 1)) == SQLITE_NULL);
+    assert(sqlite3_value_type(sqlite3_column_value(stmt, 2)) == SQLITE_NULL);
+    assert(sqlite3_value_type(sqlite3_column_value(stmt, 3)) == SQLITE_NULL);
+
+    // Verify native SQLite subtype: SQLite assigns 'p' (112) to bound pointers, and 0 to pure NULL
+    assert(sqlite3_value_subtype(sqlite3_column_value(stmt, 0)) == SQLITE_SUBTYPE_POINTER);
+    assert(sqlite3_value_subtype(sqlite3_column_value(stmt, 1)) == SQLITE_SUBTYPE_POINTER);
+    assert(sqlite3_value_subtype(sqlite3_column_value(stmt, 3)) == SQLITE_SUBTYPE_NONE);
+
+    SqliteValueView view1(sqlite3_column_value(stmt, 0));
+    SqliteValueView view2(sqlite3_column_value(stmt, 1));
+    SqliteValueView view_null_ptr(sqlite3_column_value(stmt, 2));
+    SqliteValueView view_pure_null(sqlite3_column_value(stmt, 3));
+
+    // Type predicates on views
+    assert(view1.type() == SQLITE_NULL);
+    assert(view2.type() == SQLITE_NULL);
+    assert(view_null_ptr.type() == SQLITE_NULL);
+    assert(view_pure_null.type() == SQLITE_NULL);
+    assert(view1.subtype() == SQLITE_SUBTYPE_POINTER);
+    assert(view2.subtype() == SQLITE_SUBTYPE_POINTER);
+    assert(view_pure_null.subtype() == SQLITE_SUBTYPE_NONE);
+    assert(view1.is_pointer());
+    assert(view2.is_pointer());
+    assert(!view_pure_null.is_pointer());
+
+    // Typed pointer extraction via SqlitePointerTraits
+    assert(view1.is_pointer<CustomContextTest>());
+    assert(view1.has_pointer<CustomContextTest>());
+    assert(view2.is_pointer<CustomContextTest>());
+    assert(view2.has_pointer<CustomContextTest>());
+    assert(!view_null_ptr.has_pointer<CustomContextTest>());
+    assert(!view_pure_null.has_pointer<CustomContextTest>());
+
+    // Tag matching vs mismatch
+    assert(view1.is_pointer("custom_context_tag"));
+    assert(!view1.is_pointer("wrong_tag"));
+    assert(view1.as_pointer<CustomContextTest>("wrong_tag") == nullptr);
+    assert(!view1.is_pointer<CustomContextTest>("wrong_tag"));
+
+    // Payload verification
+    assert(view1.as_pointer<CustomContextTest>() == &ctx_obj);
+    assert(view1.as_pointer<CustomContextTest>()->id == 42);
+    assert(view1.as_pointer<CustomContextTest>()->factor == 3.14);
+    assert(view1.pointer<CustomContextTest>() == &ctx_obj);
+
+    // Cross-view typed pointer comparisons
+    assert(view1.as_pointer<CustomContextTest>() == &ctx_obj);
+    assert(view2.as_pointer<CustomContextTest>() == &ctx_obj2);
+    assert(view1.as_pointer<CustomContextTest>() != view2.as_pointer<CustomContextTest>());
+    assert(view_null_ptr.as_pointer<CustomContextTest>() == nullptr);
+    assert(view_pure_null.as_pointer<CustomContextTest>() == nullptr);
+
+    // Cross View vs Owned typed pointer comparisons
+    assert(view1.as_pointer<CustomContextTest>() == owned_ptr.as_pointer<CustomContextTest>());
+    assert(view2.as_pointer<CustomContextTest>() == owned_other.as_pointer<CustomContextTest>());
+    assert(view_null_ptr.as_pointer<CustomContextTest>() == null_ptr.as_pointer<CustomContextTest>());
+    assert(view_pure_null.as_pointer<CustomContextTest>() == pure_null.as_pointer<CustomContextTest>());
+
+    sqlite3_finalize(stmt);
+
+    // 10. Test SqliteValueOwned::bind_pointer
+    stmt = nullptr;
+    assert(sqlite3_prepare_v2(db, "SELECT ?1;", -1, &stmt, nullptr) == SQLITE_OK);
+    assert(owned_ptr.bind_pointer<CustomContextTest>(stmt, 1) == SQLITE_OK);
+    assert(sqlite3_step(stmt) == SQLITE_ROW);
+    SqliteValueView view_bound(sqlite3_column_value(stmt, 0));
+    assert(view_bound.as_pointer<CustomContextTest>() == &ctx_obj);
+    assert(view_bound.has_pointer<CustomContextTest>());
+    sqlite3_finalize(stmt);
+
+    // 10b. Test Heterogeneous Comparisons between SqliteValueView and SqliteValueOwned (Semantic Equivalence)
+    sqlite3_stmt* null_stmt = nullptr;
+    assert(sqlite3_prepare_v2(db, "SELECT NULL;", -1, &null_stmt, nullptr) == SQLITE_OK);
+    assert(sqlite3_step(null_stmt) == SQLITE_ROW);
+    SqliteValueView null_view(sqlite3_column_value(null_stmt, 0));
+    assert(null_view.is_null());
+    assert(null_view == pure_null);
+    assert(pure_null == null_view);
+    assert(null_view == null_ptr); // Semantic equivalence with view!
+    assert(null_ptr == null_view);
+    assert(!(null_view < pure_null) && !(pure_null < null_view));
+    assert(!(null_view < null_ptr) && !(null_ptr < null_view));
+    assert(null_view < owned_ptr);
+    assert(!(owned_ptr < null_view));
+    assert(null_view != owned_ptr);
+    assert(owned_ptr != null_view);
+    sqlite3_finalize(null_stmt);
+
+    // 11. Test UDF returning pointer via SqliteValueOwned::result_pointer chained into consumer UDF
+    sqlite3_create_function_v2(db, "test_get_pointer_udf", 0, SQLITE_UTF8, &ctx_obj,
+        [](sqlite3_context* ctx, int /*argc*/, sqlite3_value** /*argv*/) {
+            auto* p = static_cast<CustomContextTest*>(sqlite3_user_data(ctx));
+            SqliteValueOwned val = SqliteValueOwned::from_pointer(p);
+            val.result_pointer<CustomContextTest>(ctx);
+        }, nullptr, nullptr, nullptr);
+
+    static CustomContextTest* s_consumed_ptr = nullptr;
+    static bool s_consumed_is_ptr = false;
+    sqlite3_create_function_v2(db, "test_consume_pointer_udf", 1, SQLITE_UTF8, nullptr,
+        [](sqlite3_context* ctx, int argc, sqlite3_value** argv) {
+            if (argc > 0) {
+                SqliteValueView arg(argv[0]);
+                s_consumed_is_ptr = arg.is_pointer<CustomContextTest>();
+                s_consumed_ptr = arg.as_pointer<CustomContextTest>();
+                sqlite3_result_int(ctx, (s_consumed_ptr && s_consumed_is_ptr) ? 1 : 0);
+            } else {
+                sqlite3_result_int(ctx, 0);
+            }
+        }, nullptr, nullptr, nullptr);
+
+    stmt = nullptr;
+    assert(sqlite3_prepare_v2(db, "SELECT test_consume_pointer_udf(test_get_pointer_udf());", -1, &stmt, nullptr) == SQLITE_OK);
+    assert(sqlite3_step(stmt) == SQLITE_ROW);
+    assert(sqlite3_column_int(stmt, 0) == 1);
+    assert(s_consumed_is_ptr == true);
+    assert(s_consumed_ptr == &ctx_obj);
+    assert(s_consumed_ptr->id == 42);
+    sqlite3_finalize(stmt);
+
+    // 12. Test SqliteValueVec & SqliteValueTuple Pointer Passing
+    SqliteValueVec<4> test_vec;
+    test_vec.push_back(100LL);
+    test_vec.push_back("vector_elem");
+
+    SqliteValueTuple<2> test_tuple;
+    test_tuple[0] = 200LL;
+    test_tuple[1] = 3.1415;
+
+    // Verify compile-time registered tags
+    assert(strcmp(SqlitePointerTraits<SqliteValueVec<4>>::name(), "SqliteValueVec") == 0);
+    assert(strcmp(SqlitePointerTraits<SqliteValueVec<>>::name(), "SqliteValueVec") == 0);
+    assert(strcmp(SqlitePointerTraits<SqliteValueTuple<2>>::name(), "SqliteValueTuple") == 0);
+    assert(strcmp(SqlitePointerTraits<SqliteValueTuple<>>::name(), "SqliteValueTuple") == 0);
+    assert(strcmp(SqlitePointerTraits<SqliteRowOwnedWrapper>::name(), "SqliteRowOwnedWrapper") == 0);
+
+    // Bind SqliteValueVec<4> pointer
+    SqliteValueOwned vec_ptr = SqliteValueOwned::from_pointer(&test_vec);
+    assert(vec_ptr.is_pointer());
+    assert(vec_ptr.has_pointer());
+    assert(vec_ptr.as_pointer<SqliteValueVec<4>>() == &test_vec);
+    assert(vec_ptr.as_pointer<SqliteValueVec<4>>()->size() == 2);
+    assert((*vec_ptr.as_pointer<SqliteValueVec<4>>())[0].as_int64() == 100LL);
+
+    // Bind SqliteValueTuple<2> pointer
+    SqliteValueOwned tuple_ptr = SqliteValueOwned::from_pointer(&test_tuple);
+    assert(tuple_ptr.is_pointer());
+    assert(tuple_ptr.has_pointer());
+    assert(tuple_ptr.as_pointer<SqliteValueTuple<2>>() == &test_tuple);
+    assert((*tuple_ptr.as_pointer<SqliteValueTuple<2>>())[0].as_int64() == 200LL);
+    assert((*tuple_ptr.as_pointer<SqliteValueTuple<2>>())[1].as_double() == 3.1415);
+
+    // Passing through SQLite statement via bind_pointer
+    stmt = nullptr;
+    assert(sqlite3_prepare_v2(db, "SELECT ?1, ?2;", -1, &stmt, nullptr) == SQLITE_OK);
+    assert(vec_ptr.bind_pointer<SqliteValueVec<4>>(stmt, 1) == SQLITE_OK);
+    assert(tuple_ptr.bind_pointer<SqliteValueTuple<2>>(stmt, 2) == SQLITE_OK);
+    assert(sqlite3_step(stmt) == SQLITE_ROW);
+
+    SqliteValueView v_vec(sqlite3_column_value(stmt, 0));
+    assert(v_vec.is_pointer<SqliteValueVec<4>>());
+    assert(v_vec.has_pointer<SqliteValueVec<4>>());
+    assert(v_vec.as_pointer<SqliteValueVec<4>>() == &test_vec);
+    assert(v_vec.as_pointer<SqliteValueVec<4>>()->size() == 2);
+
+    SqliteValueView v_tuple(sqlite3_column_value(stmt, 1));
+    assert(v_tuple.is_pointer<SqliteValueTuple<2>>());
+    assert(v_tuple.has_pointer<SqliteValueTuple<2>>());
+    assert(v_tuple.as_pointer<SqliteValueTuple<2>>() == &test_tuple);
+    assert((*v_tuple.as_pointer<SqliteValueTuple<2>>())[0].as_int64() == 200LL);
+
+    sqlite3_finalize(stmt);
+}
+
 int main() {
     sqlite3_initialize();
     
@@ -2070,6 +2388,9 @@ int main() {
 
     printf("Testing SqliteOwnedValueSubTag and Immutability (Constructors, Mutator Guards, Sinks)...\n");
     test_subtag_and_immutability();
+
+    printf("Testing SqliteValueView & SqliteValueOwned Template Pointer Passing...\n");
+    test_pointer_passing(db);
 
     sqlite3_close(db);
     sqlite3_shutdown();

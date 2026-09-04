@@ -38,6 +38,7 @@
     #define SQLITE_SUBTYPE_DATETIME   84    // 'T'  : ISO-8601 & High-precision timestamp
     #define SQLITE_SUBTYPE_BOOL       66    // 'B'  : Explicit Boolean flag (0 or 1)
     #define SQLITE_SUBTYPE_COMPRESSED 90    // 'Z'  : Compressed stream (Gorilla / ZSTD)
+    #define SQLITE_SUBTYPE_POINTER    112   // 'p'  : Native SQLite opaque C/C++ typed pointer
 #endif
 
 // ============================================================================
@@ -831,8 +832,14 @@ namespace SqliteValueUtil {
                 if (!blob1 || !blob2) return blob1 == blob2;
                 return memcmp(blob1, blob2, bytes1) == 0;
             }
-            case SQLITE_NULL: 
+            case SQLITE_NULL: {
+                uint8_t sub1 = static_cast<uint8_t>(sqlite3_value_subtype(mut_v1));
+                uint8_t sub2 = static_cast<uint8_t>(sqlite3_value_subtype(mut_v2));
+                if (sub1 == SQLITE_SUBTYPE_POINTER || sub2 == SQLITE_SUBTYPE_POINTER) {
+                    return sub1 == sub2;
+                }
                 return true;
+            }
         }
         return false;
     }
@@ -896,14 +903,42 @@ namespace SqliteValueUtil {
                 if (!data2) return false;
                 return SqliteMemoryUtil::memcmp_less(data1, len1, data2, len2);
             }
-            case SQLITE_NULL: 
+            case SQLITE_NULL: {
+                uint8_t sub1 = static_cast<uint8_t>(sqlite3_value_subtype(mut_v1));
+                uint8_t sub2 = static_cast<uint8_t>(sqlite3_value_subtype(mut_v2));
+                if (sub1 == SQLITE_SUBTYPE_POINTER || sub2 == SQLITE_SUBTYPE_POINTER) {
+                    if (sub1 != SQLITE_SUBTYPE_POINTER) return true;  // pure NULL < pointer
+                    if (sub2 != SQLITE_SUBTYPE_POINTER) return false; // pointer > pure NULL
+                    return false;
+                }
                 return false;
+            }
         }
         return false;
     }
 }
 
 class SqliteValueOwned;
+
+/**
+ * @brief Compile-time traits template for SQLite pointer type tags.
+ * Specialize this template or use SQLITE_REGISTER_POINTER_TAG to associate a static
+ * type name string with a C++ type T for automatic tag resolution in pointer passing.
+ */
+template <typename T>
+struct SqlitePointerTraits {
+    static const char* name() noexcept { return nullptr; }
+};
+
+/**
+ * @def SQLITE_REGISTER_POINTER_TAG
+ * @brief Convenient macro to associate a C++ type with a static SQLite pointer tag string.
+ */
+#define SQLITE_REGISTER_POINTER_TAG(Type, TagName) \
+    template <> \
+    struct SqlitePointerTraits<Type> { \
+        static const char* name() noexcept { return TagName; } \
+    };
 
 /**
  * @brief Zero-cost, non-owning C++ wrapper for `sqlite3_value`.
@@ -968,7 +1003,7 @@ public:
     int type() const noexcept { return SqliteValueUtil::type(m_val); }
 
     /** @brief Storage class type predicates. */
-    inline bool is_null()    const noexcept { return type() == SQLITE_NULL; }
+    inline bool is_null()    const noexcept { return type() == SQLITE_NULL && subtype() != SQLITE_SUBTYPE_POINTER; }
     inline bool is_integer() const noexcept { return type() == SQLITE_INTEGER; }
     inline bool is_float()   const noexcept { return type() == SQLITE_FLOAT; }
     inline bool is_text()    const noexcept { return type() == SQLITE_TEXT; }
@@ -1001,6 +1036,7 @@ public:
     inline bool is_datetime()   const noexcept { return subtype() == SQLITE_SUBTYPE_DATETIME; }
     inline bool is_bool()       const noexcept { return subtype() == SQLITE_SUBTYPE_BOOL; }
     inline bool is_compressed() const noexcept { return subtype() == SQLITE_SUBTYPE_COMPRESSED; }
+    inline bool is_pointer()    const noexcept { return subtype() == SQLITE_SUBTYPE_POINTER; }
     
     /** @brief Internal helper to access integer value for heterogeneous lookups. */
     sqlite3_int64 as_int64() const { return m_val ? sqlite3_value_int64(const_cast<sqlite3_value*>(m_val)) : 0; }
@@ -1032,6 +1068,53 @@ public:
         if (!m_val) return SqliteBlobView(nullptr, 0);
         const void* blob = sqlite3_value_blob(const_cast<sqlite3_value*>(val_mut()));
         return SqliteBlobView(blob, blob ? sqlite3_value_bytes(const_cast<sqlite3_value*>(val_mut())) : 0);
+    }
+
+    /**
+     * @brief Extracts a typed pointer passed via sqlite3_bind_pointer or sqlite3_result_pointer.
+     * 
+     * @tparam T The expected target pointer type (defaults to void).
+     * @param type_name The pointer type tag string matching the bound pointer type.
+     *                  If nullptr, falls back to SqlitePointerTraits<T>::name().
+     * @return Pointer of type T*, or nullptr if the type tag does not match or the value is null.
+     */
+    template <typename T = void>
+    inline T* as_pointer(const char* type_name = nullptr) const {
+        const char* tag = type_name ? type_name : SqlitePointerTraits<T>::name();
+        if (!m_val || !tag) return nullptr;
+        return static_cast<T*>(sqlite3_value_pointer(const_cast<sqlite3_value*>(m_val), tag));
+    }
+
+    /**
+     * @brief Convenience alias for as_pointer<T>(type_name).
+     */
+    template <typename T = void>
+    inline T* pointer(const char* type_name = nullptr) const {
+        return as_pointer<T>(type_name);
+    }
+
+    /**
+     * @brief Checks if this value holds a valid pointer matching the specified type tag.
+     * 
+     * @tparam T The expected target pointer type.
+     * @param type_name The pointer type tag string. If nullptr, falls back to SqlitePointerTraits<T>::name().
+     * @return true if a non-null pointer with matching tag is present, false otherwise.
+     */
+    template <typename T>
+    inline bool is_pointer(const char* type_name = nullptr) const {
+        return as_pointer<T>(type_name) != nullptr;
+    }
+
+    inline bool is_pointer(const char* type_name) const {
+        return as_pointer<void>(type_name) != nullptr;
+    }
+
+    /**
+     * @brief Checks if this value holds an active non-null pointer with matching type tag.
+     */
+    template <typename T = void>
+    inline bool has_pointer(const char* type_name = nullptr) const {
+        return as_pointer<T>(type_name) != nullptr;
     }
     
 private:
@@ -1277,6 +1360,7 @@ struct SqliteTypeRep {
         sqlite3_int64  iValue;   // 8 bytes (Offset 0..7: 64-bit integer)
         double         dValue;   // 8 bytes (Offset 0..7: IEEE-754 double)
         char*          pData;    // 8 bytes (Offset 0..7: Heap buffer for Text/Blob)
+        void*          ptrVal;   // 8 bytes (Offset 0..7: Opaque typed C/C++ pointer)
     } payload;
     
     int32_t                 heap_len; // 4 bytes (Offset 8..11: Byte length for heap text/blob)
@@ -1518,7 +1602,11 @@ public:
                 break;
             case SQLITE_NULL:
             default:
-                sqlite3_result_null(ctx);
+                if (is_pointer()) {
+                    sqlite3_result_pointer(ctx, m_sqlite.payload.ptrVal, nullptr, nullptr);
+                } else {
+                    sqlite3_result_null(ctx);
+                }
                 break;
         }
         if (subtype() != SQLITE_SUBTYPE_NONE) {
@@ -1527,6 +1615,19 @@ public:
     }
     template <typename TContext>
     inline void result(TContext& ctx) const { result(ctx.get()); }
+
+    /**
+     * @brief Returns this pointer value as the return result of a SQLite UDF context with a specific type tag.
+     */
+    template <typename T = void>
+    inline void result_pointer(sqlite3_context* ctx, const char* type_name = nullptr, void (*dtor)(void*) = nullptr) const {
+        const char* tag = type_name ? type_name : SqlitePointerTraits<T>::name();
+        sqlite3_result_pointer(ctx, m_sqlite.payload.ptrVal, tag, dtor);
+    }
+    template <typename T = void, typename TContext>
+    inline void result_pointer(TContext& ctx, const char* type_name = nullptr, void (*dtor)(void*) = nullptr) const {
+        result_pointer<T>(ctx.get(), type_name, dtor);
+    }
 
     /** 
      * @brief Binds this object to a prepared SQLite statement at the given 1-based column index. 
@@ -1547,11 +1648,27 @@ public:
                 return sqlite3_bind_double(stmt, col, m_sqlite.payload.dValue);
             case SQLITE_NULL:
             default:
+                if (is_pointer()) {
+                    return sqlite3_bind_pointer(stmt, col, m_sqlite.payload.ptrVal, nullptr, nullptr);
+                }
                 return sqlite3_bind_null(stmt, col);
         }
     }
     template <typename TStatement>
     inline int bind(TStatement& stmt, int col) const { return bind(stmt.get(), col); }
+
+    /**
+     * @brief Binds this pointer value to a prepared SQLite statement with a specific type tag.
+     */
+    template <typename T = void>
+    inline int bind_pointer(sqlite3_stmt* stmt, int col, const char* type_name = nullptr, void (*dtor)(void*) = nullptr) const {
+        const char* tag = type_name ? type_name : SqlitePointerTraits<T>::name();
+        return sqlite3_bind_pointer(stmt, col, m_sqlite.payload.ptrVal, tag, dtor);
+    }
+    template <typename T = void, typename TStatement>
+    inline int bind_pointer(TStatement& stmt, int col, const char* type_name = nullptr, void (*dtor)(void*) = nullptr) const {
+        return bind_pointer<T>(stmt.get(), col, type_name, dtor);
+    }
 
     /**
      * @brief Constructs an owned 16-byte value by copying/inlining from an existing `sqlite3_value`.
@@ -1707,6 +1824,19 @@ public:
     /** @brief Constructs a Compressed binary blob with SQLITE_SUBTYPE_COMPRESSED ('Z'). */
     static SqliteValueOwned from_compressed(const void* compressed_data, int byte_len, bool is_immutable = false) {
         return from_blob(compressed_data, byte_len, SQLITE_SUBTYPE_COMPRESSED, is_immutable);
+    }
+
+    /** @brief Constructs an owned 16-byte value wrapping an opaque pointer with optional immutability. */
+    template <typename T>
+    static inline SqliteValueOwned from_pointer(T* ptr, bool is_immutable = false) noexcept {
+        SqliteValueOwned val;
+        val.m_sqlite.payload.ptrVal = const_cast<void*>(static_cast<const void*>(ptr));
+        val.m_sqlite.heap_len = 0;
+        val.m_sqlite.affinity = SQLITE_AFF_NONE;
+        val.m_sqlite.reserved = 0;
+        val.m_sqlite.subtag.set(SQLITE_SUBTYPE_POINTER, is_immutable);
+        val.set_tag(SQLITE_NULL, false, 0);
+        return val;
     }
 
     /**
@@ -1942,6 +2072,19 @@ public:
         init_blob(data, len, sub);
     }
 
+    /** @brief Sets value to an opaque pointer, freeing any prior heap allocation. */
+    template <typename T>
+    inline void set_pointer(T* ptr) noexcept {
+        if (is_immutable()) return;
+        free_heap();
+        m_sqlite.payload.ptrVal = const_cast<void*>(static_cast<const void*>(ptr));
+        m_sqlite.heap_len = 0;
+        m_sqlite.affinity = SQLITE_AFF_NONE;
+        m_sqlite.reserved = 0;
+        m_sqlite.subtag.set(SQLITE_SUBTYPE_POINTER, false);
+        set_tag(SQLITE_NULL, false, 0);
+    }
+
     /** @brief Replaces current value with a 64-bit integer. */
     SqliteValueOwned& operator=(sqlite3_int64 i) noexcept {
         if (is_immutable()) return *this;
@@ -2122,7 +2265,11 @@ public:
     }
 
     /** @brief Storage class type predicates. */
-    inline bool is_null()    const noexcept { return type() == SQLITE_NULL; }
+    inline bool is_null()    const noexcept {
+        if (type() != SQLITE_NULL) return false;
+        if (is_pointer()) return m_sqlite.payload.ptrVal == nullptr;
+        return true;
+    }
     inline bool is_integer() const noexcept { return type() == SQLITE_INTEGER; }
     inline bool is_float()   const noexcept { return type() == SQLITE_FLOAT; }
     inline bool is_text()    const noexcept { return type() == SQLITE_TEXT; }
@@ -2139,6 +2286,8 @@ public:
     inline bool is_datetime()   const noexcept { return subtype() == SQLITE_SUBTYPE_DATETIME; }
     inline bool is_bool()       const noexcept { return subtype() == SQLITE_SUBTYPE_BOOL; }
     inline bool is_compressed() const noexcept { return subtype() == SQLITE_SUBTYPE_COMPRESSED; }
+    inline bool is_pointer()    const noexcept { return subtype() == SQLITE_SUBTYPE_POINTER; }
+    inline bool has_pointer()   const noexcept { return is_pointer() && m_sqlite.payload.ptrVal != nullptr; }
 
     /** @brief Checks if the value holds a valid state (or SBO primitive/null). */
     bool is_valid() const noexcept {
@@ -2150,6 +2299,7 @@ public:
 
     /** @brief Explicit boolean conversion checking validity. */
     explicit operator bool() const noexcept {
+        if (is_pointer()) return m_sqlite.payload.ptrVal != nullptr;
         return is_valid() && !is_null();
     }
 
@@ -2185,6 +2335,24 @@ public:
         return SqliteBlobView(m_sqlite.payload.pData, m_sqlite.heap_len);
     }
 
+    /**
+     * @brief Interprets the raw payload pointer as a typed pointer T*.
+     * Returns nullptr if this value does not hold a pointer subtype or payload is null.
+     */
+    template <typename T = void>
+    inline T* as_pointer(const char* /*type_name*/ = nullptr) const noexcept {
+        if (!is_pointer()) return nullptr;
+        return static_cast<T*>(m_sqlite.payload.ptrVal);
+    }
+
+    /**
+     * @brief Convenience alias for as_pointer<T>().
+     */
+    template <typename T = void>
+    inline T* pointer(const char* type_name = nullptr) const noexcept {
+        return as_pointer<T>(type_name);
+    }
+
     /** 
      * @brief Computes a polymorphic 64-bit MurmurHash2 of the value.
      */
@@ -2206,6 +2374,9 @@ public:
             }
             case SQLITE_NULL:
             default:
+                if (has_pointer()) {
+                    return SqliteHashUtil::mix(SqliteHashUtil::DEFAULT_SEED, &m_sqlite.payload.ptrVal, sizeof(m_sqlite.payload.ptrVal));
+                }
                 return SqliteHashUtil::DEFAULT_SEED;
         }
     }
@@ -2228,8 +2399,11 @@ public:
             case SQLITE_BLOB:
                 return as_blob() == other.as_blob();
             case SQLITE_NULL:
-            default:
-                return true;
+            default: {
+                void* ptr1 = is_pointer() ? m_sqlite.payload.ptrVal : nullptr;
+                void* ptr2 = other.is_pointer() ? other.m_sqlite.payload.ptrVal : nullptr;
+                return ptr1 == ptr2;
+            }
         }
     }
 
@@ -2280,6 +2454,11 @@ public:
 
         if (t1 == SQLITE_TEXT) return as_text() < other.as_text();
         if (t1 == SQLITE_BLOB) return as_blob() < other.as_blob();
+        if (t1 == SQLITE_NULL) {
+            void* ptr1 = is_pointer() ? m_sqlite.payload.ptrVal : nullptr;
+            void* ptr2 = other.is_pointer() ? other.m_sqlite.payload.ptrVal : nullptr;
+            return reinterpret_cast<uintptr_t>(ptr1) < reinterpret_cast<uintptr_t>(ptr2);
+        }
         return false;
     }
 
@@ -2308,6 +2487,15 @@ inline bool SqliteValueOwned::operator==(const SqliteValueView& other) const {
     }
     if (m_type == SQLITE_TEXT) return as_text() == other.as_text();
     if (m_type == SQLITE_BLOB) return as_blob() == other.as_blob();
+    if (m_type == SQLITE_NULL) {
+        if (has_pointer() || other.is_pointer()) {
+            if (has_pointer() && other.is_pointer()) {
+                return subtype() == other.subtype();
+            }
+            return false;
+        }
+        return true;
+    }
     return true;
 }
 
@@ -2351,6 +2539,13 @@ inline bool SqliteValueOwned::operator<(const SqliteValueView& other) const {
 
     if (m_type == SQLITE_TEXT) return as_text() < other.as_text();
     if (m_type == SQLITE_BLOB) return as_blob() < other.as_blob();
+    if (m_type == SQLITE_NULL) {
+        void* ptr1 = has_pointer() ? m_sqlite.payload.ptrVal : nullptr;
+        if (other.is_pointer()) {
+            return ptr1 == nullptr;
+        }
+        return false;
+    }
     return false;
 }
 
@@ -2400,6 +2595,13 @@ inline bool SqliteValueView::operator<(const SqliteValueOwned& other) const {
 
     if (t1 == SQLITE_TEXT) return as_text() < other.as_text();
     if (t1 == SQLITE_BLOB) return as_blob() < other.as_blob();
+    if (t1 == SQLITE_NULL) {
+        void* ptr2 = other.as_pointer<void>();
+        if (is_pointer()) {
+            return false;
+        }
+        return ptr2 != nullptr;
+    }
     return false;
 }
 

@@ -142,11 +142,12 @@ Byte Offset:  0                                       13      14      15
 1. **`payload` Union (Offset 0..7, 8 Bytes)**:
    * `iValue` (`sqlite3_int64`): 64-bit two's complement integer.
    * `dValue` (`double`): 64-bit IEEE-754 double-precision float.
-   * `pValue` (`sqlite3_value*`): Heap-allocated SQLite value pointer for strings $> 13$ chars or blobs $> 14$ bytes.
-2. **`heap_len` (Offset 8..11, 4 Bytes)**: Explicit byte length for heap-allocated text/blob values.
+   * `pData` (`char*`): Heap-allocated buffer for dynamic text/blob values exceeding inline SBO capacity.
+   * `ptrVal` (`void*`): Opaque C/C++ typed pointer passed via `sqlite3_bind_pointer` / `from_pointer<T>()`. By isolating pointers to `ptrVal`, client pointers are strictly decoupled from `pData`, guaranteeing that `free_heap()` never frees client pointers and preventing any heap length contamination.
+2. **`heap_len` (Offset 8..11, 4 Bytes)**: Explicit byte length for heap-allocated text/blob values (set to `0` for primitives and pointers).
 3. **`affinity` (Offset 12, 1 Byte)**: Native SQLite affinity character (`SQLITE_AFF_INTEGER='D'`, `SQLITE_AFF_REAL='E'`, `SQLITE_AFF_TEXT='B'`, `SQLITE_AFF_BLOB='A'`, `SQLITE_AFF_NONE='@'`).
 4. **`reserved` (Offset 13, 1 Byte)**: Reserved for ABI compatibility and future engine flags (always initialized to `0`).
-5. **`subtype` (Offset 14, 1 Byte - SHARED)**: 8-bit SQLite subtype (`'J'`, `'D'`, `'U'`, `'V'`, `'G'`, `'T'`, `'B'`, `'Z'`).
+5. **`subtype` (Offset 14, 1 Byte - SHARED)**: 8-bit SQLite subtype (`'J'`, `'D'`, `'U'`, `'V'`, `'G'`, `'T'`, `'B'`, `'Z'`, `'p'`).
 6. **`tag` (Offset 15, 1 Byte - SHARED)**: Bit-packed control register (`SqliteOwnedValueTag`).
 
 ---
@@ -231,6 +232,7 @@ Modern optimizing compilers (GCC, Clang, MSVC) compile `SqliteValueOwned` method
 | `84` | `SQLITE_SUBTYPE_DATETIME` | `'T'` | ISO-8601 Timestamp / Epoch Millis | **Yes (Inline 64-bit int)** |
 | `66` | `SQLITE_SUBTYPE_BOOL` | `'B'` | Explicit Boolean flag (0 or 1) | **Yes (Inline 64-bit int)** |
 | `90` | `SQLITE_SUBTYPE_COMPRESSED` | `'Z'` | Compressed Binary Stream (ZSTD/Gorilla)| **Yes ($\le 14$ bytes)** |
+| `112` | `SQLITE_SUBTYPE_POINTER` | `'p'` | Native SQLite Opaque C/C++ Typed Pointer | **Yes (Inline 8B `payload.ptrVal`)** |
 
 ---
 
@@ -278,7 +280,98 @@ To prevent code bloat and maintain a unified API across all container and tabula
 
 ---
 
-## 10. Freestanding Memory Guarantees (`-nostdlib++`)
+## 10. Pointer Passing Architecture, Compile-Time Traits & Semantic Equivalence
+
+SQLite supports zero-serialization pointer passing across statements and UDF chains via `sqlite3_bind_pointer()` and `sqlite3_result_pointer()`. `sqlite3_value.hpp` and `sqlite3_value_containers.hpp` provide a complete C++ architecture for pointer passing, combining **compile-time tag deduction**, **dual-layout payload decoupling (`ptrVal`)**, and a mathematically sound **Semantic Equivalence model**.
+
+### 10.1 Native SQLite C Engine Pointer Mechanics
+In SQLite's internal VDBE cell (`struct Mem`):
+```c
+/* Internal sqlite3_bind_pointer cell configuration */
+p->flags = MEM_Null | MEM_Subtype;
+p->eSubtype = 'p'; // ASCII 112 (SQLITE_SUBTYPE_POINTER)
+p->u.zPType = zTag;
+p->z = pPtr;
+p->xDel = xDtor;
+```
+1. **Datatype is `SQLITE_NULL` (5)**: Because `MEM_Null` is flagged, `sqlite3_value_type()` always returns `SQLITE_NULL`.
+2. **Subtype is `112` (`'p'`)**: SQLite internally sets `eSubtype = 'p'`. `sqlite3_value.hpp` maps `#define SQLITE_SUBTYPE_POINTER 112`, ensuring that native SQLite bound pointers automatically satisfy `view.is_pointer()`.
+3. **Query Result Lifetime**: SQLite automatically destroys the `MEM_Ptr` association if a pointer reaches the top-level query results of `sqlite3_step()`, returning pure SQL `NULL` to the client. Pointers are intended for statement parameters, UDF argument passing, and chaining (`SELECT consumer_udf(producer_udf())`).
+
+### 10.2 Payload Decoupling: `ptrVal` vs `pData`
+In `SqliteTypeRep`, the 8-byte payload union contains:
+```cpp
+union {
+    sqlite3_int64  iValue;   // 8 bytes: 64-bit integer
+    double         dValue;   // 8 bytes: IEEE-754 double
+    char*          pData;    // 8 bytes: Heap buffer for Text/Blob
+    void*          ptrVal;   // 8 bytes: Opaque C/C++ typed pointer
+} payload;
+```
+- **Heap Independence**: Opaque client pointers are stored in `payload.ptrVal`. Client pointers are completely decoupled from `payload.pData`, guaranteeing that `free_heap()` will never attempt to free a client-managed object.
+- **Zero Allocations**: `is_heap_allocated()` evaluates to `false` for pointer values; pointer storage requires exactly 0 heap allocations and fits entirely in the 16-byte dual representation.
+
+### 10.3 Compile-Time Trait Registration (`SqlitePointerTraits<T>`)
+Rather than requiring error-prone manual tag string parameters on every call, `sqlite3_value.hpp` provides a static traits system:
+```cpp
+template <typename T>
+struct SqlitePointerTraits {
+    static const char* name() noexcept { return nullptr; }
+};
+
+#define SQLITE_REGISTER_POINTER_TAG(Type, TagName) \
+    template <> struct SqlitePointerTraits<Type> { \
+        static const char* name() noexcept { return TagName; } \
+    }
+```
+
+#### Container Specializations
+`sqlite3_value_containers.hpp` registers static tags for all container types:
+```cpp
+SQLITE_REGISTER_POINTER_TAG(SqliteValueVec<N>,      "SqliteValueVec");
+SQLITE_REGISTER_POINTER_TAG(SqliteValueTuple<N>,    "SqliteValueTuple");
+SQLITE_REGISTER_POINTER_TAG(SqliteRowOwnedWrapper,  "SqliteRowOwnedWrapper");
+SQLITE_REGISTER_POINTER_TAG(SqliteRowView,          "SqliteRowView");
+```
+
+### 10.4 Semantic Equivalence Model & Strict Weak Ordering
+In SQL semantics, missing data is represented by `NULL`. Under **Semantic Equivalence**, a pointer holding `nullptr` (`from_pointer(nullptr)`) is treated as semantically equivalent to pure SQL `NULL`:
+
+```cpp
+// Semantic Equivalence Invariants:
+SqliteValueOwned pure_null;
+SqliteValueOwned null_ptr = SqliteValueOwned::from_pointer<CustomContext>(nullptr);
+SqliteValueOwned live_ptr = SqliteValueOwned::from_pointer(&ctx_obj);
+
+assert(pure_null.is_null() == true);
+assert(null_ptr.is_null() == true);   // nullptr pointer evaluates as SQL NULL
+assert(live_ptr.is_null() == false);  // live pointer is distinct from NULL
+```
+
+#### Strict Weak Ordering in `operator<`
+To guarantee strict weak ordering for STL associative containers (`std::map`, `std::set`), `operator<` treats both pure SQL `NULL` and `nullptr` pointers as address `0x0`:
+
+$$\text{Address}(\text{val}) = \begin{cases} \text{val.payload.ptrVal} & \text{if } \text{val.is\_pointer()} \\ 0 & \text{otherwise} \end{cases}$$
+
+$$\text{val}_1 < \text{val}_2 \iff \text{Address}(\text{val}_1) < \text{Address}(\text{val}_2)$$
+
+```cpp
+if (t1 == SQLITE_NULL) {
+    void* ptr1 = is_pointer() ? m_sqlite.payload.ptrVal : nullptr;
+    void* ptr2 = other.is_pointer() ? other.m_sqlite.payload.ptrVal : nullptr;
+    return reinterpret_cast<uintptr_t>(ptr1) < reinterpret_cast<uintptr_t>(ptr2);
+}
+```
+
+#### Mathematical Properties Verified:
+1. **Irreflexivity**: `!(pure_null < pure_null)` and `!(null_ptr < null_ptr)`.
+2. **Equivalence**: `!(pure_null < null_ptr)` and `!(null_ptr < pure_null)`. Both have sort rank `0x0`.
+3. **Asymmetry**: For any active pointer address $> 0$, `pure_null < live_ptr` and `null_ptr < live_ptr` are both `true`, while `live_ptr < pure_null` is `false`.
+4. **Transitivity**: Sorting guarantees stable partition between all null variants and active memory addresses.
+
+---
+
+## 11. Freestanding Memory Guarantees (`-nostdlib++`)
 
 All classes strictly adhere to freestanding `-nostdlib++` requirements:
 - Memory for `SqliteStringOwned` is managed via `sqlite3_str_new` / `sqlite3_free`.

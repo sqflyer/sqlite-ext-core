@@ -345,6 +345,22 @@ public:
     }
 
     /**
+     * @brief Binds an opaque typed pointer to a 1-based parameter index via sqlite3_bind_pointer.
+     * 
+     * @tparam T Pointer payload type.
+     * @param col 1-based parameter index.
+     * @param ptr Pointer to bind.
+     * @param type_name The pointer type name string. If nullptr, uses SqlitePointerTraits<T>::name().
+     * @param dtor Optional destructor callback when SQLite is done with the pointer.
+     * @return SQLITE_OK on success, or error code.
+     */
+    template <typename T>
+    inline int bind_pointer(int col, T* ptr, const char* type_name = nullptr, void (*dtor)(void*) = nullptr) {
+        const char* tag = type_name ? type_name : SqlitePointerTraits<T>::name();
+        return m_stmt ? sqlite3_bind_pointer(m_stmt, col, static_cast<void*>(ptr), tag, dtor) : SQLITE_MISUSE;
+    }
+
+    /**
      * @brief Binds a transient polymorphic SqliteValueView wrapper to a 1-based parameter index.
      * 
      * @param col 1-based parameter index.

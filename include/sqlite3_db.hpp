@@ -529,6 +529,20 @@ public:
      */
     inline void result_zeroblob(int n) { sqlite3_result_zeroblob(m_ctx, n); }
 
+    /**
+     * @brief Sets an opaque typed pointer as the UDF return result via sqlite3_result_pointer.
+     * 
+     * @tparam T Pointer payload type.
+     * @param ptr Pointer to return.
+     * @param type_name The pointer type name string. If nullptr, uses SqlitePointerTraits<T>::name().
+     * @param dtor Optional destructor callback when SQLite is done with the pointer.
+     */
+    template <typename T>
+    inline void result_pointer(T* ptr, const char* type_name = nullptr, void (*dtor)(void*) = nullptr) {
+        const char* tag = type_name ? type_name : SqlitePointerTraits<T>::name();
+        sqlite3_result_pointer(m_ctx, static_cast<void*>(ptr), tag, dtor);
+    }
+
     // ========================================================================
     // Error Reporting
     // ========================================================================

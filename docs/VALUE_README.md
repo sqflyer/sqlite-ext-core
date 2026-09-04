@@ -108,6 +108,7 @@ if (val.is_geometry())   { /* Subtype 'G' (GeoJSON / Geopoly Array) */ }
 if (val.is_datetime())   { /* Subtype 'T' (Timestamp / Epoch Millis) */ }
 if (val.is_bool())       { /* Subtype 'B' (Explicit Boolean) */ }
 if (val.is_compressed()) { /* Subtype 'Z' (Compressed Stream) */ }
+if (val.is_pointer())    { /* Subtype 'p' (112: Native SQLite Pointer) */ }
 ```
 
 ### Zero-Allocation Data Extraction
@@ -120,6 +121,11 @@ bool          b = val.as_bool(); // True if as_int64() != 0
 // Text and Blob Views (Zero heap allocations, null-safe)
 SqliteStringView str  = val.as_text(); // Returns non-owning string view (ptr + length)
 SqliteBlobView   blob = val.as_blob(); // Returns non-owning blob view (ptr + size)
+
+// Typed Pointer Extraction via Compile-Time Traits or Tag String
+CustomContext* p1 = val.as_pointer<CustomContext>();             // Uses SqlitePointerTraits<CustomContext>::name()
+CustomContext* p2 = val.as_pointer<CustomContext>("custom_tag"); // Explicit tag override
+bool has_ptr      = val.has_pointer<CustomContext>();            // Checks matching tag and non-null address
 ```
 
 ### Conversion to Owned
@@ -172,6 +178,25 @@ SqliteValueOwned dt = SqliteValueOwned::from_datetime(1724700000000LL);
 
 // 7. Compressed Stream
 SqliteValueOwned comp = SqliteValueOwned::from_compressed(zstd_stream, len);
+
+// 8. Opaque C/C++ Typed Pointer (Tagged with SQLITE_SUBTYPE_POINTER = 112 / 'p')
+SqliteValueOwned ptr_val  = SqliteValueOwned::from_pointer(&my_context);
+SqliteValueOwned null_ptr = SqliteValueOwned::from_pointer<CustomContext>(nullptr); // Semantically SQL NULL
+```
+
+### Pointer Extraction & Mutation
+```cpp
+// Fast typed extraction
+CustomContext* p = ptr_val.as_pointer<CustomContext>();
+bool is_ptr      = ptr_val.is_pointer();  // Subtype == SQLITE_SUBTYPE_POINTER (112)
+bool is_live     = ptr_val.has_pointer(); // Subtype == 112 && payload.ptrVal != nullptr
+
+// In-place mutation (frees any prior heap buffer)
+ptr_val.set_pointer(&another_context);
+
+// Statement binding and UDF result return with compile-time tag deduction:
+ptr_val.bind_pointer<CustomContext>(stmt, 1);
+ptr_val.result_pointer<CustomContext>(ctx);
 ```
 
 ### Inspection & Metadata Getters
@@ -318,6 +343,7 @@ poly_map.emplace(SqliteValueOwned(), "null record");
 poly_map.emplace(SqliteValueOwned(100), "integer record");
 poly_map.emplace(SqliteValueOwned(3.14), "float record");
 poly_map.emplace(SqliteValueOwned::from_text("hello"), "text record");
+```
 
 ---
 
@@ -349,7 +375,79 @@ assert(user_index.find(SqliteStringView("admin", 5)) != user_index.end());
 
 ---
 
-## 10. Performance Benchmarks (Cycle-Accurate)
+## 10. Pointer Passing, Compile-Time Traits & Semantic Equivalence
+
+SQLite provides `sqlite3_bind_pointer` and `sqlite3_result_pointer` to pass opaque C/C++ in-memory objects across SQL statements and UDF chains without serialization. `sqlite3_value.hpp` and `sqlite3_value_containers.hpp` provide end-to-end integration for pointer passing.
+
+### 10.1 Native SQLite Type & Subtype Mechanics
+- **Datatype**: SQLite officially defines the SQL storage class of any bound pointer as **`SQLITE_NULL` (code `5`)**. Both `view.type()` and `owned.type()` evaluate to `SQLITE_NULL`.
+- **Subtype**: SQLite internally assigns `'p'` (`112`) to pointer cells. `sqlite3_value.hpp` maps `SQLITE_SUBTYPE_POINTER` directly to `112` (`'p'`), ensuring that native SQLite pointers bound via `sqlite3_bind_pointer` automatically satisfy `val.is_pointer()`.
+- **Payload Field**: Pointers are stored directly in `payload.ptrVal` (`void*`), completely decoupled from heap-managed text/blob buffers (`payload.pData`) and avoiding any heap length or deallocation conflicts.
+
+### 10.2 Compile-Time Tag Registration (`SQLITE_REGISTER_POINTER_TAG`)
+Associate static type tags with C++ types to enable compile-time deduction across `.as_pointer<T>()`, `.bind_pointer<T>()`, and `.result_pointer<T>()`:
+
+```cpp
+struct CustomContext {
+    int id;
+    double factor;
+};
+
+// Register tag string with compile-time trait:
+SQLITE_REGISTER_POINTER_TAG(CustomContext, "custom_context_tag");
+
+// Built-in specializations in sqlite3_value_containers.hpp:
+// - SqliteValueVec<N>        -> "SqliteValueVec"
+// - SqliteValueTuple<N>      -> "SqliteValueTuple"
+// - SqliteRowOwnedWrapper    -> "SqliteRowOwnedWrapper"
+// - SqliteRowView            -> "SqliteRowView"
+```
+
+Once registered, type tags are deduced automatically:
+```cpp
+// Producer
+SqliteValueOwned ptr_val = SqliteValueOwned::from_pointer(&ctx_obj);
+ptr_val.bind_pointer<CustomContext>(stmt, 1); // tag deduced automatically
+
+// Consumer View
+SqliteValueView view(sqlite3_column_value(stmt, 0));
+CustomContext* ctx = view.as_pointer<CustomContext>(); // tag deduced automatically
+```
+
+### 10.3 Semantic Equivalence Architecture
+In SQL semantics, missing data is represented by `NULL`. Under **Semantic Equivalence**, a pointer variable containing `nullptr` (`from_pointer(nullptr)`) is treated as semantically equivalent to pure SQL `NULL`:
+
+| Expression | Pure SQL `NULL` | Null Pointer (`nullptr`) | Active Pointer (`&obj`) |
+| :--- | :---: | :---: | :---: |
+| `val.is_null()` | `true` | **`true`** | `false` |
+| `val.is_pointer()` | `false` | `true` | `true` |
+| `val.has_pointer()` | `false` | `false` | **`true`** |
+| `bool(val)` (Truthy) | `false` | `false` | **`true`** |
+| `val.hash()` | `DEFAULT_SEED` | **`DEFAULT_SEED`** | Mixed Address Hash |
+
+#### Equivalence in Equality & Strict Weak Ordering
+```cpp
+SqliteValueOwned pure_null;
+SqliteValueOwned null_ptr = SqliteValueOwned::from_pointer<CustomContext>(nullptr);
+SqliteValueOwned live_ptr = SqliteValueOwned::from_pointer(&ctx_obj);
+
+// 1. Equality: pure SQL NULL equals nullptr pointer
+assert(pure_null == null_ptr);
+assert(null_ptr == pure_null);
+assert(live_ptr != pure_null);
+assert(live_ptr != null_ptr);
+
+// 2. Strict Weak Ordering: nulls sort identically (0x0) before active addresses
+assert(!(pure_null < null_ptr) && !(null_ptr < pure_null)); // Equivalent ordering
+assert(pure_null < live_ptr);
+assert(null_ptr < live_ptr);
+assert(!(live_ptr < pure_null));
+assert(!(live_ptr < null_ptr));
+```
+
+---
+
+## 11. Performance Benchmarks (Cycle-Accurate)
 
 | Operation | Standard C++ / SQLite Baseline | `sqlite3_value.hpp` | Improvement |
 | :--- | :--- | :--- | :--- |

@@ -2491,4 +2491,40 @@ inline auto withSqliteKeyValOwned(int pk_count, int val_count, Callable &&fn)
     });
 }
 
+// ============================================================================
+// SQLITE POINTER TRAITS REGISTRATION (Pointer Passing)
+// ============================================================================
+
+/**
+ * @brief Automatic pointer tag registration for all SqliteValueVec<N> specializations.
+ */
+template <size_t N, typename Enable>
+struct SqlitePointerTraits<SqliteValueVec<N, Enable>> {
+    static const char* name() noexcept { return "SqliteValueVec"; }
+};
+
+/**
+ * @brief Automatic pointer tag registration for all SqliteValueTuple<N> specializations.
+ */
+template <size_t N, typename Enable>
+struct SqlitePointerTraits<SqliteValueTuple<N, Enable>> {
+    static const char* name() noexcept { return "SqliteValueTuple"; }
+};
+
+/**
+ * @brief Automatic pointer tag registration for SqliteRowOwnedWrapper.
+ */
+template <>
+struct SqlitePointerTraits<SqliteRowOwnedWrapper> {
+    static const char* name() noexcept { return "SqliteRowOwnedWrapper"; }
+};
+
+/**
+ * @brief Automatic pointer tag registration for SqliteRowView.
+ */
+template <>
+struct SqlitePointerTraits<SqliteRowView> {
+    static const char* name() noexcept { return "SqliteRowView"; }
+};
+
 #endif // SQLITE3_VALUE_CONTAINERS_HPP
