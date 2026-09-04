@@ -105,6 +105,62 @@ void test_thread_detach() {
     printf("   [PASS] Detached thread ran in background.\n");
 }
 
+static SQLITE_THREAD_LOCAL int g_thread_local_val = 0;
+static SQLITE_THREAD_LOCAL void* g_thread_local_addr = nullptr;
+
+/**
+ * @brief Test 5: Verifying SQLITE_THREAD_LOCAL thread-local storage isolation across threads.
+ */
+void test_thread_local_storage() {
+    printf("5. Testing SQLITE_THREAD_LOCAL isolation across threads...\n");
+
+    // Initialize in main thread
+    g_thread_local_val = 777;
+    g_thread_local_addr = &g_thread_local_val;
+
+    int worker1_read = 0;
+    int worker2_read = 0;
+    void* worker1_addr = nullptr;
+    void* worker2_addr = nullptr;
+
+    SqliteThread th1([&worker1_read, &worker1_addr]() {
+        // Must start with 0 in the new thread
+        assert(g_thread_local_val == 0);
+        g_thread_local_val = 111;
+        worker1_addr = (void*)&g_thread_local_val;
+        SqliteThread::sleep_for_ms(20);
+        worker1_read = g_thread_local_val;
+    });
+
+    SqliteThread th2([&worker2_read, &worker2_addr]() {
+        assert(g_thread_local_val == 0);
+        g_thread_local_val = 222;
+        worker2_addr = (void*)&g_thread_local_val;
+        SqliteThread::sleep_for_ms(20);
+        worker2_read = g_thread_local_val;
+    });
+
+    th1.join();
+    th2.join();
+
+    // Main thread's TLS value was undisturbed
+    assert(g_thread_local_val == 777);
+    assert(g_thread_local_addr == (void*)&g_thread_local_val);
+
+    // Both workers read their respective TLS values
+    assert(worker1_read == 111);
+    assert(worker2_read == 222);
+
+    // Each thread had a distinct memory address for the TLS variable
+    assert(worker1_addr != nullptr);
+    assert(worker2_addr != nullptr);
+    assert(worker1_addr != g_thread_local_addr);
+    assert(worker2_addr != g_thread_local_addr);
+    assert(worker1_addr != worker2_addr);
+
+    printf("   [PASS] SQLITE_THREAD_LOCAL verified independent storage across threads.\n");
+}
+
 int main() {
     printf("=================================================================\n");
     printf("Running C++11 SqliteThread Test Suite (-nostdlib++)\n");
@@ -114,6 +170,7 @@ int main() {
     test_thread_lambda_capture();
     test_thread_move_semantics();
     test_thread_detach();
+    test_thread_local_storage();
 
     printf("\nAll C++11 SqliteThread Tests Passed Cleanly!\n");
     return 0;

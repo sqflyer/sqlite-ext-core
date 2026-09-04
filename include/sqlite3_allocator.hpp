@@ -42,6 +42,50 @@
 #endif
 
 // ============================================================================
+// FREESTANDING THREAD-LOCAL STORAGE INTRINSIC (NO <thread>)
+// ============================================================================
+
+/**
+ * @def SQLITE_THREAD_LOCAL
+ * @brief Cross-platform, compiler-native thread-local storage specifier.
+ *
+ * Bypasses standard C++ `<thread>` runtime library dependencies by utilizing
+ * low-level compiler keywords (`__thread` on GCC/Clang and `__declspec(thread)`
+ * on MSVC). Enables thread-safe scratch buffers and mutable dummy sinks in
+ * strict freestanding `-nostdlib++` environments.
+ */
+#if defined(_MSC_VER)
+    #define SQLITE_THREAD_LOCAL __declspec(thread)
+#elif defined(__GNUC__) || defined(__clang__)
+    #define SQLITE_THREAD_LOCAL __thread
+#elif defined(__cplusplus) && __cplusplus >= 201103L
+    #define SQLITE_THREAD_LOCAL thread_local
+#else
+    #define SQLITE_THREAD_LOCAL /* Fallback for single-threaded / bare-metal targets */
+#endif
+
+// ============================================================================
+// FREESTANDING HARDWARE DEBUG TRAP INTRINSIC (NO <cassert>)
+// ============================================================================
+
+/**
+ * @def SQLITE_DEBUG_TRAP
+ * @brief Cross-platform hardware breakpoint and execution trap intrinsic.
+ *
+ * Halts CPU execution at the exact instruction in a debugger without linking
+ * against standard C `<assert.h>` or C++ `<cassert>`. Expands to `__builtin_trap()`
+ * on GCC/Clang and `__debugbreak()` on MSVC.
+ */
+#if defined(__GNUC__) || defined(__clang__)
+    #define SQLITE_DEBUG_TRAP() __builtin_trap()
+#elif defined(_MSC_VER)
+    #include <intrin.h>
+    #define SQLITE_DEBUG_TRAP() __debugbreak()
+#else
+    #define SQLITE_DEBUG_TRAP() do { (*(volatile int*)0 = 0); } while(0)
+#endif
+
+// ============================================================================
 // FREESTANDING TYPE TRAITS (NO <type_traits>)
 // ============================================================================
 

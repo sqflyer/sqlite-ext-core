@@ -789,8 +789,8 @@ private:
     const SqliteValueView *m_view_array;
     const SqliteValueView *const *m_view_ptr_array;
   };
-  int m_col_count;
   SqliteRowSourceType m_source; // SQLITE_ROW_SOURCE_*
+  int m_col_count;
 
 public:
   /**
@@ -1270,14 +1270,18 @@ private:
   SqliteValueOwned *m_data;
   int m_len;
 
-  static inline SqliteValueOwned &mutable_fallback_null() noexcept {
-    static SqliteValueOwned null_val;
-    return null_val;
+  /**
+   * @brief Freestanding static immutable sink that safely absorbs out-of-bounds writes.
+   * Since the instance is marked immutable, all mutation operations are safe no-ops,
+   * making a single process-wide instance completely thread-safe without thread-local overhead.
+   */
+  static inline SqliteValueOwned& mutable_fallback_null() noexcept {
+    static SqliteValueOwned immutable_null(nullptr, true);
+    return immutable_null;
   }
 
-  static inline const SqliteValueOwned &fallback_null() noexcept {
-    static const SqliteValueOwned null_val;
-    return null_val;
+  static inline const SqliteValueOwned& fallback_null() noexcept {
+    return mutable_fallback_null();
   }
 
 public:

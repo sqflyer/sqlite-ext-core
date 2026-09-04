@@ -336,6 +336,17 @@ void test_with_sqlite_row_owned_exhaustive() {
     assert(count_checked == k * 10);
   }
 
+  // Test out-of-bounds write absorption on immutable fallback null
+  withSqliteRowOwned(4, [](SqliteRowOwnedWrapper wrapper) {
+    wrapper[-1] = 9999LL;
+    wrapper[10] = SqliteValueOwned::from_text("should_be_dropped");
+    assert(wrapper[-1].is_null());
+    assert(wrapper[-1].is_immutable());
+    assert(wrapper[10].is_null());
+    assert(wrapper[10].is_immutable());
+    return 0;
+  });
+
   // Test dynamic heap fallback sizes (> 8)
   const int heap_test_sizes[] = {9, 10, 16, 32, 64};
   for (size_t s = 0; s < sizeof(heap_test_sizes) / sizeof(heap_test_sizes[0]);

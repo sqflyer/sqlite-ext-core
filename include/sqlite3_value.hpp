@@ -3,6 +3,7 @@
 
 #include "sqlite3ext.h"
 #include "sqlite3_allocator.hpp"
+#include <cstddef>
 #include <stdint.h>
 #include <stdarg.h>
 #include <string.h>
@@ -101,7 +102,6 @@ namespace SqliteMemoryUtil {
  * std::unordered_map.
  */
 
- 
 // ============================================================================
 // 1. STRING TYPES
 // ============================================================================
@@ -140,16 +140,9 @@ namespace SqliteStringUtil {
      * @brief Performs a lexicographical less-than comparison of two character arrays.
      */
     inline bool less(const char* val1, int len1, const char* val2, int len2) {
-        if (!val1 && !val2) {
-            return false;
-        }
-        if (!val1) {
-            return true;
-        }
-        if (!val2) {
-            return false;
-        }
-
+        if (!val1 && !val2) return false;
+        if (!val1) return true;
+        if (!val2) return false;
         return SqliteMemoryUtil::memcmp_less(val1, len1, val2, len2);
     }
 }
@@ -159,7 +152,7 @@ class SqliteStringOwned;
 /**
  * @brief Zero-cost, non-owning C++ wrapper for strings.
  * 
- * Perfect for heterogenous map lookups (e.g. querying a map of Owned strings 
+ * Perfect for heterogeneous map lookups (e.g. querying a map of Owned strings 
  * using a temporary C-string without allocating memory).
  */
 class SqliteStringView {
@@ -183,6 +176,7 @@ public:
     }
     template <typename TStatement>
     inline int bind(TStatement& stmt, int col, void(*dtor)(void*) = SQLITE_TRANSIENT) const { return bind(stmt.get(), col, dtor); }
+
     /**
      * @brief Constructs a view over an existing string buffer.
      * @param data Pointer to the character array.
@@ -198,25 +192,25 @@ public:
     
     SqliteStringView() : m_data(nullptr), m_size(0) {}
     
-    /** @brief Returns a pointer to the underlying string data. */
-    const char* data() const {
-        return m_data;
+    /** @brief Clones the view (shallow copy). */
+    inline SqliteStringView clone() const noexcept {
+        return *this;
     }
+
+    /** @brief Duplicates the view into an owned dynamic string. */
+    inline SqliteStringOwned to_owned() const;
+
+    /** @brief Returns a pointer to the underlying string data. */
+    const char* data() const noexcept { return m_data; }
     
     /** @brief Returns the length of the string in bytes. */
-    int length() const {
-        return m_size;
-    }
+    int length() const noexcept { return m_size; }
 
     /** @brief STL-compatible size accessor. */
-    size_t size() const noexcept {
-        return static_cast<size_t>(m_size);
-    }
+    size_t size() const noexcept { return static_cast<size_t>(m_size); }
 
     /** @brief STL-compatible empty check. */
-    bool empty() const noexcept {
-        return m_size == 0;
-    }
+    bool empty() const noexcept { return m_size == 0; }
     
     /** @brief Computes the MurmurHash2 of the string. */
     unsigned long long hash() const {
@@ -267,29 +261,24 @@ public:
     }
     template <typename TStatement>
     inline int bind(TStatement& stmt, int col, void(*dtor)(void*) = SQLITE_TRANSIENT) const { return bind(stmt.get(), col, dtor); }
+
     /**
      * @brief Creates a new string builder tied to a specific database connection.
      * @param db The SQLite database connection.
      */
-    explicit SqliteStringOwned(sqlite3* db) {
-        m_str = sqlite3_str_new(db);
-    }
+    explicit SqliteStringOwned(sqlite3* db) { m_str = sqlite3_str_new(db); }
     
     /**
      * @brief Creates a new string builder tied to a UDF execution context.
      * @param ctx The SQLite execution context.
      */
-    explicit SqliteStringOwned(sqlite3_context* ctx) {
-        m_str = sqlite3_str_new(sqlite3_context_db_handle(ctx));
-    }
+    explicit SqliteStringOwned(sqlite3_context* ctx) { m_str = sqlite3_str_new(sqlite3_context_db_handle(ctx)); }
     
     /**
      * @brief Creates a new string builder not tied to any database.
      * Uses global sqlite3_malloc.
      */
-    SqliteStringOwned() {
-        m_str = sqlite3_str_new(nullptr);
-    }
+    SqliteStringOwned() { m_str = sqlite3_str_new(nullptr); }
 
     /**
      * @brief Creates a new string and immediately copies the provided text.
@@ -297,9 +286,7 @@ public:
      */
     explicit SqliteStringOwned(const char* text) {
         m_str = sqlite3_str_new(nullptr);
-        if (text) {
-            sqlite3_str_appendall(m_str, text);
-        }
+        if (text) sqlite3_str_appendall(m_str, text);
     }
 
     /**
@@ -307,18 +294,14 @@ public:
      */
     SqliteStringOwned(const char* text, int len) {
         m_str = sqlite3_str_new(nullptr);
-        if (text && len > 0) {
-            sqlite3_str_append(m_str, text, len);
-        }
+        if (text && len > 0) sqlite3_str_append(m_str, text, len);
     }
     
     /**
      * @brief Destructor. Automatically frees the memory if it was never finished.
      */
     ~SqliteStringOwned() {
-        if (m_str) {
-            sqlite3_free(sqlite3_str_finish(m_str));
-        }
+        if (m_str) sqlite3_free(sqlite3_str_finish(m_str));
     }
     
     // Copy constructor (safe duplicate of string builder)
@@ -331,9 +314,7 @@ public:
 
     SqliteStringOwned& operator=(const SqliteStringOwned& other) {
         if (this != &other) {
-            if (m_str) {
-                sqlite3_free(sqlite3_str_finish(m_str));
-            }
+            if (m_str) sqlite3_free(sqlite3_str_finish(m_str));
             m_str = sqlite3_str_new(nullptr);
             if (other.m_str) {
                 sqlite3_str_append(m_str, sqlite3_str_value(other.m_str), sqlite3_str_length(other.m_str));
@@ -349,44 +330,44 @@ public:
 
     SqliteStringOwned& operator=(SqliteStringOwned&& other) noexcept {
         if (this != &other) {
-            if (m_str) {
-                sqlite3_free(sqlite3_str_finish(m_str));
-            }
+            if (m_str) sqlite3_free(sqlite3_str_finish(m_str));
             m_str = other.m_str;
             other.m_str = nullptr;
         }
         return *this;
     }
 
+    /** @brief Clones the owned string by duplicating the dynamic string builder. */
+    inline SqliteStringOwned clone() const {
+        return SqliteStringOwned(*this);
+    }
+
+    /** @brief Creates a zero-allocation view over this owned string. */
+    inline SqliteStringView view() const noexcept {
+        return SqliteStringView(value(), length());
+    }
+
     /** @brief Appends exactly N bytes of text. */
     SqliteStringOwned& append(const char* zIn, int N) {
-        if (m_str) {
-            sqlite3_str_append(m_str, zIn, N);
-        }
+        if (m_str) sqlite3_str_append(m_str, zIn, N);
         return *this;
     }
     
     /** @brief Appends a null-terminated string. */
     SqliteStringOwned& appendall(const char* zIn) {
-        if (m_str) {
-            sqlite3_str_appendall(m_str, zIn);
-        }
+        if (m_str) sqlite3_str_appendall(m_str, zIn);
         return *this;
     }
     
     /** @brief Appends character C exactly N times. */
     SqliteStringOwned& appendchar(int N, char C) {
-        if (m_str) {
-            sqlite3_str_appendchar(m_str, N, C);
-        }
+        if (m_str) sqlite3_str_appendchar(m_str, N, C);
         return *this;
     }
     
     /** @brief Appends formatted text (like printf). */
     SqliteStringOwned& appendf(const char* zFormat, ...) {
-        if (!m_str) {
-            return *this;
-        }
+        if (!m_str) return *this;
         va_list args;
         va_start(args, zFormat);
         sqlite3_str_vappendf(m_str, zFormat, args);
@@ -396,17 +377,13 @@ public:
     
     /** @brief Appends formatted text using a va_list. */
     SqliteStringOwned& vappendf(const char* zFormat, va_list args) {
-        if (m_str) {
-            sqlite3_str_vappendf(m_str, zFormat, args);
-        }
+        if (m_str) sqlite3_str_vappendf(m_str, zFormat, args);
         return *this;
     }
     
     /** @brief Resets the builder to an empty state. */
     void reset() {
-        if (m_str) {
-            sqlite3_str_reset(m_str);
-        }
+        if (m_str) sqlite3_str_reset(m_str);
     }
     
     /** @brief Returns the current SQLite error code (e.g. SQLITE_NOMEM). */
@@ -439,9 +416,7 @@ public:
      * @return The raw char* array. The caller must manually call `sqlite3_free()` on it.
      */
     char* finish() {
-        if (!m_str) {
-            return nullptr;
-        }
+        if (!m_str) return nullptr;
         char* result = sqlite3_str_finish(m_str);
         m_str = nullptr; 
         return result;
@@ -479,6 +454,10 @@ public:
 };
 
 // Complete heterogeneous lookups for SqliteStringView
+inline SqliteStringOwned SqliteStringView::to_owned() const {
+    return SqliteStringOwned(m_data, m_size);
+}
+
 inline bool SqliteStringView::operator==(const SqliteStringOwned& other) const {
     return SqliteStringUtil::equal(m_data, m_size, other.value(), other.length());
 }
@@ -490,7 +469,6 @@ inline bool SqliteStringView::operator!=(const SqliteStringOwned& other) const {
 inline bool SqliteStringView::operator<(const SqliteStringOwned& other) const {
     return SqliteStringUtil::less(m_data, m_size, other.value(), other.length());
 }
-
 
 // ============================================================================
 // 2. BLOB TYPES
@@ -512,19 +490,10 @@ namespace SqliteBlobUtil {
      * @brief Checks if two binary buffers are exactly equal.
      */
     inline bool equal(const void* val1, int len1, const void* val2, int len2) {
-        if (len1 != len2) {
-            return false;
-        }
-        if (len1 == 0) {
-            return true;
-        }
-        if (val1 == val2) {
-            return true;
-        }
-        if (!val1 || !val2) {
-            return false;
-        }
-
+        if (len1 != len2) return false;
+        if (len1 == 0) return true;
+        if (val1 == val2) return true;
+        if (!val1 || !val2) return false;
         return memcmp(val1, val2, len1) == 0;
     }
     
@@ -532,16 +501,9 @@ namespace SqliteBlobUtil {
      * @brief Performs a lexicographical less-than comparison of two binary buffers.
      */
     inline bool less(const void* val1, int len1, const void* val2, int len2) {
-        if (!val1 && !val2) {
-            return false;
-        }
-        if (!val1) {
-            return true;
-        }
-        if (!val2) {
-            return false;
-        }
-
+        if (!val1 && !val2) return false;
+        if (!val1) return true;
+        if (!val2) return false;
         return SqliteMemoryUtil::memcmp_less(val1, len1, val2, len2);
     }
 }
@@ -575,6 +537,7 @@ public:
     }
     template <typename TStatement>
     inline int bind(TStatement& stmt, int col, void(*dtor)(void*) = SQLITE_TRANSIENT) const { return bind(stmt.get(), col, dtor); }
+
     /**
      * @brief Constructs a view over an existing binary buffer.
      * @param data Pointer to the binary payload.
@@ -583,15 +546,19 @@ public:
     SqliteBlobView(const void* data, int size) : m_data(data), m_size(size) {}
     SqliteBlobView() : m_data(nullptr), m_size(0) {}
     
-    /** @brief Returns a pointer to the underlying binary data. */
-    const void* data() const {
-        return m_data;
+    /** @brief Clones the view (shallow copy). */
+    inline SqliteBlobView clone() const noexcept {
+        return *this;
     }
+
+    /** @brief Duplicates the view into an owned heap blob. */
+    inline SqliteBlobOwned to_owned() const;
+
+    /** @brief Returns a pointer to the underlying binary data. */
+    const void* data() const noexcept { return m_data; }
     
     /** @brief Returns the size of the binary payload in bytes. */
-    int size() const {
-        return m_size;
-    }
+    int size() const noexcept { return m_size; }
 
     /** @brief Computes the MurmurHash2 of the binary payload. */
     unsigned long long hash() const {
@@ -651,9 +618,8 @@ public:
     }
     template <typename TStatement>
     inline int bind(TStatement& stmt, int col, void(*dtor)(void*) = SQLITE_TRANSIENT) const { return bind(stmt.get(), col, dtor); }
-    /**
-     * @brief Constructs an empty binary blob.
-     */
+
+    /** @brief Constructs an empty binary blob. */
     SqliteBlobOwned() : m_data(nullptr), m_size(0) {}
 
     /**
@@ -666,24 +632,30 @@ public:
             m_data = sqlite3_malloc(size);
             if (m_data) {
                 m_size = size;
-                if (data) {
-                    memcpy(m_data, data, size);
-                }
+                if (data) memcpy(m_data, data, size);
             }
         }
     }
     
     /** @brief Destructor. Automatically frees the allocated memory. */
     ~SqliteBlobOwned() {
-        if (m_data) {
-            sqlite3_free(m_data);
-        }
+        if (m_data) sqlite3_free(m_data);
     }
     
-    // Disallow copying to prevent double-free
+    // Disallow implicit copying to prevent accidental heavy allocations
     SqliteBlobOwned(const SqliteBlobOwned&) = delete;
     SqliteBlobOwned& operator=(const SqliteBlobOwned&) = delete;
     
+    /** @brief Clones the owned blob via deep memory allocation. */
+    inline SqliteBlobOwned clone() const {
+        return SqliteBlobOwned(m_data, m_size);
+    }
+
+    /** @brief Creates a zero-allocation view over this owned blob. */
+    inline SqliteBlobView view() const noexcept {
+        return SqliteBlobView(m_data, m_size);
+    }
+
     // Allow moving
     SqliteBlobOwned(SqliteBlobOwned&& other) noexcept : m_data(other.m_data), m_size(other.m_size) {
         other.m_data = nullptr;
@@ -692,9 +664,7 @@ public:
 
     SqliteBlobOwned& operator=(SqliteBlobOwned&& other) noexcept {
         if (this != &other) {
-            if (m_data) {
-                sqlite3_free(m_data);
-            }
+            if (m_data) sqlite3_free(m_data);
             m_data = other.m_data;
             m_size = other.m_size;
             other.m_data = nullptr;
@@ -704,22 +674,18 @@ public:
     }
 
     /** @brief Returns a read-only pointer to the owned binary data. */
-    const void* data() const {
-        return m_data;
-    }
+    const void* data() const noexcept { return m_data; }
     
     /** @brief Returns the size of the owned binary payload in bytes. */
-    int size() const {
-        return m_size;
-    }
+    int size() const noexcept { return m_size; }
 
     /** @brief Checks if the owned blob holds a valid allocation (or is cleanly empty). */
-    bool is_valid() const {
+    bool is_valid() const noexcept {
         return m_size == 0 || m_data != nullptr;
     }
 
     /** @brief Explicit boolean conversion checking validity. */
-    explicit operator bool() const {
+    explicit operator bool() const noexcept {
         return is_valid();
     }
 
@@ -755,6 +721,10 @@ public:
 };
 
 // Complete heterogeneous lookups for SqliteBlobView
+inline SqliteBlobOwned SqliteBlobView::to_owned() const {
+    return SqliteBlobOwned(m_data, m_size);
+}
+
 inline bool SqliteBlobView::operator==(const SqliteBlobOwned& other) const {
     return SqliteBlobUtil::equal(m_data, m_size, other.data(), other.size());
 }
@@ -766,7 +736,6 @@ inline bool SqliteBlobView::operator!=(const SqliteBlobOwned& other) const {
 inline bool SqliteBlobView::operator<(const SqliteBlobOwned& other) const {
     return SqliteBlobUtil::less(m_data, m_size, other.data(), other.size());
 }
-
 
 // ============================================================================
 // 3. VALUE TYPES
@@ -789,13 +758,10 @@ namespace SqliteValueUtil {
      * Hashes the type ID first to guarantee no collisions between Ints, Floats, and Strings.
      */
     inline unsigned long long hash(const sqlite3_value* val) {
-        if (!val) {
-            return SqliteHashUtil::DEFAULT_SEED;
-        }
+        if (!val) return SqliteHashUtil::DEFAULT_SEED;
         
         sqlite3_value* mut_val = const_cast<sqlite3_value*>(val);
         int t = sqlite3_value_type(mut_val);
-        
         unsigned long long h = SqliteHashUtil::DEFAULT_SEED;
         
         switch (t) {
@@ -832,9 +798,7 @@ namespace SqliteValueUtil {
     inline bool equal(const sqlite3_value* v1, const sqlite3_value* v2) {
         int t1 = type(v1);
         int t2 = type(v2);
-        if (t1 != t2) {
-            return false;
-        }
+        if (t1 != t2) return false;
         
         sqlite3_value* mut_v1 = const_cast<sqlite3_value*>(v1);
         sqlite3_value* mut_v2 = const_cast<sqlite3_value*>(v2);
@@ -852,38 +816,20 @@ namespace SqliteValueUtil {
             case SQLITE_TEXT: {
                 int bytes1 = sqlite3_value_bytes(mut_v1);
                 int bytes2 = sqlite3_value_bytes(mut_v2);
-                if (bytes1 != bytes2) {
-                    return false;
-                }
+                if (bytes1 != bytes2) return false;
                 const char* txt1 = reinterpret_cast<const char*>(sqlite3_value_text(mut_v1));
                 const char* txt2 = reinterpret_cast<const char*>(sqlite3_value_text(mut_v2));
-                if (!txt1 || !txt2) {
-                    return txt1 == txt2;
-                }
-                for (int i = 0; i < bytes1; ++i) {
-                    if (txt1[i] != txt2[i]) {
-                        return false;
-                    }
-                }
-                return true;
+                if (!txt1 || !txt2) return txt1 == txt2;
+                return memcmp(txt1, txt2, bytes1) == 0;
             }
             case SQLITE_BLOB: {
                 int bytes1 = sqlite3_value_bytes(mut_v1);
                 int bytes2 = sqlite3_value_bytes(mut_v2);
-                if (bytes1 != bytes2) {
-                    return false;
-                }
+                if (bytes1 != bytes2) return false;
                 const char* blob1 = reinterpret_cast<const char*>(sqlite3_value_blob(mut_v1));
                 const char* blob2 = reinterpret_cast<const char*>(sqlite3_value_blob(mut_v2));
-                if (!blob1 || !blob2) {
-                    return blob1 == blob2;
-                }
-                for (int i = 0; i < bytes1; ++i) {
-                    if (blob1[i] != blob2[i]) {
-                        return false;
-                    }
-                }
-                return true;
+                if (!blob1 || !blob2) return blob1 == blob2;
+                return memcmp(blob1, blob2, bytes1) == 0;
             }
             case SQLITE_NULL: 
                 return true;
@@ -911,9 +857,7 @@ namespace SqliteValueUtil {
         int r1 = type_rank(t1);
         int r2 = type_rank(t2);
         
-        if (r1 != r2) {
-            return r1 < r2;
-        }
+        if (r1 != r2) return r1 < r2;
         
         sqlite3_value* mut_v1 = const_cast<sqlite3_value*>(v1);
         sqlite3_value* mut_v2 = const_cast<sqlite3_value*>(v2);
@@ -933,9 +877,7 @@ namespace SqliteValueUtil {
             if (!isnan1 && isnan2) return false; 
             
             // 2. Standard numeric comparison
-            if (d1 != d2) {
-                return d1 < d2;
-            }
+            if (d1 != d2) return d1 < d2;
             
             // 3. TIE-BREAKER: Maintain strict typing in std::map!
             return t1 < t2;
@@ -949,16 +891,9 @@ namespace SqliteValueUtil {
                 const char* data1 = (t1 == SQLITE_TEXT) ? reinterpret_cast<const char*>(sqlite3_value_text(mut_v1)) : reinterpret_cast<const char*>(sqlite3_value_blob(mut_v1));
                 const char* data2 = (t2 == SQLITE_TEXT) ? reinterpret_cast<const char*>(sqlite3_value_text(mut_v2)) : reinterpret_cast<const char*>(sqlite3_value_blob(mut_v2));
                 
-                if (!data1 && !data2) {
-                    return false;
-                }
-                if (!data1) {
-                    return true;
-                }
-                if (!data2) {
-                    return false;
-                }
-                
+                if (!data1 && !data2) return false;
+                if (!data1) return true;
+                if (!data2) return false;
                 return SqliteMemoryUtil::memcmp_less(data1, len1, data2, len2);
             }
             case SQLITE_NULL: 
@@ -1018,18 +953,19 @@ public:
     SqliteValueView(const SqliteValueView&) = default;
     SqliteValueView& operator=(const SqliteValueView&) = default;
 
+    /** @brief Clones the view (shallow copy). */
+    inline SqliteValueView clone() const noexcept {
+        return *this;
+    }
+
     /** @brief Duplicates transient view into an owned 16-byte value with inline SBO optimization. */
     inline SqliteValueOwned to_owned() const;
 
     /** @brief Returns the underlying `sqlite3_value` pointer. */
-    const sqlite3_value* get() const {
-        return m_val;
-    }
+    const sqlite3_value* get() const noexcept { return m_val; }
     
     /** @brief Returns the SQLite datatype (e.g. SQLITE_INTEGER). */
-    int type() const {
-        return SqliteValueUtil::type(m_val);
-    }
+    int type() const noexcept { return SqliteValueUtil::type(m_val); }
 
     /** @brief Storage class type predicates. */
     inline bool is_null()    const noexcept { return type() == SQLITE_NULL; }
@@ -1136,10 +1072,10 @@ public:
 //    SIMD register, optimizing cache line density (4 values per 64B cache line).
 //
 // 2. ZERO-ALLOCATION SMALL BUFFER OPTIMIZATION (SBO):
-//    - Short strings (<= 13 chars + '\0') and blobs (<= 14 bytes) are stored
+//    - Short strings (<= 14 bytes) and blobs (<= 14 bytes) are stored
 //      directly inline without ever invoking sqlite3_malloc.
 //    - Primitives (64-bit int, 64-bit double, Null) are stored inline in registers.
-//    - Large text/blobs (> 13-14B) store a deep-copied sqlite3_value* on the heap.
+//    - Large text/blobs (> 14 bytes) store a raw byte buffer (pData) on the heap.
 //
 // 3. ZERO-BRANCH SHARED METADATA TAIL (OFFSETS 14 & 15):
 //    Both Struct 1 and Struct 2 align their control metadata at the exact same offsets:
@@ -1172,12 +1108,12 @@ public:
 // 2. HEAP ALLOCATION FLAG (Bit 4, Mask: 0x10):
 //    Indicates whether the payload is heap-managed or stored in-situ:
 //    - 0 : In-situ / Inline representation (Struct 2 `buf` or primitive `iValue`/`dValue`)
-//    - 1 : Heap representation (Struct 1 `payload.pValue` points to `sqlite3_value*`)
+//    - 1 : Heap representation (Struct 1 `payload.pData` points to dynamically allocated buffer)
 //    Extracted via: `is_heap() = (raw & 0x10) != 0;`
 //
 // 3. INLINE PAYLOAD LENGTH (Bits 3..0, Mask: 0x0F):
 //    Encodes the byte length of the inline buffer (0 to 14 bytes):
-//    - For SQLITE_TEXT: exact string length (0..13 chars, followed by null-terminator)
+//    - For SQLITE_TEXT: exact string length (0..14 chars)
 //    - For SQLITE_BLOB: exact binary blob size (0..14 raw bytes)
 //    - For primitives (INTEGER/FLOAT/NULL): unused (set to 0)
 //    Extracted via: `len() = raw & 0x0F;`
@@ -1204,7 +1140,7 @@ struct SqliteOwnedValueTag {
         return static_cast<int>(raw >> 5);
     }
 
-    /** @brief Checks if the value holds a heap-allocated sqlite3_value pointer. */
+    /** @brief Checks if the value holds a heap-allocated buffer. */
     inline bool is_heap() const noexcept {
         return (raw & 0x10) != 0;
     }
@@ -1273,28 +1209,81 @@ struct SqliteOwnedValueTag {
 static_assert(sizeof(SqliteOwnedValueTag) == 1, "SqliteOwnedValueTag must be exactly 1 byte!");
 
 /**
+ * @brief 1-Byte bitfield sub-tag control byte (Offset 14) shared by all 16-byte value representations.
+ * 
+ * ### Bit Allocation:
+ * - Bit 7 (0x80)     : Immutability flag (1 = immutable, 0 = mutable)
+ * - Bits 6..0 (0x7F) : 7-bit SQLite subtype (0..127, covering standard SQLite ASCII subtypes 'B','D','G','J','T','U','V','Z', etc.)
+ */
+struct SqliteOwnedValueSubTag {
+    uint8_t raw;
+
+    /** @brief Sets subtype and optional immutability flag. */
+    inline void set(uint8_t sub, bool is_imm = false) noexcept {
+        raw = static_cast<uint8_t>((sub & 0x7F) | (is_imm ? 0x80 : 0x00));
+    }
+
+    /** @brief Returns the 7-bit SQLite subtype (0..127). */
+    inline uint8_t subtype() const noexcept {
+        return static_cast<uint8_t>(raw & 0x7F);
+    }
+
+    /** @brief Sets the 7-bit SQLite subtype while preserving the immutability flag. */
+    inline void set_subtype(uint8_t sub) noexcept {
+        raw = static_cast<uint8_t>((raw & 0x80) | (sub & 0x7F));
+    }
+
+    /** @brief Checks if the value is marked immutable. */
+    inline bool is_immutable() const noexcept {
+        return (raw & 0x80) != 0;
+    }
+
+    /** @brief Marks the value as immutable. */
+    inline void mark_immutable() noexcept {
+        raw |= 0x80;
+    }
+
+    /** @brief Unmarks the value as immutable (makes it mutable). */
+    inline void unmark_immutable() noexcept {
+        raw &= 0x7F;
+    }
+
+    /** @brief Sets or clears the immutability flag. */
+    inline void set_immutable(bool imm = true) noexcept {
+        if (imm) mark_immutable();
+        else unmark_immutable();
+    }
+
+    /** @brief Resets the subtag to 0x00 (SQLITE_SUBTYPE_NONE and mutable). */
+    inline void clear() noexcept {
+        raw = 0;
+    }
+};
+static_assert(sizeof(SqliteOwnedValueSubTag) == 1, "SqliteOwnedValueSubTag must be exactly 1 byte!");
+
+/**
  * @brief Representation 1: Numbers, Nulls, and Large Heap-Allocated Payloads (16 Bytes).
  * 
  * Layout:
- * - Bytes  0..7  (Offset 0..7)  : 8-byte aligned primitive union (iValue, dValue, pValue)
+ * - Bytes  0..7  (Offset 0..7)  : 8-byte aligned primitive union (iValue, dValue, pData)
  * - Bytes  8..11 (Offset 8..11) : 4-byte heap payload length (heap_len)
  * - Byte   12    (Offset 12)    : 1-byte Native SQLite Affinity character ('@', 'A'..'F')
  * - Byte   13    (Offset 13)    : 1-byte reserved for future ABI extensions (reserved)
- * - Byte   14    (Offset 14)    : 1-byte SQLite Subtype (SHARED WITH INLINE STRUCT)
+ * - Byte   14    (Offset 14)    : 1-byte Sub-Tag Byte: Subtype + Immutability (SHARED WITH INLINE STRUCT)
  * - Byte   15    (Offset 15)    : 1-byte Control Tag (SHARED WITH INLINE STRUCT)
  */
 struct SqliteTypeRep {
     union {
-        sqlite3_int64  iValue;   // 8 bytes (Offset 0..7: 8-byte aligned integer)
+        sqlite3_int64  iValue;   // 8 bytes (Offset 0..7: 64-bit integer)
         double         dValue;   // 8 bytes (Offset 0..7: IEEE-754 double)
-        sqlite3_value* pValue;   // 8 bytes (Offset 0..7: Heap-allocated sqlite3_value*)
+        char*          pData;    // 8 bytes (Offset 0..7: Heap buffer for Text/Blob)
     } payload;
     
-    int32_t             heap_len; // 4 bytes (Offset 8..11: Byte length for heap text/blob)
-    char                affinity; // 1 byte  (Offset 12: Native SQLite affinity '@', 'A'..'F')
-    uint8_t             reserved; // 1 byte  (Offset 13: Reserved for future ABI extensions)
-    uint8_t             subtype;  // 1 byte  (Offset 14: Shared Subtype Byte 'J', 'D', 'U', etc.)
-    SqliteOwnedValueTag tag;      // 1 byte  (Offset 15: Bit-packed Type + Heap Flag + Length)
+    int32_t                 heap_len; // 4 bytes (Offset 8..11: Byte length for heap text/blob)
+    char                    affinity; // 1 byte  (Offset 12: Native SQLite affinity '@', 'A'..'F')
+    uint8_t                 reserved; // 1 byte  (Offset 13: Reserved for future ABI extensions)
+    SqliteOwnedValueSubTag  subtag;   // 1 byte  (Offset 14: Shared Sub-Tag: Subtype + Immutability)
+    SqliteOwnedValueTag     tag;      // 1 byte  (Offset 15: Bit-packed Type + Heap Flag + Length)
 };
 static_assert(sizeof(SqliteTypeRep) == 16, "SqliteTypeRep must be exactly 16 bytes!");
 
@@ -1302,14 +1291,14 @@ static_assert(sizeof(SqliteTypeRep) == 16, "SqliteTypeRep must be exactly 16 byt
  * @brief Representation 2: Inline Buffer for Strings & Binary Blobs (16 Bytes).
  * 
  * Layout:
- * - Bytes  0..13 (Offset 0..13) : 14-byte inline buffer (13 chars + '\0' OR 14 raw blob bytes)
- * - Byte   14    (Offset 14)    : 1-byte SQLite Subtype (SHARED WITH TYPE STRUCT)
+ * - Bytes  0..13 (Offset 0..13) : 14-byte inline buffer (14 text chars OR 14 raw blob bytes)
+ * - Byte   14    (Offset 14)    : 1-byte Sub-Tag Byte: Subtype + Immutability (SHARED WITH TYPE STRUCT)
  * - Byte   15    (Offset 15)    : 1-byte Control Tag (SHARED WITH TYPE STRUCT)
  */
 struct InlineBufferRep {
-    char                buf[14];  // 14 bytes (Offset 0..13: 13 chars + '\0' OR 14 raw blob bytes)
-    uint8_t             subtype;  // 1 byte   (Offset 14: Shared Subtype Byte 'J', 'D', 'U', etc.)
-    SqliteOwnedValueTag tag;      // 1 byte   (Offset 15: Bit-packed Type + Heap Flag + Length)
+    char                    buf[14];  // 14 bytes (Offset 0..13: 14 chars OR 14 raw blob bytes)
+    SqliteOwnedValueSubTag  subtag;   // 1 byte   (Offset 14: Shared Sub-Tag: Subtype + Immutability)
+    SqliteOwnedValueTag     tag;      // 1 byte   (Offset 15: Bit-packed Type + Heap Flag + Length)
 };
 static_assert(sizeof(InlineBufferRep) == 16, "InlineBufferRep must be exactly 16 bytes!");
 
@@ -1317,13 +1306,12 @@ static_assert(sizeof(InlineBufferRep) == 16, "InlineBufferRep must be exactly 16
  * @brief Heavy, memory-managed polymorphic C++ RAII wrapper for `sqlite3_value`.
  * 
  * Implements a dual-representation 16-byte value layout that transparently handles
- * primitives, inline short strings/blobs, and heap-managed SQLite value objects.
+ * primitives, inline short strings/blobs (<= 14 bytes), and heap-managed buffers.
  * Features full support for SQLite data affinities and the complete SQLite subtype registry.
  */
 class SqliteValueOwned {
 private:
-    static const int MAX_INLINE_STR_LEN  = 13;
-    static const int MAX_INLINE_BLOB_LEN = 14;
+    static const int MAX_INLINE_BUF_LEN = 14;
 
     union {
         SqliteTypeRep   m_sqlite;  // Struct 1 (Primitives & Heap values)
@@ -1332,9 +1320,18 @@ private:
     };
 
     /**
+     * @brief Safely releases heap memory if currently owning an allocated buffer.
+     */
+    inline void free_heap() noexcept {
+        if (is_heap_allocated() && m_sqlite.payload.pData) {
+            sqlite3_free(m_sqlite.payload.pData);
+        }
+    }
+
+    /**
      * @brief Packs type, heap flag, and inline length into the single shared tag byte.
      * @param type The SQLite storage class (SQLITE_INTEGER..SQLITE_NULL).
-     * @param is_heap True if payload is a heap-allocated sqlite3_value*.
+     * @param is_heap True if payload is a heap-allocated buffer.
      * @param len Inline payload length (0..14 bytes).
      */
     inline void set_tag(uint8_t type, bool is_heap, uint8_t len = 0) noexcept {
@@ -1342,126 +1339,145 @@ private:
     }
 
     /** @brief Initializes state as SQLITE_NULL. */
-    inline void init_null() noexcept {
-        m_sqlite.payload.pValue = nullptr;
+    inline void init_null(bool is_imm = false) noexcept {
+        m_sqlite.payload.pData = nullptr;
         m_sqlite.heap_len = 0;
         m_sqlite.affinity = SQLITE_AFF_NONE;
         m_sqlite.reserved = 0;
-        m_sqlite.subtype = SQLITE_SUBTYPE_NONE;
+        m_sqlite.subtag.set(SQLITE_SUBTYPE_NONE, is_imm);
         set_tag(SQLITE_NULL, false, 0);
     }
 
     /** @brief Initializes 64-bit integer from sqlite3_value. */
-    inline void init_integer(const sqlite3_value* val, uint8_t sub) noexcept {
-        init_integer(sqlite3_value_int64(const_cast<sqlite3_value*>(val)), sub);
+    inline void init_integer(const sqlite3_value* val, uint8_t sub, bool is_imm = false) noexcept {
+        init_integer(sqlite3_value_int64(const_cast<sqlite3_value*>(val)), sub, SQLITE_AFF_INTEGER, is_imm);
     }
 
     /** @brief Initializes 64-bit integer directly. */
-    inline void init_integer(sqlite3_int64 i, uint8_t sub = SQLITE_SUBTYPE_NONE, char aff = SQLITE_AFF_INTEGER) noexcept {
+    inline void init_integer(sqlite3_int64 i, uint8_t sub = SQLITE_SUBTYPE_NONE, char aff = SQLITE_AFF_INTEGER, bool is_imm = false) noexcept {
         m_sqlite.payload.iValue = i;
         m_sqlite.heap_len = 0;
         m_sqlite.affinity = aff;
         m_sqlite.reserved = 0;
-        m_sqlite.subtype = sub;
+        m_sqlite.subtag.set(sub, is_imm);
         set_tag(SQLITE_INTEGER, false, 0);
     }
 
     /** @brief Initializes double-precision float from sqlite3_value. */
-    inline void init_float(const sqlite3_value* val, uint8_t sub) noexcept {
-        init_float(sqlite3_value_double(const_cast<sqlite3_value*>(val)), sub);
+    inline void init_float(const sqlite3_value* val, uint8_t sub, bool is_imm = false) noexcept {
+        init_float(sqlite3_value_double(const_cast<sqlite3_value*>(val)), sub, SQLITE_AFF_REAL, is_imm);
     }
 
     /** @brief Initializes double-precision float directly. */
-    inline void init_float(double d, uint8_t sub = SQLITE_SUBTYPE_NONE, char aff = SQLITE_AFF_REAL) noexcept {
+    inline void init_float(double d, uint8_t sub = SQLITE_SUBTYPE_NONE, char aff = SQLITE_AFF_REAL, bool is_imm = false) noexcept {
         m_sqlite.payload.dValue = d;
         m_sqlite.heap_len = 0;
         m_sqlite.affinity = aff;
         m_sqlite.reserved = 0;
-        m_sqlite.subtype = sub;
+        m_sqlite.subtag.set(sub, is_imm);
         set_tag(SQLITE_FLOAT, false, 0);
     }
 
-    /** @brief Initializes text string with SBO (<= 13 chars) or heap duplication from sqlite3_value. */
-    inline void init_text(const sqlite3_value* val, uint8_t sub) {
+    /**
+     * @brief Unified buffer initializer for Strings, Blobs, and Custom buffer payloads.
+     * 
+     * Handles both SBO (<= 14 bytes) and exact heap allocations without extra '\0' overhead.
+     *
+     * @param data Pointer to raw byte payload.
+     * @param len Length in bytes (or -1 for auto-calculating null-terminated text strings).
+     * @param type SQLite storage class (SQLITE_TEXT or SQLITE_BLOB).
+     * @param aff SQLite native affinity character ('B' for TEXT, 'A' for BLOB).
+     * @param sub SQLite subtype (SQLITE_SUBTYPE_NONE, SQLITE_SUBTYPE_JSON, etc.).
+     * @param is_imm Optional flag marking the value immutable.
+     */
+    inline void init_buffer(const void* data, int len, uint8_t type, char aff, uint8_t sub = SQLITE_SUBTYPE_NONE, bool is_imm = false) {
+        if (!data) {
+            init_null(is_imm);
+            return;
+        }
+
+        int n = (len >= 0) ? len : ((type == SQLITE_TEXT) ? SqliteStringUtil::sqlite_strlen(static_cast<const char*>(data)) : 0);
+        if (n < 0) {
+            init_null(is_imm);
+            return;
+        }
+
+        if (n <= MAX_INLINE_BUF_LEN) {
+            if (n > 0) {
+                memcpy(m_inline.buf, data, n);
+            }
+            m_inline.subtag.set(sub, is_imm);
+            set_tag(type, false, static_cast<uint8_t>(n));
+        } else {
+            char* buf = static_cast<char*>(sqlite3_malloc64(static_cast<sqlite3_uint64>(n)));
+            if (buf) {
+                memcpy(buf, data, n);
+            }
+            m_sqlite.payload.pData = buf;
+            m_sqlite.heap_len = n;
+            m_sqlite.affinity = aff;
+            m_sqlite.reserved = 0;
+            m_sqlite.subtag.set(sub, is_imm);
+            set_tag(type, true, 0);
+        }
+    }
+
+    /** @brief Initializes text string with SBO (<= 14 chars) or exact-sized heap duplication from sqlite3_value. */
+    inline void init_text(const sqlite3_value* val, uint8_t sub, bool is_imm = false) {
         const char* text = reinterpret_cast<const char*>(sqlite3_value_text(const_cast<sqlite3_value*>(val)));
         int len = text ? sqlite3_value_bytes(const_cast<sqlite3_value*>(val)) : 0;
-        if (len <= MAX_INLINE_STR_LEN) {
-            if (text && len > 0) {
-                memcpy(m_inline.buf, text, len);
-            }
-            m_inline.buf[len] = '\0';
-            m_inline.subtype = sub;
-            set_tag(SQLITE_TEXT, false, static_cast<uint8_t>(len));
-        } else {
-            m_sqlite.payload.pValue = sqlite3_value_dup(val);
-            m_sqlite.heap_len = len;
-            m_sqlite.affinity = SQLITE_AFF_TEXT;
-            m_sqlite.reserved = 0;
-            m_sqlite.subtype = sub;
-            set_tag(SQLITE_TEXT, true, 0);
-        }
+        init_buffer(text, len, SQLITE_TEXT, SQLITE_AFF_TEXT, sub, is_imm);
     }
 
-    /** @brief Initializes text string with SBO (<= 13 chars) or heap duplication directly. */
-    inline void init_text(const char* text, int len = -1, uint8_t sub = SQLITE_SUBTYPE_NONE) {
-        if (!text) {
-            init_null();
-            return;
-        }
-        int n = len >= 0 ? len : SqliteStringUtil::sqlite_strlen(text);
-        if (n <= MAX_INLINE_STR_LEN) {
-            if (n > 0) memcpy(m_inline.buf, text, n);
-            m_inline.buf[n] = '\0';
-            m_inline.subtype = sub;
-            set_tag(SQLITE_TEXT, false, static_cast<uint8_t>(n));
-        } else {
-            m_sqlite.payload.pValue = nullptr;
-            m_sqlite.heap_len = n;
-            m_sqlite.affinity = SQLITE_AFF_TEXT;
-            m_sqlite.reserved = 0;
-            m_sqlite.subtype = sub;
-            set_tag(SQLITE_TEXT, true, 0);
-        }
+    /** @brief Initializes text string with SBO (<= 14 chars) or exact-sized heap duplication directly. */
+    inline void init_text(const char* text, int len = -1, uint8_t sub = SQLITE_SUBTYPE_NONE, bool is_imm = false) {
+        init_buffer(text, len, SQLITE_TEXT, SQLITE_AFF_TEXT, sub, is_imm);
     }
 
-    /** @brief Initializes binary blob with SBO (<= 14 bytes) or heap duplication from sqlite3_value. */
-    inline void init_blob(const sqlite3_value* val, uint8_t sub) {
+    /** @brief Initializes binary blob with SBO (<= 14 bytes) or exact-sized heap duplication from sqlite3_value. */
+    inline void init_blob(const sqlite3_value* val, uint8_t sub, bool is_imm = false) {
         const void* blob = sqlite3_value_blob(const_cast<sqlite3_value*>(val));
         int len = blob ? sqlite3_value_bytes(const_cast<sqlite3_value*>(val)) : 0;
-        if (len <= MAX_INLINE_BLOB_LEN) {
-            if (blob && len > 0) {
-                memcpy(m_inline.buf, blob, len);
+        init_buffer(blob, len, SQLITE_BLOB, SQLITE_AFF_BLOB, sub, is_imm);
+    }
+
+    /** @brief Initializes binary blob with SBO (<= 14 bytes) or exact-sized heap duplication directly. */
+    inline void init_blob(const void* data, int len, uint8_t sub = SQLITE_SUBTYPE_NONE, bool is_imm = false) {
+        init_buffer(data, len, SQLITE_BLOB, SQLITE_AFF_BLOB, sub, is_imm);
+    }
+
+    /** 
+     * @brief Internal helper to deep-copy another SqliteValueOwned instance.
+     * Performs a 16-byte burst copy followed by conditional heap payload duplication.
+     */
+    inline void copy_from(const SqliteValueOwned& other) {
+        memcpy(static_cast<void*>(this), &other, sizeof(SqliteValueOwned));
+        if (other.is_heap_allocated()) {
+            if (other.m_sqlite.payload.pData && other.m_sqlite.heap_len > 0) {
+                size_t alloc_sz = static_cast<size_t>(other.m_sqlite.heap_len);
+                char* buf = static_cast<char*>(sqlite3_malloc64(static_cast<sqlite3_uint64>(alloc_sz)));
+                if (buf) {
+                    memcpy(buf, other.m_sqlite.payload.pData, alloc_sz);
+                }
+                m_sqlite.payload.pData = buf;
+            } else {
+                m_sqlite.payload.pData = nullptr;
             }
-            m_inline.subtype = sub;
-            set_tag(SQLITE_BLOB, false, static_cast<uint8_t>(len));
-        } else {
-            m_sqlite.payload.pValue = sqlite3_value_dup(val);
-            m_sqlite.heap_len = len;
-            m_sqlite.affinity = SQLITE_AFF_BLOB;
-            m_sqlite.reserved = 0;
-            m_sqlite.subtype = sub;
-            set_tag(SQLITE_BLOB, true, 0);
         }
     }
 
-    /** @brief Initializes binary blob with SBO (<= 14 bytes) or heap duplication directly. */
-    inline void init_blob(const void* data, int len, uint8_t sub = SQLITE_SUBTYPE_NONE) {
-        if (!data || len <= 0) {
-            init_null();
+    /** 
+     * @brief Internal helper to move another SqliteValueOwned instance.
+     * Takes ownership of the 16-byte state and resets the source to SQLITE_NULL.
+     * If the source instance is marked immutable, deep-copies instead to prevent mutating it.
+     */
+    inline void move_from(SqliteValueOwned&& other) noexcept {
+        if (other.is_immutable()) {
+            copy_from(other);
             return;
         }
-        if (len <= MAX_INLINE_BLOB_LEN) {
-            memcpy(m_inline.buf, data, len);
-            m_inline.subtype = sub;
-            set_tag(SQLITE_BLOB, false, static_cast<uint8_t>(len));
-        } else {
-            m_sqlite.payload.pValue = nullptr;
-            m_sqlite.heap_len = len;
-            m_sqlite.affinity = SQLITE_AFF_BLOB;
-            m_sqlite.reserved = 0;
-            m_sqlite.subtype = sub;
-            set_tag(SQLITE_BLOB, true, 0);
-        }
+        memcpy(static_cast<void*>(this), &other, sizeof(SqliteValueOwned));
+        other.init_null();
     }
 
 public:
@@ -1469,44 +1485,44 @@ public:
      * @brief Default constructor creating a NULL value with no subtype.
      */
     SqliteValueOwned() noexcept {
-        init_null();
+        init_null(false);
+    }
+
+    /**
+     * @brief Explicit nullptr constructor creating a NULL value with optional immutability.
+     */
+    explicit SqliteValueOwned(std::nullptr_t, bool is_immutable = false) noexcept {
+        init_null(is_immutable);
     }
 
     /** 
      * @brief Sets this object as the return result of a SQLite UDF context. 
      */
     inline void result(sqlite3_context* ctx) const {
-        if (is_heap_allocated()) {
-            if (m_sqlite.payload.pValue) {
-                sqlite3_result_value(ctx, m_sqlite.payload.pValue);
-            } else {
+        switch (type()) {
+            case SQLITE_TEXT: {
+                SqliteStringView sv = as_text();
+                sqlite3_result_text(ctx, sv.data(), sv.length(), SQLITE_TRANSIENT);
+                break;
+            }
+            case SQLITE_BLOB: {
+                SqliteBlobView bv = as_blob();
+                sqlite3_result_blob(ctx, bv.data(), bv.size(), SQLITE_TRANSIENT);
+                break;
+            }
+            case SQLITE_INTEGER:
+                sqlite3_result_int64(ctx, m_sqlite.payload.iValue);
+                break;
+            case SQLITE_FLOAT:
+                sqlite3_result_double(ctx, m_sqlite.payload.dValue);
+                break;
+            case SQLITE_NULL:
+            default:
                 sqlite3_result_null(ctx);
-            }
-            if (m_sqlite.subtype != SQLITE_SUBTYPE_NONE) {
-                sqlite3_result_subtype(ctx, m_sqlite.subtype);
-            }
-        } else {
-            switch (type()) {
-                case SQLITE_TEXT:
-                    sqlite3_result_text(ctx, m_inline.buf, inline_length(), SQLITE_TRANSIENT);
-                    break;
-                case SQLITE_BLOB:
-                    sqlite3_result_blob(ctx, m_inline.buf, inline_length(), SQLITE_TRANSIENT);
-                    break;
-                case SQLITE_INTEGER:
-                    sqlite3_result_int64(ctx, m_sqlite.payload.iValue);
-                    break;
-                case SQLITE_FLOAT:
-                    sqlite3_result_double(ctx, m_sqlite.payload.dValue);
-                    break;
-                case SQLITE_NULL:
-                default:
-                    sqlite3_result_null(ctx);
-                    break;
-            }
-            if (subtype() != SQLITE_SUBTYPE_NONE) {
-                sqlite3_result_subtype(ctx, subtype());
-            }
+                break;
+        }
+        if (subtype() != SQLITE_SUBTYPE_NONE) {
+            sqlite3_result_subtype(ctx, subtype());
         }
     }
     template <typename TContext>
@@ -1516,18 +1532,15 @@ public:
      * @brief Binds this object to a prepared SQLite statement at the given 1-based column index. 
      */
     inline int bind(sqlite3_stmt* stmt, int col) const {
-        if (is_heap_allocated()) {
-            if (m_sqlite.payload.pValue) {
-                return sqlite3_bind_value(stmt, col, m_sqlite.payload.pValue);
-            } else {
-                return sqlite3_bind_null(stmt, col);
-            }
-        }
         switch (type()) {
-            case SQLITE_TEXT:
-                return sqlite3_bind_text(stmt, col, m_inline.buf, inline_length(), SQLITE_TRANSIENT);
-            case SQLITE_BLOB:
-                return sqlite3_bind_blob(stmt, col, m_inline.buf, inline_length(), SQLITE_TRANSIENT);
+            case SQLITE_TEXT: {
+                SqliteStringView sv = as_text();
+                return sqlite3_bind_text(stmt, col, sv.data(), sv.length(), SQLITE_TRANSIENT);
+            }
+            case SQLITE_BLOB: {
+                SqliteBlobView bv = as_blob();
+                return sqlite3_bind_blob(stmt, col, bv.data(), bv.size(), SQLITE_TRANSIENT);
+            }
             case SQLITE_INTEGER:
                 return sqlite3_bind_int64(stmt, col, m_sqlite.payload.iValue);
             case SQLITE_FLOAT:
@@ -1543,9 +1556,9 @@ public:
     /**
      * @brief Constructs an owned 16-byte value by copying/inlining from an existing `sqlite3_value`.
      */
-    explicit SqliteValueOwned(const sqlite3_value* val) {
+    explicit SqliteValueOwned(const sqlite3_value* val, bool is_immutable = false) {
         if (!val) {
-            init_null();
+            init_null(is_immutable);
             return;
         }
 
@@ -1554,78 +1567,78 @@ public:
 
         switch (t) {
             case SQLITE_INTEGER:
-                init_integer(val, sub);
+                init_integer(val, sub, is_immutable);
                 break;
             case SQLITE_FLOAT:
-                init_float(val, sub);
+                init_float(val, sub, is_immutable);
                 break;
             case SQLITE_TEXT:
-                init_text(val, sub);
+                init_text(val, sub, is_immutable);
                 break;
             case SQLITE_BLOB:
-                init_blob(val, sub);
+                init_blob(val, sub, is_immutable);
                 break;
             case SQLITE_NULL:
             default:
-                init_null();
-                m_sqlite.subtype = sub;
+                init_null(is_immutable);
+                m_sqlite.subtag.set(sub, is_immutable);
                 break;
         }
     }
     
     /** @brief Zero-allocation constructor for storing a 64-bit integer inline with optional subtype and affinity. */
-    explicit SqliteValueOwned(sqlite3_int64 val, uint8_t subtype = SQLITE_SUBTYPE_NONE, char aff = SQLITE_AFF_INTEGER) noexcept {
-        init_integer(val, subtype, aff);
+    explicit SqliteValueOwned(sqlite3_int64 val, uint8_t subtype = SQLITE_SUBTYPE_NONE, char aff = SQLITE_AFF_INTEGER, bool is_immutable = false) noexcept {
+        init_integer(val, subtype, aff, is_immutable);
     }
 
     /** @brief Zero-allocation constructor for storing a standard long integer. */
-    explicit SqliteValueOwned(long val, uint8_t subtype = SQLITE_SUBTYPE_NONE, char aff = SQLITE_AFF_INTEGER) noexcept {
-        init_integer(static_cast<sqlite3_int64>(val), subtype, aff);
+    explicit SqliteValueOwned(long val, uint8_t subtype = SQLITE_SUBTYPE_NONE, char aff = SQLITE_AFF_INTEGER, bool is_immutable = false) noexcept {
+        init_integer(static_cast<sqlite3_int64>(val), subtype, aff, is_immutable);
     }
     
     /** @brief Zero-allocation constructor for storing a standard int. */
-    explicit SqliteValueOwned(int val, uint8_t subtype = SQLITE_SUBTYPE_NONE, char aff = SQLITE_AFF_INTEGER) noexcept {
-        init_integer(static_cast<sqlite3_int64>(val), subtype, aff);
+    explicit SqliteValueOwned(int val, uint8_t subtype = SQLITE_SUBTYPE_NONE, char aff = SQLITE_AFF_INTEGER, bool is_immutable = false) noexcept {
+        init_integer(static_cast<sqlite3_int64>(val), subtype, aff, is_immutable);
     }
 
     /** @brief Zero-allocation constructor for storing an unsigned int. */
-    explicit SqliteValueOwned(unsigned int val, uint8_t subtype = SQLITE_SUBTYPE_NONE, char aff = SQLITE_AFF_INTEGER) noexcept {
-        init_integer(static_cast<sqlite3_int64>(val), subtype, aff);
+    explicit SqliteValueOwned(unsigned int val, uint8_t subtype = SQLITE_SUBTYPE_NONE, char aff = SQLITE_AFF_INTEGER, bool is_immutable = false) noexcept {
+        init_integer(static_cast<sqlite3_int64>(val), subtype, aff, is_immutable);
     }
 
     /** @brief Zero-allocation constructor for storing an unsigned long. */
-    explicit SqliteValueOwned(unsigned long val, uint8_t subtype = SQLITE_SUBTYPE_NONE, char aff = SQLITE_AFF_INTEGER) noexcept {
-        init_integer(static_cast<sqlite3_int64>(val), subtype, aff);
+    explicit SqliteValueOwned(unsigned long val, uint8_t subtype = SQLITE_SUBTYPE_NONE, char aff = SQLITE_AFF_INTEGER, bool is_immutable = false) noexcept {
+        init_integer(static_cast<sqlite3_int64>(val), subtype, aff, is_immutable);
     }
 
     /** @brief Zero-allocation constructor for storing an unsigned long long. */
-    explicit SqliteValueOwned(unsigned long long val, uint8_t subtype = SQLITE_SUBTYPE_NONE, char aff = SQLITE_AFF_INTEGER) noexcept {
-        init_integer(static_cast<sqlite3_int64>(val), subtype, aff);
+    explicit SqliteValueOwned(unsigned long long val, uint8_t subtype = SQLITE_SUBTYPE_NONE, char aff = SQLITE_AFF_INTEGER, bool is_immutable = false) noexcept {
+        init_integer(static_cast<sqlite3_int64>(val), subtype, aff, is_immutable);
     }
     
     /** @brief Zero-allocation constructor for storing a double-precision float inline with optional subtype and affinity. */
-    explicit SqliteValueOwned(double val, uint8_t subtype = SQLITE_SUBTYPE_NONE, char aff = SQLITE_AFF_REAL) noexcept {
-        init_float(val, subtype, aff);
+    explicit SqliteValueOwned(double val, uint8_t subtype = SQLITE_SUBTYPE_NONE, char aff = SQLITE_AFF_REAL, bool is_immutable = false) noexcept {
+        init_float(val, subtype, aff, is_immutable);
     }
 
     /** @brief Zero-allocation constructor for explicit boolean values. */
-    explicit SqliteValueOwned(bool val, uint8_t subtype = SQLITE_SUBTYPE_BOOL, char aff = SQLITE_AFF_INTEGER) noexcept {
-        init_integer(val ? 1LL : 0LL, subtype, aff);
+    explicit SqliteValueOwned(bool val, uint8_t subtype = SQLITE_SUBTYPE_BOOL, char aff = SQLITE_AFF_INTEGER, bool is_immutable = false) noexcept {
+        init_integer(val ? 1LL : 0LL, subtype, aff, is_immutable);
     }
 
     /** @brief Constructs an owned string value from a null-terminated C-string. */
-    explicit SqliteValueOwned(const char* text, uint8_t subtype = SQLITE_SUBTYPE_NONE) {
-        init_text(text, -1, subtype);
+    explicit SqliteValueOwned(const char* text, uint8_t subtype = SQLITE_SUBTYPE_NONE, bool is_immutable = false) {
+        init_text(text, -1, subtype, is_immutable);
     }
 
     /** @brief Constructs an owned string value from a SqliteStringView. */
-    explicit SqliteValueOwned(const SqliteStringView& text, uint8_t subtype = SQLITE_SUBTYPE_NONE) {
-        init_text(text.data(), text.size(), subtype);
+    explicit SqliteValueOwned(const SqliteStringView& text, uint8_t subtype = SQLITE_SUBTYPE_NONE, bool is_immutable = false) {
+        init_text(text.data(), text.length(), subtype, is_immutable);
     }
 
     /** @brief Constructs an owned blob value from a SqliteBlobView. */
-    explicit SqliteValueOwned(const SqliteBlobView& blob, uint8_t subtype = SQLITE_SUBTYPE_NONE) {
-        init_blob(blob.data(), blob.size(), subtype);
+    explicit SqliteValueOwned(const SqliteBlobView& blob, uint8_t subtype = SQLITE_SUBTYPE_NONE, bool is_immutable = false) {
+        init_blob(blob.data(), blob.size(), subtype, is_immutable);
     }
 
     // ========================================================================
@@ -1633,67 +1646,67 @@ public:
     // ========================================================================
 
     /** @brief Constructs a boolean SqliteValueOwned tagged with SQLITE_SUBTYPE_BOOL. */
-    static SqliteValueOwned from_bool(bool val) noexcept {
-        return SqliteValueOwned(val, SQLITE_SUBTYPE_BOOL, SQLITE_AFF_INTEGER);
+    static SqliteValueOwned from_bool(bool val, bool is_immutable = false) noexcept {
+        return SqliteValueOwned(val, SQLITE_SUBTYPE_BOOL, SQLITE_AFF_INTEGER, is_immutable);
     }
 
     /** @brief Constructs a datetime integer timestamp tagged with SQLITE_SUBTYPE_DATETIME. */
-    static SqliteValueOwned from_datetime(sqlite3_int64 epoch_ms) noexcept {
-        return SqliteValueOwned(epoch_ms, SQLITE_SUBTYPE_DATETIME, SQLITE_AFF_INTEGER);
+    static SqliteValueOwned from_datetime(sqlite3_int64 epoch_ms, bool is_immutable = false) noexcept {
+        return SqliteValueOwned(epoch_ms, SQLITE_SUBTYPE_DATETIME, SQLITE_AFF_INTEGER, is_immutable);
     }
 
     /** @brief Constructs an inline or heap-backed string value. */
-    static SqliteValueOwned from_text(const char* text, int len = -1, uint8_t subtype = SQLITE_SUBTYPE_NONE) {
+    static SqliteValueOwned from_text(const char* text, int len = -1, uint8_t subtype = SQLITE_SUBTYPE_NONE, bool is_immutable = false) {
         SqliteValueOwned val;
-        val.init_text(text, len, subtype);
+        val.init_text(text, len, subtype, is_immutable);
         return val;
     }
 
     /** @brief Constructs an inline or heap-backed blob value. */
-    static SqliteValueOwned from_blob(const void* data, int len, uint8_t subtype = SQLITE_SUBTYPE_NONE) {
+    static SqliteValueOwned from_blob(const void* data, int len, uint8_t subtype = SQLITE_SUBTYPE_NONE, bool is_immutable = false) {
         SqliteValueOwned val;
-        val.init_blob(data, len, subtype);
+        val.init_blob(data, len, subtype, is_immutable);
         return val;
     }
 
     /** @brief Constructs a JSON text value with SQLITE_SUBTYPE_JSON ('J'). */
-    static SqliteValueOwned from_json(const char* json_str, int len = -1) {
-        return from_text(json_str, len, SQLITE_SUBTYPE_JSON);
+    static SqliteValueOwned from_json(const char* json_str, int len = -1, bool is_immutable = false) {
+        return from_text(json_str, len, SQLITE_SUBTYPE_JSON, is_immutable);
     }
 
     /** @brief Constructs a JSONB binary value with SQLITE_SUBTYPE_JSON ('J'). */
-    static SqliteValueOwned from_jsonb(const void* blob, int len) {
-        return from_blob(blob, len, SQLITE_SUBTYPE_JSON);
+    static SqliteValueOwned from_jsonb(const void* blob, int len, bool is_immutable = false) {
+        return from_blob(blob, len, SQLITE_SUBTYPE_JSON, is_immutable);
     }
 
     /** @brief Constructs an exact Decimal text value with SQLITE_SUBTYPE_DECIMAL ('D'). */
-    static SqliteValueOwned from_decimal(const char* decimal_str, int len = -1) {
-        return from_text(decimal_str, len, SQLITE_SUBTYPE_DECIMAL);
+    static SqliteValueOwned from_decimal(const char* decimal_str, int len = -1, bool is_immutable = false) {
+        return from_text(decimal_str, len, SQLITE_SUBTYPE_DECIMAL, is_immutable);
     }
 
     /** @brief Constructs a UUID text or blob value with SQLITE_SUBTYPE_UUID ('U'). */
-    static SqliteValueOwned from_uuid(const char* uuid_str, int len = -1) {
-        return from_text(uuid_str, len, SQLITE_SUBTYPE_UUID);
+    static SqliteValueOwned from_uuid(const char* uuid_str, int len = -1, bool is_immutable = false) {
+        return from_text(uuid_str, len, SQLITE_SUBTYPE_UUID, is_immutable);
     }
 
     /** @brief Constructs a UUID binary value with SQLITE_SUBTYPE_UUID ('U'). */
-    static SqliteValueOwned from_uuid(const void* uuid_16_bytes) {
-        return from_blob(uuid_16_bytes, 16, SQLITE_SUBTYPE_UUID);
+    static SqliteValueOwned from_uuid(const void* uuid_16_bytes, bool is_immutable = false) {
+        return from_blob(uuid_16_bytes, 16, SQLITE_SUBTYPE_UUID, is_immutable);
     }
 
     /** @brief Constructs a binary AI Vector embedding with SQLITE_SUBTYPE_VECTOR ('V'). */
-    static SqliteValueOwned from_vector(const void* float_data, int byte_len) {
-        return from_blob(float_data, byte_len, SQLITE_SUBTYPE_VECTOR);
+    static SqliteValueOwned from_vector(const void* float_data, int byte_len, bool is_immutable = false) {
+        return from_blob(float_data, byte_len, SQLITE_SUBTYPE_VECTOR, is_immutable);
     }
 
     /** @brief Constructs a binary Geometry blob with SQLITE_SUBTYPE_GEOMETRY ('G'). */
-    static SqliteValueOwned from_geometry(const void* geom_data, int byte_len) {
-        return from_blob(geom_data, byte_len, SQLITE_SUBTYPE_GEOMETRY);
+    static SqliteValueOwned from_geometry(const void* geom_data, int byte_len, bool is_immutable = false) {
+        return from_blob(geom_data, byte_len, SQLITE_SUBTYPE_GEOMETRY, is_immutable);
     }
 
     /** @brief Constructs a Compressed binary blob with SQLITE_SUBTYPE_COMPRESSED ('Z'). */
-    static SqliteValueOwned from_compressed(const void* compressed_data, int byte_len) {
-        return from_blob(compressed_data, byte_len, SQLITE_SUBTYPE_COMPRESSED);
+    static SqliteValueOwned from_compressed(const void* compressed_data, int byte_len, bool is_immutable = false) {
+        return from_blob(compressed_data, byte_len, SQLITE_SUBTYPE_COMPRESSED, is_immutable);
     }
 
     /**
@@ -1710,32 +1723,32 @@ public:
      * @param str The SqliteStringView representing the literal string token.
      * @return SqliteValueOwned initialized with the inferred SQL type.
      */
-    static inline SqliteValueOwned from_literal(SqliteStringView str) {
-        if (str.empty()) return SqliteValueOwned();
+    static inline SqliteValueOwned from_literal(SqliteStringView str, bool is_immutable = false) {
+        if (str.empty()) return SqliteValueOwned(nullptr, is_immutable);
 
         const char* p = str.data();
         int len = str.length();
 
         // 1. Check for NULL
         if (len == 4 && sqlite3_strnicmp(p, "null", 4) == 0) {
-            return SqliteValueOwned();
+            return SqliteValueOwned(nullptr, is_immutable);
         }
 
         // 2. Check for Booleans
         if ((len == 4 && sqlite3_strnicmp(p, "true", 4) == 0) ||
             (len == 3 && sqlite3_strnicmp(p, "yes", 3) == 0)  ||
             (len == 2 && sqlite3_strnicmp(p, "on", 2) == 0)) {
-            return SqliteValueOwned::from_bool(true);
+            return SqliteValueOwned::from_bool(true, is_immutable);
         }
         if ((len == 5 && sqlite3_strnicmp(p, "false", 5) == 0) ||
             (len == 2 && sqlite3_strnicmp(p, "no", 2) == 0)    ||
             (len == 3 && sqlite3_strnicmp(p, "off", 3) == 0)) {
-            return SqliteValueOwned::from_bool(false);
+            return SqliteValueOwned::from_bool(false, is_immutable);
         }
 
         // 3. Check for Quoted String Literal ('text' or "text")
         if (len >= 2 && ((p[0] == '\'' && p[len - 1] == '\'') || (p[0] == '"' && p[len - 1] == '"'))) {
-            return SqliteValueOwned::from_text(p + 1, len - 2);
+            return SqliteValueOwned::from_text(p + 1, len - 2, SQLITE_SUBTYPE_NONE, is_immutable);
         }
 
         // 4. Try parsing as Integer or Float
@@ -1760,19 +1773,19 @@ public:
         if (is_num && !has_dot && !has_e) {
             long long i_val = 0;
             if (sscanf(p, "%lld", &i_val) == 1) {
-                return SqliteValueOwned(i_val);
+                return SqliteValueOwned(i_val, SQLITE_SUBTYPE_NONE, SQLITE_AFF_INTEGER, is_immutable);
             }
         }
 
         if (is_num && (has_dot || has_e)) {
             double d_val = 0.0;
             if (sscanf(p, "%lf", &d_val) == 1) {
-                return SqliteValueOwned(d_val);
+                return SqliteValueOwned(d_val, SQLITE_SUBTYPE_NONE, SQLITE_AFF_REAL, is_immutable);
             }
         }
 
         // 5. Default to Text
-        return SqliteValueOwned::from_text(p, len);
+        return SqliteValueOwned::from_text(p, len, SQLITE_SUBTYPE_NONE, is_immutable);
     }
 
     /**
@@ -1782,25 +1795,36 @@ public:
      * @return SqliteValueOwned initialized with the inferred SQL type.
      */
     static inline SqliteValueOwned from_literal(const char* str, int len = -1) {
-        if (!str) return SqliteValueOwned();
+        if (!str) return SqliteValueOwned(nullptr, false);
         int l = (len < 0) ? SqliteStringUtil::sqlite_strlen(str) : len;
-        return from_literal(SqliteStringView(str, l));
+        return from_literal(SqliteStringView(str, l), false);
     }
-    
+
+    /**
+     * @brief Parses a sized C-string literal with automatic SQL type inference and immutability.
+     * @param str Pointer to UTF-8 C-string.
+     * @param len Number of bytes (or -1 to auto-calculate length).
+     * @param is_immutable Flag to mark the parsed value immutable.
+     * @return SqliteValueOwned initialized with the inferred SQL type.
+     */
+    static inline SqliteValueOwned from_literal(const char* str, int len, bool is_immutable) {
+        if (!str) return SqliteValueOwned(nullptr, is_immutable);
+        int l = (len < 0) ? SqliteStringUtil::sqlite_strlen(str) : len;
+        return from_literal(SqliteStringView(str, l), is_immutable);
+    }
+
     /** 
-     * @brief Destructor. 
+     * @brief Destructor. Automatically frees owned heap memory if active.
      */
     ~SqliteValueOwned() {
-        if (is_heap_allocated() && m_sqlite.payload.pValue) {
-            sqlite3_value_free(m_sqlite.payload.pValue);
-        }
+        free_heap();
     }
 
     /**
      * @brief Returns a canonical static SQLITE_NULL instance (16 bytes, tag = 0xA0).
      * 
      * ### 16-Byte Canonical SQL NULL Layout:
-     * - Offset 0..7:   `pValue = nullptr` (64-bit zeroed pointer)
+     * - Offset 0..7:   `pData = nullptr` (64-bit zeroed pointer)
      * - Offset 8..11:  `heap_len = 0` (32-bit zeroed length)
      * - Offset 12:     `affinity = SQLITE_AFF_NONE`
      * - Offset 13:     `reserved = 0`
@@ -1823,10 +1847,7 @@ public:
      * 
      * ### SIMD Vectorized Initialization (`null_array`):
      * Container initializers and constructors use `static_null_array()` as a pre-populated template
-     * source for single-burst `memcpy` operations:
-     * - `SqliteValueTuple<N>` copies `N * 16` bytes from this array directly into stack storage.
-     * - GCC/Clang/MSVC lower compile-time constant `memcpy(..., static_null_array(), N * 16)`
-     *   directly to 1–4 vector register instructions (`movups` / `vmovups`), executing in 1–2 CPU clock cycles (~0.3–0.6 ns).
+     * source for single-burst `memcpy` operations.
      * 
      * @return Const pointer to contiguous array of 8 canonical SQLITE_NULL values.
      */
@@ -1840,116 +1861,116 @@ public:
 
     /**
      * @brief Resets this value to SQLITE_NULL, releasing heap memory if owned.
-     * 
-     * Safely frees any dynamic `sqlite3_value*` pointer if this instance previously held
-     * a heap-allocated text/blob payload, then performs a 16-byte single-burst SIMD copy
-     * from `static_null()`.
      */
     inline void set_null() noexcept {
-        if (is_heap_allocated() && m_sqlite.payload.pValue) {
-            sqlite3_value_free(m_sqlite.payload.pValue);
-        }
-        memcpy(static_cast<void*>(this), static_cast<const void*>(&static_null()), sizeof(SqliteValueOwned));
+        if (is_immutable()) return;
+        free_heap();
+        init_null(false);
     }
 
-    // Copy constructor (safe deep clone for heap values, 0-allocation memcpy for SBO)
+    /** @brief Clears the current value, releasing heap memory, and resets to SQLITE_NULL. */
+    inline void clear() noexcept { set_null(); }
+    
+    /** @brief Resets the current value, releasing heap memory, and resets to SQLITE_NULL. */
+    inline void reset() noexcept { set_null(); }
+
+    // ========================================================================
+    // COPY & MOVE CONSTRUCTORS / OPERATORS
+    // ========================================================================
+
+    // Copy Constructor
     SqliteValueOwned(const SqliteValueOwned& other) {
-        if (!other.is_heap_allocated()) {
-            memcpy(static_cast<void*>(this), &other, sizeof(SqliteValueOwned));
-        } else {
-            if (other.m_sqlite.payload.pValue) {
-                m_sqlite.payload.pValue = sqlite3_value_dup(other.m_sqlite.payload.pValue);
-            } else {
-                m_sqlite.payload.pValue = nullptr;
-            }
-            m_sqlite.heap_len = other.m_sqlite.heap_len;
-            m_sqlite.affinity = other.m_sqlite.affinity;
-            m_sqlite.reserved = other.m_sqlite.reserved;
-            m_sqlite.subtype = other.m_sqlite.subtype;
-            set_tag(static_cast<uint8_t>(other.type()), true, 0);
-        }
+        copy_from(other);
     }
 
+    // Copy Constructor with explicit immutability override
+    SqliteValueOwned(const SqliteValueOwned& other, bool is_immutable) {
+        copy_from(other);
+        m_sqlite.subtag.set_immutable(is_immutable);
+    }
+
+    // Copy Assignment Operator
     SqliteValueOwned& operator=(const SqliteValueOwned& other) {
+        if (is_immutable()) return *this;
         if (this != &other) {
-            if (is_heap_allocated() && m_sqlite.payload.pValue) {
-                sqlite3_value_free(m_sqlite.payload.pValue);
-            }
-            if (!other.is_heap_allocated()) {
-                memcpy(static_cast<void*>(this), &other, sizeof(SqliteValueOwned));
-            } else {
-                if (other.m_sqlite.payload.pValue) {
-                    m_sqlite.payload.pValue = sqlite3_value_dup(other.m_sqlite.payload.pValue);
-                } else {
-                    m_sqlite.payload.pValue = nullptr;
-                }
-                m_sqlite.heap_len = other.m_sqlite.heap_len;
-                m_sqlite.affinity = other.m_sqlite.affinity;
-                m_sqlite.reserved = other.m_sqlite.reserved;
-                m_sqlite.subtype = other.m_sqlite.subtype;
-                set_tag(static_cast<uint8_t>(other.type()), true, 0);
-            }
+            free_heap();
+            copy_from(other);
         }
         return *this;
     }
 
-    // Allow moving
+    // Move Constructor
     SqliteValueOwned(SqliteValueOwned&& other) noexcept {
-        memcpy(static_cast<void*>(this), &other, sizeof(SqliteValueOwned));
-        other.m_sqlite.payload.pValue = nullptr;
-        other.m_sqlite.heap_len = 0;
-        other.m_sqlite.affinity = SQLITE_AFF_NONE;
-        other.m_sqlite.reserved = 0;
-        other.m_sqlite.subtype = SQLITE_SUBTYPE_NONE;
-        other.set_tag(SQLITE_NULL, false, 0);
+        move_from(sqlite_move(other));
     }
 
+    // Move Assignment Operator
     SqliteValueOwned& operator=(SqliteValueOwned&& other) noexcept {
+        if (is_immutable()) return *this;
         if (this != &other) {
-            if (is_heap_allocated() && m_sqlite.payload.pValue) {
-                sqlite3_value_free(m_sqlite.payload.pValue);
-            }
-            memcpy(static_cast<void*>(this), &other, sizeof(SqliteValueOwned));
-            other.m_sqlite.payload.pValue = nullptr;
-            other.m_sqlite.heap_len = 0;
-            other.m_sqlite.affinity = SQLITE_AFF_NONE;
-            other.m_sqlite.reserved = 0;
-            other.m_sqlite.subtype = SQLITE_SUBTYPE_NONE;
-            other.set_tag(SQLITE_NULL, false, 0);
+            free_heap();
+            move_from(sqlite_move(other));
         }
         return *this;
     }
 
-    /** @brief Replaces current value with a 64-bit integer using init_integer. */
+    /** @brief Sets value to an integer, freeing any prior heap allocation. */
+    inline void set_integer(sqlite3_int64 i, uint8_t sub = SQLITE_SUBTYPE_NONE, char aff = SQLITE_AFF_INTEGER) noexcept {
+        if (is_immutable()) return;
+        free_heap();
+        init_integer(i, sub, aff);
+    }
+
+    /** @brief Sets value to a double, freeing any prior heap allocation. */
+    inline void set_float(double d, uint8_t sub = SQLITE_SUBTYPE_NONE, char aff = SQLITE_AFF_REAL) noexcept {
+        if (is_immutable()) return;
+        free_heap();
+        init_float(d, sub, aff);
+    }
+
+    /** @brief Sets value to a string, freeing any prior heap allocation. */
+    inline void set_text(const char* text, int len = -1, uint8_t sub = SQLITE_SUBTYPE_NONE) {
+        if (is_immutable()) return;
+        free_heap();
+        init_text(text, len, sub);
+    }
+
+    /** @brief Sets value to a binary blob, freeing any prior heap allocation. */
+    inline void set_blob(const void* data, int len, uint8_t sub = SQLITE_SUBTYPE_NONE) {
+        if (is_immutable()) return;
+        free_heap();
+        init_blob(data, len, sub);
+    }
+
+    /** @brief Replaces current value with a 64-bit integer. */
     SqliteValueOwned& operator=(sqlite3_int64 i) noexcept {
-        if (is_heap_allocated() && m_sqlite.payload.pValue) {
-            sqlite3_value_free(m_sqlite.payload.pValue);
-        }
+        if (is_immutable()) return *this;
+        free_heap();
         init_integer(i);
         return *this;
     }
 
-    /** @brief Replaces current value with a signed int using init_integer. */
+    /** @brief Replaces current value with a signed int. */
     SqliteValueOwned& operator=(int i) noexcept {
         return *this = static_cast<sqlite3_int64>(i);
     }
 
-    /** @brief Replaces current value with a signed long using init_integer. */
+    /** @brief Replaces current value with a signed long. */
     SqliteValueOwned& operator=(long l) noexcept {
         return *this = static_cast<sqlite3_int64>(l);
     }
 
-    /** @brief Replaces current value with an unsigned int using init_integer. */
+    /** @brief Replaces current value with an unsigned int. */
     SqliteValueOwned& operator=(unsigned int u) noexcept {
         return *this = static_cast<sqlite3_int64>(u);
     }
 
-    /** @brief Replaces current value with an unsigned long using init_integer. */
+    /** @brief Replaces current value with an unsigned long. */
     SqliteValueOwned& operator=(unsigned long u) noexcept {
         return *this = static_cast<sqlite3_int64>(u);
     }
 
-    /** @brief Replaces current value with an unsigned long long using init_integer. */
+    /** @brief Replaces current value with an unsigned long long. */
     SqliteValueOwned& operator=(unsigned long long u) noexcept {
         return *this = static_cast<sqlite3_int64>(u);
     }
@@ -1959,11 +1980,10 @@ public:
         return *this = static_cast<sqlite3_int64>(b ? 1 : 0);
     }
 
-    /** @brief Replaces current value with a double-precision float using init_float. */
+    /** @brief Replaces current value with a double-precision float. */
     SqliteValueOwned& operator=(double d) noexcept {
-        if (is_heap_allocated() && m_sqlite.payload.pValue) {
-            sqlite3_value_free(m_sqlite.payload.pValue);
-        }
+        if (is_immutable()) return *this;
+        free_heap();
         init_float(d);
         return *this;
     }
@@ -1975,41 +1995,35 @@ public:
 
     /** @brief Replaces current value with a text view / string. */
     SqliteValueOwned& operator=(const SqliteStringView& str) {
-        return *this = SqliteValueOwned::from_text(str.data(), static_cast<int>(str.length()));
+        if (is_immutable()) return *this;
+        free_heap();
+        init_text(str.data(), str.length());
+        return *this;
     }
 
     /** @brief Replaces current value with a null-terminated C-string. */
     SqliteValueOwned& operator=(const char* str) {
+        if (is_immutable()) return *this;
         if (!str) {
             set_null();
             return *this;
         }
-        return *this = SqliteValueOwned::from_text(str, SqliteStringUtil::sqlite_strlen(str));
+        free_heap();
+        init_text(str, SqliteStringUtil::sqlite_strlen(str));
+        return *this;
     }
 
     /** @brief Replaces current value with a binary blob view. */
     SqliteValueOwned& operator=(const SqliteBlobView& blob) {
-        return *this = SqliteValueOwned::from_blob(blob.data(), static_cast<int>(blob.size()));
+        if (is_immutable()) return *this;
+        free_heap();
+        init_blob(blob.data(), blob.size());
+        return *this;
     }
 
     /** @brief Creates an owned duplicate/clone of this value. */
-    SqliteValueOwned clone() const {
-        SqliteValueOwned c;
-        if (!is_heap_allocated()) {
-            memcpy(static_cast<void*>(&c), this, sizeof(SqliteValueOwned));
-        } else {
-            if (m_sqlite.payload.pValue) {
-                c.m_sqlite.payload.pValue = sqlite3_value_dup(m_sqlite.payload.pValue);
-            } else {
-                c.m_sqlite.payload.pValue = nullptr;
-            }
-            c.m_sqlite.heap_len = m_sqlite.heap_len;
-            c.m_sqlite.affinity = m_sqlite.affinity;
-            c.m_sqlite.reserved = m_sqlite.reserved;
-            c.m_sqlite.subtype = m_sqlite.subtype;
-            c.set_tag(static_cast<uint8_t>(type()), true, 0);
-        }
-        return c;
+    inline SqliteValueOwned clone() const {
+        return SqliteValueOwned(*this);
     }
     
     /** @brief Returns the SQLite datatype (e.g. SQLITE_INTEGER). */
@@ -2017,7 +2031,7 @@ public:
         return m_sqlite.tag.type();
     }
 
-    /** @brief Checks if the value is allocated on the heap via sqlite3_value_dup. */
+    /** @brief Checks if the value is allocated on the heap. */
     inline bool is_heap_allocated() const noexcept {
         return m_sqlite.tag.is_heap();
     }
@@ -2032,19 +2046,61 @@ public:
         return m_sqlite.tag;
     }
 
+    /** @brief Returns the underlying 1-byte subtag. */
+    inline SqliteOwnedValueSubTag subtag() const noexcept {
+        return m_sqlite.subtag;
+    }
+
     /** @brief Checks if this value is an active, initialized SQLite value. */
     inline bool is_active() const noexcept {
         return m_sqlite.tag.is_active();
     }
 
-    /** @brief Returns the 8-bit SQLite subtype (zero-branch shared offset 14). */
+    /** @brief Returns the 7-bit SQLite subtype (zero-branch shared offset 14). */
     inline uint8_t subtype() const noexcept {
-        return m_sqlite.subtype;
+        return m_sqlite.subtag.subtype();
     }
 
-    /** @brief Sets the 8-bit SQLite subtype (zero-branch shared offset 14). */
+    /** @brief Sets the 7-bit SQLite subtype (zero-branch shared offset 14). */
     inline void set_subtype(uint8_t sub) noexcept {
-        m_sqlite.subtype = sub;
+        if (is_immutable()) return;
+        m_sqlite.subtag.set_subtype(sub);
+    }
+
+    /** @brief Checks if this value is marked immutable. */
+    inline bool is_immutable() const noexcept {
+        return m_sqlite.subtag.is_immutable();
+    }
+
+    /** @brief Marks this value as immutable. */
+    inline void mark_immutable() noexcept {
+        m_sqlite.subtag.mark_immutable();
+    }
+
+    /** @brief Unmarks this value as immutable (restores mutability). */
+    inline void unmark_immutable() noexcept {
+        m_sqlite.subtag.unmark_immutable();
+    }
+
+    /** @brief Sets or clears the immutability flag. */
+    inline void set_immutable(bool imm = true) noexcept {
+        m_sqlite.subtag.set_immutable(imm);
+    }
+
+    /** @brief In-place converts this value to immutable and returns reference. */
+    inline SqliteValueOwned& make_immutable() noexcept {
+        mark_immutable();
+        return *this;
+    }
+
+    /** @brief Returns an immutable clone of this value. */
+    inline SqliteValueOwned as_immutable() const {
+        return SqliteValueOwned(*this, true);
+    }
+
+    /** @brief Returns a mutable clone of this value. */
+    inline SqliteValueOwned clone_mutable() const {
+        return SqliteValueOwned(*this, false);
     }
 
     /** @brief Returns the SQLite native affinity character. */
@@ -2061,6 +2117,7 @@ public:
 
     /** @brief Sets the SQLite native affinity character. */
     inline void set_affinity(char aff) noexcept {
+        if (is_immutable()) return;
         m_sqlite.affinity = aff;
     }
 
@@ -2086,7 +2143,7 @@ public:
     /** @brief Checks if the value holds a valid state (or SBO primitive/null). */
     bool is_valid() const noexcept {
         if (is_heap_allocated()) {
-            return m_sqlite.payload.pValue != nullptr;
+            return m_sqlite.payload.pData != nullptr;
         }
         return true;
     }
@@ -2096,9 +2153,9 @@ public:
         return is_valid() && !is_null();
     }
 
-    /** @brief Internal helper to access heap-allocated sqlite3_value pointers for heterogeneous lookups. */
-    const sqlite3_value* heap_value() const noexcept {
-        return is_heap_allocated() ? m_sqlite.payload.pValue : nullptr;
+    /** @brief Internal helper to access heap-allocated pointers for heterogeneous lookups. */
+    const void* heap_value() const noexcept {
+        return is_heap_allocated() ? m_sqlite.payload.pData : nullptr;
     }
 
     /** @brief Internal helper to access SBO integer for heterogeneous lookups. */
@@ -2116,10 +2173,7 @@ public:
         if (!is_heap_allocated()) {
             return SqliteStringView(m_inline.buf, inline_length());
         }
-        const sqlite3_value* val = heap_value();
-        if (!val) return SqliteStringView(nullptr, 0);
-        const char* text = reinterpret_cast<const char*>(sqlite3_value_text(const_cast<sqlite3_value*>(val)));
-        return SqliteStringView(text, text ? m_sqlite.heap_len : 0);
+        return SqliteStringView(m_sqlite.payload.pData, m_sqlite.heap_len);
     }
 
     /** @brief Access binary data as a zero-allocation SqliteBlobView. */
@@ -2128,10 +2182,7 @@ public:
         if (!is_heap_allocated()) {
             return SqliteBlobView(m_inline.buf, inline_length());
         }
-        const sqlite3_value* val = heap_value();
-        if (!val) return SqliteBlobView(nullptr, 0);
-        const void* blob = sqlite3_value_blob(const_cast<sqlite3_value*>(val));
-        return SqliteBlobView(blob, blob ? m_sqlite.heap_len : 0);
+        return SqliteBlobView(m_sqlite.payload.pData, m_sqlite.heap_len);
     }
 
     /** 
@@ -2145,12 +2196,14 @@ public:
                 double d = m_sqlite.payload.dValue == 0.0 ? 0.0 : m_sqlite.payload.dValue;
                 return SqliteHashUtil::mix(SqliteHashUtil::DEFAULT_SEED, &d, sizeof(d));
             }
-            case SQLITE_TEXT:
-            case SQLITE_BLOB:
-                if (!is_heap_allocated()) {
-                    return SqliteHashUtil::hash(m_inline.buf, inline_length());
-                }
-                return SqliteValueUtil::hash(m_sqlite.payload.pValue);
+            case SQLITE_TEXT: {
+                SqliteStringView sv = as_text();
+                return SqliteHashUtil::hash(sv.data(), sv.length());
+            }
+            case SQLITE_BLOB: {
+                SqliteBlobView bv = as_blob();
+                return SqliteHashUtil::hash(bv.data(), bv.size());
+            }
             case SQLITE_NULL:
             default:
                 return SqliteHashUtil::DEFAULT_SEED;
@@ -2176,7 +2229,7 @@ public:
                 return as_blob() == other.as_blob();
             case SQLITE_NULL:
             default:
-                return true; // SQLITE_NULL == SQLITE_NULL
+                return true;
         }
     }
 
@@ -2225,21 +2278,14 @@ public:
             return t1 < t2;
         }
 
-        if (t1 == SQLITE_TEXT) {
-            return as_text() < other.as_text();
-        }
-        if (t1 == SQLITE_BLOB) {
-            return as_blob() < other.as_blob();
-        }
+        if (t1 == SQLITE_TEXT) return as_text() < other.as_text();
+        if (t1 == SQLITE_BLOB) return as_blob() < other.as_blob();
         return false;
     }
 
     // Heterogeneous lookups for SqliteValueView
-    /** @brief Heterogeneous equality check against a transient SqliteValueView. */
     bool operator==(const SqliteValueView& other) const;
-    /** @brief Heterogeneous inequality check against a transient SqliteValueView. */
     bool operator!=(const SqliteValueView& other) const;
-    /** @brief Heterogeneous less-than comparison against a transient SqliteValueView. */
     bool operator<(const SqliteValueView& other) const;
 };
 
@@ -2257,16 +2303,12 @@ inline bool SqliteValueOwned::operator==(const SqliteValueView& other) const {
     if (m_type == SQLITE_INTEGER) return m_sqlite.payload.iValue == sqlite3_value_int64(const_cast<sqlite3_value*>(other.get()));
     if (m_type == SQLITE_FLOAT) {
         double d2 = sqlite3_value_double(const_cast<sqlite3_value*>(other.get()));
-        if (m_sqlite.payload.dValue != m_sqlite.payload.dValue && d2 != d2) return true; // NaN == NaN
+        if (m_sqlite.payload.dValue != m_sqlite.payload.dValue && d2 != d2) return true;
         return m_sqlite.payload.dValue == d2;
     }
-    if (m_type == SQLITE_TEXT) {
-        return as_text() == other.as_text();
-    }
-    if (m_type == SQLITE_BLOB) {
-        return as_blob() == other.as_blob();
-    }
-    return true; // NULLs
+    if (m_type == SQLITE_TEXT) return as_text() == other.as_text();
+    if (m_type == SQLITE_BLOB) return as_blob() == other.as_blob();
+    return true;
 }
 
 inline bool SqliteValueOwned::operator!=(const SqliteValueView& other) const {
@@ -2291,50 +2333,36 @@ inline bool SqliteValueOwned::operator<(const SqliteValueView& other) const {
     int r2 = type_rank(o_type);
     if (r1 != r2) return r1 < r2;
 
-    if (r1 == 1) { // Numeric
+    if (r1 == 1) {
         if (m_type == SQLITE_INTEGER && o_type == SQLITE_INTEGER) {
             return m_sqlite.payload.iValue < sqlite3_value_int64(const_cast<sqlite3_value*>(other.get()));
         }
         double d1 = (m_type == SQLITE_INTEGER) ? (double)m_sqlite.payload.iValue : m_sqlite.payload.dValue;
         double d2 = (o_type == SQLITE_INTEGER) ? (double)sqlite3_value_int64(const_cast<sqlite3_value*>(other.get())) : sqlite3_value_double(const_cast<sqlite3_value*>(other.get()));
         
-        // 1. NaN sorting stability (Sort NaNs first)
         bool isnan1 = (d1 != d1);
         bool isnan2 = (d2 != d2);
         if (isnan1 && !isnan2) return true;  
         if (!isnan1 && isnan2) return false; 
         
-        // 2. Standard numeric comparison
-        if (d1 != d2) {
-            return d1 < d2;
-        }
-        
-        // 3. TIE-BREAKER: Maintain strict typing in std::map!
+        if (d1 != d2) return d1 < d2;
         return m_type < o_type;
     }
 
-    if (m_type == SQLITE_TEXT) {
-        return as_text() < other.as_text();
-    }
-    if (m_type == SQLITE_BLOB) {
-        return as_blob() < other.as_blob();
-    }
+    if (m_type == SQLITE_TEXT) return as_text() < other.as_text();
+    if (m_type == SQLITE_BLOB) return as_blob() < other.as_blob();
     return false;
 }
 
 // Complete heterogeneous lookups for SqliteValueView
-
-/** @brief Heterogeneous equality check against an owned SqliteValueOwned object. */
 inline bool SqliteValueView::operator==(const SqliteValueOwned& other) const {
     return other == *this;
 }
 
-/** @brief Heterogeneous inequality check against an owned SqliteValueOwned object. */
 inline bool SqliteValueView::operator!=(const SqliteValueOwned& other) const {
     return !(*this == other);
 }
 
-/** @brief Heterogeneous less-than comparison against an owned SqliteValueOwned object. */
 inline bool SqliteValueView::operator<(const SqliteValueOwned& other) const {
     auto type_rank = [](int t) -> int {
         switch (t) {
@@ -2354,34 +2382,24 @@ inline bool SqliteValueView::operator<(const SqliteValueOwned& other) const {
     
     if (r1 != r2) return r1 < r2;
 
-    if (r1 == 1) { // Numeric
+    if (r1 == 1) {
         if (t1 == SQLITE_INTEGER && t2 == SQLITE_INTEGER) {
             return sqlite3_value_int64(const_cast<sqlite3_value*>(get())) < other.as_int64();
         }
         double d1 = (t1 == SQLITE_INTEGER) ? (double)sqlite3_value_int64(const_cast<sqlite3_value*>(get())) : sqlite3_value_double(const_cast<sqlite3_value*>(get()));
         double d2 = (t2 == SQLITE_INTEGER) ? (double)other.as_int64() : other.as_double();
         
-        // 1. NaN sorting stability (Sort NaNs first)
         bool isnan1 = (d1 != d1);
         bool isnan2 = (d2 != d2);
         if (isnan1 && !isnan2) return true;  
         if (!isnan1 && isnan2) return false; 
         
-        // 2. Standard numeric comparison
-        if (d1 != d2) {
-            return d1 < d2;
-        }
-        
-        // 3. TIE-BREAKER: Maintain strict typing in std::map!
+        if (d1 != d2) return d1 < d2;
         return t1 < t2;
     }
 
-    if (t1 == SQLITE_TEXT) {
-        return as_text() < other.as_text();
-    }
-    if (t1 == SQLITE_BLOB) {
-        return as_blob() < other.as_blob();
-    }
+    if (t1 == SQLITE_TEXT) return as_text() < other.as_text();
+    if (t1 == SQLITE_BLOB) return as_blob() < other.as_blob();
     return false;
 }
 
@@ -2389,12 +2407,6 @@ inline bool SqliteValueView::operator<(const SqliteValueOwned& other) const {
 // HETEROGENEOUS LOOKUPS: VALUES VS STRINGS/BLOBS
 // ============================================================================
 
-/**
- * @brief Macro to generate all 6 heterogeneous comparison operators (==, !=, <)
- *        between a variant Value type and a String type in both directions.
- * 
- * Ensures strict typing: returns false immediately if the variant is not SQLITE_TEXT.
- */
 #define SQLITE_DEF_VAL_STR_OPS(VAL_TYPE, STR_TYPE, STR_DATA, STR_LEN) \
     inline bool operator==(const VAL_TYPE& val, const STR_TYPE& str) { \
         if (val.type() != SQLITE_TEXT) return false; \
@@ -2428,12 +2440,6 @@ SQLITE_DEF_VAL_STR_OPS(SqliteValueOwned, SqliteStringOwned, value, length)
 SQLITE_DEF_VAL_STR_OPS(SqliteValueView, SqliteStringView, data, length)
 SQLITE_DEF_VAL_STR_OPS(SqliteValueView, SqliteStringOwned, value, length)
 
-/**
- * @brief Macro to generate all 6 heterogeneous comparison operators (==, !=, <)
- *        between a variant Value type and a Blob type in both directions.
- * 
- * Ensures strict typing: returns false immediately if the variant is not SQLITE_BLOB.
- */
 #define SQLITE_DEF_VAL_BLOB_OPS(VAL_TYPE, BLOB_TYPE, BLOB_DATA, BLOB_LEN) \
     inline bool operator==(const VAL_TYPE& val, const BLOB_TYPE& blob) { \
         if (val.type() != SQLITE_BLOB) return false; \
@@ -2471,28 +2477,20 @@ SQLITE_DEF_VAL_BLOB_OPS(SqliteValueView, SqliteBlobOwned, data, size)
 // HETEROGENEOUS LOOKUPS: VALUES VS PRIMITIVES
 // ============================================================================
 
-/**
- * @brief Macro to generate 24 heterogeneous comparison operators (==, !=, <, >)
- *        between a variant Value type and primitive C++ types (int, int64, double) in both directions.
- * 
- * Ensures strict typing: Float(5.0) != Int(5).
- */
 #define SQLITE_DEF_VAL_PRIM_OPS(VAL_TYPE) \
-    /* Exact type and value match for INTEGER */ \
     inline bool operator==(const VAL_TYPE& val, sqlite3_int64 num) { return val.type() == SQLITE_INTEGER && val.as_int64() == num; } \
     inline bool operator==(sqlite3_int64 num, const VAL_TYPE& val) { return val == num; } \
     inline bool operator!=(const VAL_TYPE& val, sqlite3_int64 num) { return !(val == num); } \
     inline bool operator!=(sqlite3_int64 num, const VAL_TYPE& val) { return !(val == num); } \
-    /* Less-than comparison honoring type-ranks: NULL(0) < NUMERIC(1) < TEXT(2) < BLOB(3) */ \
     inline bool operator<(const VAL_TYPE& val, sqlite3_int64 num) { \
         int t = val.type(); \
         int r1 = (t == SQLITE_NULL) ? 0 : (t == SQLITE_INTEGER || t == SQLITE_FLOAT) ? 1 : (t == SQLITE_TEXT) ? 2 : 3; \
         if (r1 != 1) return r1 < 1; \
         if (t == SQLITE_INTEGER) return val.as_int64() < num; \
         double d1 = val.as_double(), d2 = static_cast<double>(num); \
-        if (d1 != d1) return true; /* NaN sorts before numbers */ \
+        if (d1 != d1) return true; \
         if (d1 != d2) return d1 < d2; \
-        return SQLITE_FLOAT < SQLITE_INTEGER; /* Tie breaker: Int sorts before Float */ \
+        return SQLITE_FLOAT < SQLITE_INTEGER; \
     } \
     inline bool operator<(sqlite3_int64 num, const VAL_TYPE& val) { \
         int t = val.type(); \
@@ -2500,9 +2498,9 @@ SQLITE_DEF_VAL_BLOB_OPS(SqliteValueView, SqliteBlobOwned, data, size)
         if (1 != r2) return 1 < r2; \
         if (t == SQLITE_INTEGER) return num < val.as_int64(); \
         double d1 = static_cast<double>(num), d2 = val.as_double(); \
-        if (d2 != d2) return false; /* NaN is less than num, so num is NOT less than NaN */ \
+        if (d2 != d2) return false; \
         if (d1 != d2) return d1 < d2; \
-        return SQLITE_INTEGER < SQLITE_FLOAT; /* Tie breaker: Int sorts before Float */ \
+        return SQLITE_INTEGER < SQLITE_FLOAT; \
     } \
     inline bool operator>(const VAL_TYPE& val, sqlite3_int64 num) { return num < val; } \
     inline bool operator>(sqlite3_int64 num, const VAL_TYPE& val) { return val < num; } \
@@ -2570,11 +2568,10 @@ SQLITE_DEF_VAL_BLOB_OPS(SqliteValueView, SqliteBlobOwned, data, size)
     inline bool operator<=(unsigned long long num, const VAL_TYPE& val) { return static_cast<sqlite3_int64>(num) <= val; } \
     inline bool operator>=(const VAL_TYPE& val, unsigned long long num) { return val >= static_cast<sqlite3_int64>(num); } \
     inline bool operator>=(unsigned long long num, const VAL_TYPE& val) { return static_cast<sqlite3_int64>(num) >= val; } \
-    /* Exact type and value match for FLOAT */ \
     inline bool operator==(const VAL_TYPE& val, double num) { \
         if (val.type() != SQLITE_FLOAT) return false; \
         double d = val.as_double(); \
-        if (d != d && num != num) return true; /* NaN == NaN */ \
+        if (d != d && num != num) return true; \
         return d == num; \
     } \
     inline bool operator==(double num, const VAL_TYPE& val) { return val == num; } \
@@ -2585,8 +2582,8 @@ SQLITE_DEF_VAL_BLOB_OPS(SqliteValueView, SqliteBlobOwned, data, size)
         int r1 = (t == SQLITE_NULL) ? 0 : (t == SQLITE_INTEGER || t == SQLITE_FLOAT) ? 1 : (t == SQLITE_TEXT) ? 2 : 3; \
         if (r1 != 1) return r1 < 1; \
         double d1 = (t == SQLITE_INTEGER) ? static_cast<double>(val.as_int64()) : val.as_double(); \
-        if (d1 != d1 && num != num) return false; /* NaN is not less than NaN */ \
-        if (d1 != d1) return true; /* NaN sorts before numbers */ \
+        if (d1 != d1 && num != num) return false; \
+        if (d1 != d1) return true; \
         if (num != num) return false; \
         if (d1 != num) return d1 < num; \
         if (t == SQLITE_INTEGER) return SQLITE_INTEGER < SQLITE_FLOAT; \
@@ -2679,7 +2676,7 @@ SQLITE_DEF_VAL_PRIM_OPS(SqliteValueView)
 #endif
 
 /**
- * @brief A transparent Hash functor for std::unordered_map.
+ * @brief Transparent Hash functor for std::unordered_map.
  * Enables zero-allocation heterogeneous lookups across Strings, Blobs, and Primitives.
  */
 struct SqliteValueHash {

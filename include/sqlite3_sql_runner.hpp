@@ -232,7 +232,7 @@ public:
             sqlite3_snprintf((int)buf_size, buf, "%.4f", val.as_double());
         } else if (val.is_text()) {
             SqliteStringView sv = val.as_text();
-            sqlite3_snprintf((int)buf_size, buf, "%s", sv.data() ? sv.data() : "");
+            sqlite3_snprintf((int)buf_size, buf, "%.*s", sv.length(), sv.data() ? sv.data() : "");
         } else if (val.is_blob()) {
             SqliteBlobView bv = val.as_blob();
             sqlite3_snprintf((int)buf_size, buf, "(BLOB %d bytes)", bv.size());

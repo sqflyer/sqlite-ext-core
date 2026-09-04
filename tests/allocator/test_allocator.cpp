@@ -421,6 +421,40 @@ void test_fast_memcpy() {
     }
 }
 
+static SQLITE_THREAD_LOCAL int g_tls_int = 0;
+static SQLITE_THREAD_LOCAL double g_tls_double = 0.0;
+static SQLITE_THREAD_LOCAL char g_tls_buf[32] = {0};
+
+void test_sqlite_thread_local() {
+    // 1. Primitive scalar TLS
+    assert(g_tls_int == 0);
+    g_tls_int = 42;
+    assert(g_tls_int == 42);
+
+    assert(g_tls_double == 0.0);
+    g_tls_double = 3.14159;
+    assert(g_tls_double > 3.14 && g_tls_double < 3.15);
+
+    // 2. POD buffer TLS (used for scratch buffers and mutable dummy sinks)
+    for (int i = 0; i < 32; ++i) {
+        g_tls_buf[i] = static_cast<char>(i + 1);
+    }
+    for (int i = 0; i < 32; ++i) {
+        assert(g_tls_buf[i] == static_cast<char>(i + 1));
+    }
+
+    // 3. Local function-scope static SQLITE_THREAD_LOCAL variable
+    static SQLITE_THREAD_LOCAL unsigned long long s_local_tls = 100ULL;
+    assert(s_local_tls == 100ULL);
+    s_local_tls += 50;
+    assert(s_local_tls == 150ULL);
+
+    // Reset for cleanliness
+    g_tls_int = 0;
+    g_tls_double = 0.0;
+    memset(g_tls_buf, 0, sizeof(g_tls_buf));
+}
+
 int main() {
     test_type_traits();
     test_single_object();
@@ -436,6 +470,7 @@ int main() {
     test_construct_n();
     test_integer_overflow_protection();
     test_fast_memcpy();
+    test_sqlite_thread_local();
     
     printf("All allocator tests passed successfully (100%% coverage)!\n");
     return 0;

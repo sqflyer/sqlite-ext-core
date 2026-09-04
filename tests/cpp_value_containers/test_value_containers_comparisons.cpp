@@ -372,23 +372,23 @@ static void test_sbo_and_blob_boundaries_comparison_matrix() {
     assert_relops_less(t_sbo12, t_sbo13);
     assert_relops_less(t_sbo11, t_sbo13);
 
-    // Heap-backed strings exceeding 13 chars created via SQLite statement
+    // Heap-backed strings exceeding 14 chars created via SQLite statement
     sqlite3* db = nullptr;
     assert(sqlite3_open(":memory:", &db) == SQLITE_OK);
     sqlite3_stmt* stmt_str = nullptr;
-    assert(sqlite3_prepare_v2(db, "SELECT '12345678901234', '123456789012345';", -1, &stmt_str, nullptr) == SQLITE_OK);
+    assert(sqlite3_prepare_v2(db, "SELECT '123456789012345', '1234567890123456';", -1, &stmt_str, nullptr) == SQLITE_OK);
     assert(sqlite3_step(stmt_str) == SQLITE_ROW);
 
-    SqliteValueOwned heap_s14(sqlite3_column_value(stmt_str, 0));
-    SqliteValueOwned heap_s15(sqlite3_column_value(stmt_str, 1));
-    assert(heap_s14.is_heap_allocated());
+    SqliteValueOwned heap_s15(sqlite3_column_value(stmt_str, 0));
+    SqliteValueOwned heap_s16(sqlite3_column_value(stmt_str, 1));
     assert(heap_s15.is_heap_allocated());
+    assert(heap_s16.is_heap_allocated());
 
-    SqliteValueTuple<1> t_heap14(heap_s14);
     SqliteValueTuple<1> t_heap15(heap_s15);
+    SqliteValueTuple<1> t_heap16(heap_s16);
 
-    assert_relops_less(t_sbo13, t_heap14);
-    assert_relops_less(t_heap14, t_heap15);
+    assert_relops_less(t_sbo13, t_heap15);
+    assert_relops_less(t_heap15, t_heap16);
     sqlite3_finalize(stmt_str);
 
     // Blobs: 10 bytes (inline SBO) vs 14 bytes (inline max SBO)
