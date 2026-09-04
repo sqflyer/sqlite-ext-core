@@ -190,3 +190,28 @@ if (stmt.step() == SQLITE_ROW) {
     });
 }
 ```
+
+---
+
+## 6. SQLite Pointer Passing & Pointer Traits
+
+All row types (`SqliteRowView`, `SqliteRowOwnedWrapper`, `SqliteRowOwned`, `SqliteRowOwnedView`) are automatically registered with `SqlitePointerTraits<T>` for zero-copy C++ pointer passing across SQLite UDF boundaries via `sqlite3_bind_pointer` and `sqlite3_result_pointer`:
+
+| Row Type | Registered Pointer Tag | Usage |
+| :--- | :--- | :--- |
+| `SqliteRowView` | `"SqliteRowView"` | Passing active statement / UDF argument row views |
+| `SqliteRowOwnedWrapper` (`SqliteRowOwned`) | `"SqliteRowOwnedWrapper"` | Passing contiguous owned row spans |
+| `SqliteRowOwnedView` | `"SqliteRowOwnedView"` | Passing universal contiguous / non-contiguous row projections |
+
+```cpp
+// 1. Wrap a row span in an owned value pointer with automatic type tag
+SqliteValueOwned row_ptr = SqliteValueOwned::from_pointer(&owned_wrapper);
+assert(row_ptr.is_pointer());
+assert(row_ptr.as_pointer<SqliteRowOwnedWrapper>() == &owned_wrapper);
+assert(row_ptr.as_pointer<SqliteRowOwned>() == &owned_wrapper);
+
+// 2. Semantic Equivalence: nullptr is SQL NULL!
+SqliteValueOwned null_row_ptr = SqliteValueOwned::from_pointer<SqliteRowView>(nullptr);
+assert(null_row_ptr.is_null());
+assert(null_row_ptr == SqliteValueOwned()); // True
+```

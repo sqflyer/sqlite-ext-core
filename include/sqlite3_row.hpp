@@ -1521,6 +1521,11 @@ public:
 static_assert(sizeof(SqliteRowOwnedWrapper) == 16,
               "SqliteRowOwnedWrapper must be exactly 16 bytes!");
 
+/**
+ * @brief Canonical alias for SqliteRowOwnedWrapper.
+ */
+typedef SqliteRowOwnedWrapper SqliteRowOwned;
+
 // Inline implementations for SqliteRowOwnedView constructors dependent on SqliteRowOwnedWrapper
 inline SqliteRowOwnedView::SqliteRowOwnedView(const SqliteRowOwnedWrapper &wrap) noexcept
     : m_array(wrap.data()), m_col_count(wrap.size()),

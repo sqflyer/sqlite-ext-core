@@ -164,3 +164,29 @@ void withSqliteRowOwned(const SqliteRowView& row, Fn&& fn) {
     }
 }
 ```
+
+---
+
+## 6. Pointer Passing ABI & Type Registration
+
+`SqliteRowView`, `SqliteRowOwnedWrapper` (`SqliteRowOwned`), and `SqliteRowOwnedView` integrate with SQLite's native typed pointer-passing subsystem via `SqlitePointerTraits<T>`:
+
+```cpp
+template <>
+struct SqlitePointerTraits<SqliteRowView> {
+    static const char* name() noexcept { return "SqliteRowView"; }
+};
+
+template <>
+struct SqlitePointerTraits<SqliteRowOwnedWrapper> {
+    static const char* name() noexcept { return "SqliteRowOwnedWrapper"; }
+};
+
+template <>
+struct SqlitePointerTraits<SqliteRowOwnedView> {
+    static const char* name() noexcept { return "SqliteRowOwnedView"; }
+};
+```
+
+This guarantees compile-time tag consistency when passing row views and spans across UDFs and aggregate steps via `sqlite3_bind_pointer` and `sqlite3_result_pointer`.
+

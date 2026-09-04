@@ -2527,4 +2527,12 @@ struct SqlitePointerTraits<SqliteRowView> {
     static const char* name() noexcept { return "SqliteRowView"; }
 };
 
+/**
+ * @brief Automatic pointer tag registration for SqliteRowOwnedView.
+ */
+template <>
+struct SqlitePointerTraits<SqliteRowOwnedView> {
+    static const char* name() noexcept { return "SqliteRowOwnedView"; }
+};
+
 #endif // SQLITE3_VALUE_CONTAINERS_HPP

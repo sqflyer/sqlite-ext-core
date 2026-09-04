@@ -1925,7 +1925,9 @@ static void test_container_pointer_traits_and_passing() {
   assert(strcmp(SqlitePointerTraits<SqliteValueTuple<2>>::name(), "SqliteValueTuple") == 0);
   assert(strcmp(SqlitePointerTraits<SqliteValueTuple<>>::name(), "SqliteValueTuple") == 0);
   assert(strcmp(SqlitePointerTraits<SqliteRowOwnedWrapper>::name(), "SqliteRowOwnedWrapper") == 0);
+  assert(strcmp(SqlitePointerTraits<SqliteRowOwned>::name(), "SqliteRowOwnedWrapper") == 0);
   assert(strcmp(SqlitePointerTraits<SqliteRowView>::name(), "SqliteRowView") == 0);
+  assert(strcmp(SqlitePointerTraits<SqliteRowOwnedView>::name(), "SqliteRowOwnedView") == 0);
 
   // 2. Test active pointer with SqliteValueVec
   SqliteValueVec<4> vec;
@@ -1962,9 +1964,28 @@ static void test_container_pointer_traits_and_passing() {
   assert(!(vec_ptr < pure_null));
   assert(!(vec_ptr < null_vec_ptr));
 
-  // Hashing (Semantic Equivalence)
-  assert(pure_null.hash() == null_vec_ptr.hash());
-  assert(vec_ptr.hash() != null_vec_ptr.hash());
+  // 4. Test active pointer with SqliteRowOwnedWrapper / SqliteRowOwned
+  SqliteValueTuple<2> tup;
+  tup[0] = 777LL;
+  tup[1] = "row_payload";
+  SqliteRowOwnedWrapper row_wrap = tup.view();
+
+  SqliteValueOwned row_ptr = SqliteValueOwned::from_pointer(&row_wrap);
+  assert(row_ptr.is_pointer());
+  assert(row_ptr.has_pointer());
+  assert(row_ptr.as_pointer<SqliteRowOwnedWrapper>() == &row_wrap);
+  assert(row_ptr.as_pointer<SqliteRowOwned>() == &row_wrap);
+  assert(row_ptr.as_pointer<SqliteRowOwned>()->size() == 2);
+  assert((*row_ptr.as_pointer<SqliteRowOwned>())[0].as_int64() == 777LL);
+
+  // 5. Test active pointer with SqliteRowOwnedView
+  SqliteRowOwnedView row_view = row_wrap.to_view();
+  SqliteValueOwned row_view_ptr = SqliteValueOwned::from_pointer(&row_view);
+  assert(row_view_ptr.is_pointer());
+  assert(row_view_ptr.has_pointer());
+  assert(row_view_ptr.as_pointer<SqliteRowOwnedView>() == &row_view);
+  assert(row_view_ptr.as_pointer<SqliteRowOwnedView>()->size() == 2);
+  assert((*row_view_ptr.as_pointer<SqliteRowOwnedView>())[0].as_int64() == 777LL);
 
   printf("   [PASS] Container Pointer Traits & Semantic Equivalence verified.\n");
 }

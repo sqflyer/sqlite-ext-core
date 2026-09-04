@@ -987,6 +987,68 @@ void test_row_owned_view_exhaustive(sqlite3 *db) {
   assert(!row_less(view_large, view_small));
 }
 
+// 11. SqliteRow Pointer Traits and Passing Verification
+static void test_row_pointer_traits_and_passing(sqlite3 *db) {
+  printf("Testing SqliteRow Pointer Traits & Passing...\n");
+
+  // 1. Verify compile-time registered tags
+  assert(strcmp(SqlitePointerTraits<SqliteRowView>::name(), "SqliteRowView") == 0);
+  assert(strcmp(SqlitePointerTraits<SqliteRowOwnedWrapper>::name(), "SqliteRowOwnedWrapper") == 0);
+  assert(strcmp(SqlitePointerTraits<SqliteRowOwned>::name(), "SqliteRowOwnedWrapper") == 0);
+  assert(strcmp(SqlitePointerTraits<SqliteRowOwnedView>::name(), "SqliteRowOwnedView") == 0);
+
+  // 2. Test active pointer passing with SqliteRowView
+  SqliteStatement stmt(db, "SELECT 42, 'row_view_str';");
+  assert(stmt.step() == SQLITE_ROW);
+  SqliteRowView row_view = stmt.row();
+
+  SqliteValueOwned row_view_val = SqliteValueOwned::from_pointer(&row_view);
+  assert(row_view_val.is_pointer());
+  assert(row_view_val.has_pointer());
+  assert(!row_view_val.is_null());
+  assert(row_view_val.as_pointer<SqliteRowView>() == &row_view);
+  assert(row_view_val.as_pointer<SqliteRowView>()->size() == 2);
+  assert((*row_view_val.as_pointer<SqliteRowView>())[0].as_int64() == 42LL);
+
+  // 3. Test active pointer passing with SqliteRowOwned / SqliteRowOwnedWrapper
+  SqliteValueTuple<2> tup;
+  tup[0] = 1234LL;
+  tup[1] = "tuple_payload";
+  SqliteRowOwnedWrapper owned_wrap = tup.view();
+
+  SqliteValueOwned owned_val = SqliteValueOwned::from_pointer(&owned_wrap);
+  assert(owned_val.is_pointer());
+  assert(owned_val.has_pointer());
+  assert(owned_val.as_pointer<SqliteRowOwnedWrapper>() == &owned_wrap);
+  assert(owned_val.as_pointer<SqliteRowOwned>() == &owned_wrap);
+  assert(owned_val.as_pointer<SqliteRowOwned>()->size() == 2);
+  assert((*owned_val.as_pointer<SqliteRowOwned>())[0].as_int64() == 1234LL);
+
+  // 4. Test active pointer passing with SqliteRowOwnedView
+  SqliteRowOwnedView owned_view = owned_wrap.to_view();
+  SqliteValueOwned owned_view_val = SqliteValueOwned::from_pointer(&owned_view);
+  assert(owned_view_val.is_pointer());
+  assert(owned_view_val.has_pointer());
+  assert(owned_view_val.as_pointer<SqliteRowOwnedView>() == &owned_view);
+  assert(owned_view_val.as_pointer<SqliteRowOwnedView>()->size() == 2);
+  assert((*owned_view_val.as_pointer<SqliteRowOwnedView>())[0].as_int64() == 1234LL);
+
+  // 5. Test null pointer passing (Semantic Equivalence: nullptr is SQL NULL)
+  SqliteValueOwned null_row_ptr = SqliteValueOwned::from_pointer<SqliteRowView>(nullptr);
+  SqliteValueOwned null_owned_ptr = SqliteValueOwned::from_pointer<SqliteRowOwned>(nullptr);
+  SqliteValueOwned null_owned_view_ptr = SqliteValueOwned::from_pointer<SqliteRowOwnedView>(nullptr);
+  SqliteValueOwned pure_null;
+
+  assert(null_row_ptr.is_pointer());
+  assert(!null_row_ptr.has_pointer());
+  assert(null_row_ptr.is_null());
+  assert(null_row_ptr == pure_null);
+  assert(null_owned_ptr == pure_null);
+  assert(null_owned_view_ptr == pure_null);
+
+  printf("   [PASS] SqliteRow Pointer Traits & Passing verified.\n");
+}
+
 int main() {
   printf("================================================================\n");
   printf("RUNNING SQLITE ROW TESTS (SqliteRowView, SqliteRowOwnedWrapper)\n");
@@ -1005,6 +1067,7 @@ int main() {
   test_row_view_transparent_relational_operators(db);
   test_row_iterators(db);
   test_row_owned_view_exhaustive(db);
+  test_row_pointer_traits_and_passing(db);
 
   sqlite3_close(db);
 
