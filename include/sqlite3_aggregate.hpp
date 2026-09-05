@@ -6,6 +6,7 @@
 #include "sqlite3_value.hpp"
 #include "sqlite3_allocator.hpp"
 #include "sqlite3_ext_state.hpp"
+#include "sqlite3_buffer.hpp"
 
 
 /**
@@ -144,6 +145,9 @@ namespace SqliteAggregateDetail {
     inline void set_sqlite_result(sqlite3_context* ctx, const SqliteBlobOwned& val) { val.result(ctx); }
     inline void set_sqlite_result(sqlite3_context* ctx, const SqliteValueView& val) { val.result(ctx); }
     inline void set_sqlite_result(sqlite3_context* ctx, const SqliteValueOwned& val) { val.result(ctx); }
+    inline void set_sqlite_result(sqlite3_context* ctx, const SqliteBuffer& val) { val.result(ctx); }
+    inline void set_sqlite_result(sqlite3_context* ctx, const SqliteString& val) { val.result(ctx); }
+    inline void set_sqlite_result(sqlite3_context* ctx, const SqliteBufferSlice& val) { val.result(ctx); }
 
     /**
      * @brief Tag dispatch priority hierarchy for unambiguous SFINAE method resolution.

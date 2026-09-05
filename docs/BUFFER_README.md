@@ -57,7 +57,36 @@ if (buffer == SqliteValueView(sqlite3_val)) {
 }
 ```
 
-## 3. `SqliteBufferSlice` (The `std::span` / `std::string_view` replacement)
+## 3. Small Buffer Optimization (SBO) & Zero-Cost C-Strings
+
+Both `SqliteBuffer` and `SqliteString` employ a **24-byte union** supporting Small Buffer Optimization (SBO):
+
+- **Inline Stack Storage (0 to 22 bytes)**:
+  Short strings, short BLOBs, identifiers, and UUIDs are stored **directly on the stack inside the 24-byte object**. Zero calls to `sqlite3_malloc64` or `sqlite3_free` are made!
+- **Heap Storage (> 22 bytes)**:
+  When data exceeds 22 bytes, the buffer seamlessly transitions to dynamic memory allocated from SQLite's memory arena with geometric capacity growth.
+- **1-Bit Discriminator (`SboTag`)**:
+  Byte 0 contains `SboTag`, where bit 0 distinguishes SBO (`is_sbo() == true`) from Heap (`is_heap() == true`), and bits 1..7 store the 7-bit length.
+- **Guaranteed Null-Termination Invariant**:
+  The byte immediately following active data (`data()[bytes()]`) is guaranteed to be `'\0'` across all states (empty, SBO, heap, clear, truncate). Calling `c_str()` is an $O(1)$, zero-copy operation that never reallocates.
+- **`reset()`**:
+  Releases any heap memory and returns the buffer back to empty SBO stack mode.
+
+```cpp
+SqliteString sbo_str("short_id"); // 8 bytes -> Inline SBO (0 heap allocations)
+assert(sbo_str.is_sbo());
+assert(sbo_str.capacity() == 22);
+
+sbo_str.append("_and_now_exceeding_22_chars"); // -> Seamlessly transitions to heap
+assert(sbo_str.is_heap());
+assert(sbo_str.capacity() >= sbo_str.length());
+
+sbo_str.reset(); // -> Releases heap, returns back to SBO mode
+assert(sbo_str.is_sbo());
+assert(sbo_str.length() == 0);
+```
+
+## 4. `SqliteBufferSlice` (The `std::span` / `std::string_view` replacement)
 
 Use `SqliteBufferSlice` when you need to inspect or compare a piece of a buffer without triggering an expensive heap allocation or deep copy.
 
@@ -72,7 +101,7 @@ assert(slice == "Hello"); // Natively compares against C-Strings!
 assert(slice < SqliteBufferSlice("World", 5));
 ```
 
-## 4. OOM Safety & Validity Checking (`-fno-exceptions`)
+## 5. OOM Safety & Validity Checking (`-fno-exceptions`)
 
 Because `sqlite-ext-core` compiles with `-fno-exceptions`, memory allocation failures inside constructors or during dynamic resizing never throw. Both `SqliteBuffer` and `SqliteString` provide explicit validity checks:
 
@@ -88,7 +117,7 @@ if (str) {
 }
 ```
 
-## 5. Fallible APIs & `SqliteResult<SqliteString>`
+## 6. Fallible APIs & `SqliteResult<SqliteString>`
 
 For environments where memory limits are strictly enforced, `sqlite3_buffer.hpp` provides fallible methods returning [`SqliteResult`](file:///c:/msys64/home/dilipvamsi/works/repos/sqlite-ext-core/include/sqlite3_allocator.hpp#L882-L994) or [`SqliteStatus`](file:///c:/msys64/home/dilipvamsi/works/repos/sqlite-ext-core/include/sqlite3_allocator.hpp#L775-L863):
 

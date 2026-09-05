@@ -21,6 +21,29 @@
 #include <string.h>
 
 // ============================================================================
+// SQLite Subtype Registry & Function Flags
+// ============================================================================
+#ifndef SQLITE_SUBTYPE_NONE
+    #define SQLITE_SUBTYPE_NONE       0     // 0x00 : Standard untagged SQL value
+    #define SQLITE_SUBTYPE_JSON       74    // 'J'  : Official SQLite JSON & JSONB (SQLite 3.45+)
+    #define SQLITE_SUBTYPE_DECIMAL    68    // 'D'  : Official SQLite decimal.c extension
+    #define SQLITE_SUBTYPE_UUID       85    // 'U'  : Standard 16-byte UUID binary/string
+    #define SQLITE_SUBTYPE_VECTOR     86    // 'V'  : AI Embedding Vector (float32/int8)
+    #define SQLITE_SUBTYPE_GEOMETRY   71    // 'G'  : Geopoly & GeoJSON spatial coordinate array
+    #define SQLITE_SUBTYPE_DATETIME   84    // 'T'  : ISO-8601 & High-precision timestamp
+    #define SQLITE_SUBTYPE_BOOL       66    // 'B'  : Explicit Boolean flag (0 or 1)
+    #define SQLITE_SUBTYPE_COMPRESSED 90    // 'Z'  : Compressed stream (Gorilla / ZSTD)
+    #define SQLITE_SUBTYPE_POINTER    112   // 'p'  : Native SQLite opaque C/C++ typed pointer
+#endif
+
+#ifndef SQLITE_SUBTYPE
+    #define SQLITE_SUBTYPE 0x00010000
+#endif
+#ifndef SQLITE_RESULT_SUBTYPE
+    #define SQLITE_RESULT_SUBTYPE 0x00100000
+#endif
+
+// ============================================================================
 // FAST MEMORY COPY MACRO
 // ============================================================================
 
@@ -1441,6 +1464,44 @@ sqlite_try_reallocate_array_zeroed(T *ptr, size_t old_count, size_t new_count) {
         "Memory reallocation failed in sqlite_try_reallocate_array_zeroed");
   }
   return SqliteResult<T *>::ok(new_ptr);
+}
+
+// ============================================================================
+// FREESTANDING MEMORY COMPARISON & STRING UTILITIES
+// ============================================================================
+
+namespace SqliteMemoryUtil {
+    /**
+     * @brief Performs a fast lexicographical memory comparison.
+     */
+    inline bool memcmp_less(const void* val1, int len1, const void* val2, int len2) {
+        int min_len = (len1 < len2) ? len1 : len2;
+        int cmp = memcmp(val1, val2, min_len);
+        if (cmp != 0) {
+            return cmp < 0;
+        }
+        return len1 < len2;
+    }
+
+    /**
+     * @brief Performs a fast lexicographical equality check.
+     */
+    inline bool memcmp_equal(const void* val1, int len1, const void* val2, int len2) {
+        if (len1 != len2) return false;
+        if (len1 == 0) return true;
+        if (val1 == val2) return true;
+        if (!val1 || !val2) return false;
+        return memcmp(val1, val2, len1) == 0;
+    }
+}
+
+namespace SqliteStringUtil {
+    /**
+     * @brief Computes the length of a null-terminated C-string with nullptr safety.
+     */
+    inline int sqlite_strlen(const char* str) {
+        return str ? static_cast<int>(strlen(str)) : 0;
+    }
 }
 
 #endif // SQLITE3_ALLOCATOR_HPP

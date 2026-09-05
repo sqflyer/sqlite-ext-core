@@ -90,8 +90,13 @@ void test_sqlite_buffer_null_safety() {
     assert(buf.is_valid());
     assert((bool)buf);
     assert(buf.bytes() == 0);
-    assert(buf.capacity() == 0);
-    assert(buf.data() == nullptr);
+    assert(buf.capacity() == 22);
+    assert(buf.data() != nullptr);
+    assert(buf.c_str() != nullptr);
+    assert(buf.c_str()[0] == '\0');
+    assert(buf.is_sbo());
+    assert(buf.is_stack());
+    assert(!buf.is_heap());
     assert(buf.hash() == SqliteHashUtil::hash(nullptr, 0));
 
     // Append 0 bytes or nullptr is safe

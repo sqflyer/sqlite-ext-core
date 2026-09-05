@@ -3,6 +3,8 @@
 
 #include "sqlite3ext.h"
 #include "sqlite3_allocator.hpp"
+#include "sqlite3_hash.hpp"
+#include "sqlite3_buffer.hpp"
 #include <cstddef>
 #include <stdint.h>
 #include <stdarg.h>
@@ -60,38 +62,6 @@
     #define SQLITE_RESULT_SUBTYPE 0x00100000
 #endif
 
-namespace SqliteMemoryUtil {
-    /**
-     * @brief Performs a fast lexicographical memory comparison.
-     * 
-     * Shared by String, Blob, and Value classes to replace manual char-by-char
-     * loops. Uses standard C memcmp for SIMD-accelerated performance.
-     */
-    inline bool memcmp_less(const void* val1, int len1, const void* val2, int len2) {
-        int min_len = (len1 < len2) ? len1 : len2;
-        int cmp = memcmp(val1, val2, min_len);
-        if (cmp != 0) {
-            return cmp < 0;
-        }
-        return len1 < len2;
-    }
-    
-    /**
-     * @brief Performs a fast lexicographical equality check.
-     * 
-     * Shared by String, Blob, and Value classes. Uses standard C memcmp 
-     * for SIMD-accelerated performance with null-safety built in.
-     */
-    inline bool memcmp_equal(const void* val1, int len1, const void* val2, int len2) {
-        if (len1 != len2) return false;
-        if (len1 == 0) return true;
-        if (val1 == val2) return true;
-        if (!val1 || !val2) return false;
-        return memcmp(val1, val2, len1) == 0;
-    }
-}
-
-#include "sqlite3_hash.hpp"
 
 /**
  * @file sqlite3_value.hpp
@@ -122,13 +92,6 @@ namespace SqliteStringUtil {
         return SqliteHashUtil::hash(val, len);
     }
 
-    /**
-     * @brief Computes the length of a null-terminated C-string. 
-     * Safely wraps standard `<string.h>` strlen with a nullptr check.
-     */
-    inline int sqlite_strlen(const char* str) {
-        return str ? static_cast<int>(strlen(str)) : 0;
-    }
     
     /**
      * @brief Checks if two character arrays are exactly equal.
@@ -190,7 +153,7 @@ public:
      * Enables zero-allocation heterogeneous map lookups like `my_map.find("hello")`.
      */
     SqliteStringView(const char* data) : m_data(data), m_size(SqliteStringUtil::sqlite_strlen(data)) {}
-    
+    SqliteStringView(const SqliteString& str) noexcept : m_data(str.c_str()), m_size(static_cast<int>(str.length())) {}
     SqliteStringView() : m_data(nullptr), m_size(0) {}
     
     /** @brief Clones the view (shallow copy). */
@@ -235,6 +198,11 @@ public:
     bool operator!=(const SqliteStringOwned& other) const;
     bool operator<(const SqliteStringOwned& other) const;
 };
+
+// Definition of SqliteString::view() declared in sqlite3_buffer.hpp
+inline SqliteStringView SqliteString::view() const noexcept {
+    return SqliteStringView(c_str(), static_cast<int>(length()));
+}
 
 /**
  * @brief Zero-dependency C++ RAII wrapper for SQLite's dynamic string builder (`sqlite3_str`).
@@ -341,6 +309,16 @@ public:
     /** @brief Clones the owned string by duplicating the dynamic string builder. */
     inline SqliteStringOwned clone() const {
         return SqliteStringOwned(*this);
+    }
+
+    /** @brief Duplicates the owned string into an independent owned copy (deep copy). */
+    inline SqliteStringOwned to_owned() const {
+        return SqliteStringOwned(*this);
+    }
+
+    /** @brief Takes the owned string, transferring ownership and leaving this object empty. */
+    inline SqliteStringOwned take() noexcept {
+        return sqlite_move(*this);
     }
 
     /** @brief Creates a zero-allocation view over this owned string. */
@@ -591,6 +569,8 @@ public:
      * @param size Length of the payload in bytes.
      */
     SqliteBlobView(const void* data, int size) : m_data(data), m_size(size) {}
+    explicit SqliteBlobView(const SqliteBuffer& buf) noexcept : m_data(buf.data()), m_size(static_cast<int>(buf.bytes())) {}
+    explicit SqliteBlobView(const SqliteBufferSlice& slice) noexcept : m_data(slice.data()), m_size(static_cast<int>(slice.bytes())) {}
     SqliteBlobView() : m_data(nullptr), m_size(0) {}
     
     /** @brief Clones the view (shallow copy). */
@@ -685,6 +665,12 @@ public:
             }
         }
     }
+
+    /** @brief Constructs an owned blob by copying from a SqliteBuffer. */
+    explicit SqliteBlobOwned(const SqliteBuffer& buf) : SqliteBlobOwned(buf.data(), static_cast<int>(buf.bytes())) {}
+
+    /** @brief Constructs an owned blob by copying from a SqliteBufferSlice. */
+    explicit SqliteBlobOwned(const SqliteBufferSlice& slice) : SqliteBlobOwned(slice.data(), static_cast<int>(slice.bytes())) {}
     
     /** @brief Destructor. Automatically frees the allocated memory. */
     ~SqliteBlobOwned() {
@@ -698,6 +684,21 @@ public:
     /** @brief Clones the owned blob via deep memory allocation. */
     inline SqliteBlobOwned clone() const {
         return SqliteBlobOwned(m_data, m_size);
+    }
+
+    /** @brief Duplicates the owned blob into an independent owned copy (deep copy). */
+    inline SqliteBlobOwned to_owned() const {
+        return clone();
+    }
+
+    /** @brief Takes the owned blob, transferring ownership and leaving this object empty. */
+    inline SqliteBlobOwned take() noexcept {
+        return sqlite_move(*this);
+    }
+
+    /** @brief Attempts to duplicate this owned blob, returning SqliteResult. */
+    inline SqliteResult<SqliteBlobOwned> try_to_owned() const {
+        return try_clone();
     }
 
     /** @brief Attempts to clone the owned blob via deep memory allocation, returning SqliteResult. */
@@ -751,6 +752,9 @@ public:
     
     /** @brief Returns the size of the owned binary payload in bytes. */
     int size() const noexcept { return m_size > 0 ? m_size : 0; }
+
+    /** @brief Checks if the owned blob has zero bytes. */
+    inline bool empty() const noexcept { return size() == 0; }
 
     /** @brief Checks if the owned blob holds a valid allocation (or is cleanly empty). */
     bool is_valid() const noexcept {
@@ -2117,6 +2121,21 @@ public:
     // STATIC FACTORY CONSTRUCTORS FOR SUBTYPES & INLINE PAYLOADS
     // ========================================================================
 
+    /** @brief Constructs a 64-bit integer SqliteValueOwned. */
+    static SqliteValueOwned from_integer(sqlite3_int64 val, uint8_t subtype = SQLITE_SUBTYPE_NONE, bool is_immutable = false) noexcept {
+        return SqliteValueOwned(val, subtype, SQLITE_AFF_INTEGER, is_immutable);
+    }
+
+    /** @brief Alias for from_integer(). */
+    static SqliteValueOwned from_int(sqlite3_int64 val, uint8_t subtype = SQLITE_SUBTYPE_NONE, bool is_immutable = false) noexcept {
+        return from_integer(val, subtype, is_immutable);
+    }
+
+    /** @brief Constructs a double-precision float SqliteValueOwned. */
+    static SqliteValueOwned from_float(double val, uint8_t subtype = SQLITE_SUBTYPE_NONE, bool is_immutable = false) noexcept {
+        return SqliteValueOwned(val, subtype, SQLITE_AFF_REAL, is_immutable);
+    }
+
     /** @brief Constructs a boolean SqliteValueOwned tagged with SQLITE_SUBTYPE_BOOL. */
     static SqliteValueOwned from_bool(bool val, bool is_immutable = false) noexcept {
         return SqliteValueOwned(val, SQLITE_SUBTYPE_BOOL, SQLITE_AFF_INTEGER, is_immutable);
@@ -2881,6 +2900,21 @@ public:
         return SqliteValueOwned(*this, false);
     }
 
+    /** @brief Duplicates the owned value into an independent owned value (deep copy). */
+    inline SqliteValueOwned to_owned() const {
+        return SqliteValueOwned(*this);
+    }
+
+    /** @brief Takes the owned value, transferring ownership and resetting this object to SQLITE_NULL. */
+    inline SqliteValueOwned take() noexcept {
+        return sqlite_move(*this);
+    }
+
+    /** @brief Attempts to duplicate this owned value into an independent owned value, returning SqliteResult. */
+    inline SqliteResult<SqliteValueOwned> try_to_owned() const {
+        return try_clone();
+    }
+
     /** @brief Returns the SQLite native affinity character. */
     inline char affinity() const noexcept {
         if (is_heap_allocated() || type() == SQLITE_INTEGER || type() == SQLITE_FLOAT) {
@@ -3368,6 +3402,38 @@ inline bool SqliteValueView::operator>=(const SqliteValueOwned& other) const noe
 // HETEROGENEOUS LOOKUPS: VALUES VS STRINGS/BLOBS
 // ============================================================================
 
+#define SQLITE_DEF_VAL_CSTR_OPS(VAL_TYPE) \
+    inline bool operator==(const VAL_TYPE& val, const char* str) { \
+        if (val.type() != SQLITE_TEXT) return false; \
+        if (!str) return false; \
+        SqliteStringView sv = val.as_text(); \
+        return SqliteStringUtil::equal(sv.data(), sv.length(), str, SqliteStringUtil::sqlite_strlen(str)); \
+    } \
+    inline bool operator==(const char* str, const VAL_TYPE& val) { return val == str; } \
+    inline bool operator!=(const VAL_TYPE& val, const char* str) { return !(val == str); } \
+    inline bool operator!=(const char* str, const VAL_TYPE& val) { return !(val == str); } \
+    inline bool operator<(const VAL_TYPE& val, const char* str) { \
+        int r1 = (val.type() == SQLITE_NULL) ? 0 : (val.type() == SQLITE_INTEGER || val.type() == SQLITE_FLOAT) ? 1 : (val.type() == SQLITE_TEXT) ? 2 : 3; \
+        if (r1 != 2) return r1 < 2; \
+        SqliteStringView sv = val.as_text(); \
+        return SqliteStringUtil::less(sv.data(), sv.length(), str, SqliteStringUtil::sqlite_strlen(str)); \
+    } \
+    inline bool operator<(const char* str, const VAL_TYPE& val) { \
+        int r2 = (val.type() == SQLITE_NULL) ? 0 : (val.type() == SQLITE_INTEGER || val.type() == SQLITE_FLOAT) ? 1 : (val.type() == SQLITE_TEXT) ? 2 : 3; \
+        if (2 != r2) return 2 < r2; \
+        SqliteStringView sv = val.as_text(); \
+        return SqliteStringUtil::less(str, SqliteStringUtil::sqlite_strlen(str), sv.data(), sv.length()); \
+    } \
+    inline bool operator>(const VAL_TYPE& val, const char* str) { return str < val; } \
+    inline bool operator>(const char* str, const VAL_TYPE& val) { return val < str; } \
+    inline bool operator<=(const VAL_TYPE& val, const char* str) { return !(str < val); } \
+    inline bool operator<=(const char* str, const VAL_TYPE& val) { return !(val < str); } \
+    inline bool operator>=(const VAL_TYPE& val, const char* str) { return !(val < str); } \
+    inline bool operator>=(const char* str, const VAL_TYPE& val) { return !(str < val); }
+
+SQLITE_DEF_VAL_CSTR_OPS(SqliteValueOwned)
+SQLITE_DEF_VAL_CSTR_OPS(SqliteValueView)
+
 #define SQLITE_DEF_VAL_STR_OPS(VAL_TYPE, STR_TYPE, STR_DATA, STR_LEN) \
     inline bool operator==(const VAL_TYPE& val, const STR_TYPE& str) { \
         if (val.type() != SQLITE_TEXT) return false; \
@@ -3433,6 +3499,55 @@ SQLITE_DEF_VAL_BLOB_OPS(SqliteValueOwned, SqliteBlobView, data, size)
 SQLITE_DEF_VAL_BLOB_OPS(SqliteValueOwned, SqliteBlobOwned, data, size)
 SQLITE_DEF_VAL_BLOB_OPS(SqliteValueView, SqliteBlobView, data, size)
 SQLITE_DEF_VAL_BLOB_OPS(SqliteValueView, SqliteBlobOwned, data, size)
+
+// Cross-comparison with SqliteString
+SQLITE_DEF_VAL_STR_OPS(SqliteValueOwned, SqliteString, data, length)
+SQLITE_DEF_VAL_STR_OPS(SqliteValueView,  SqliteString, data, length)
+
+// Cross-comparison with SqliteBuffer & SqliteBufferSlice
+SQLITE_DEF_VAL_BLOB_OPS(SqliteValueOwned, SqliteBuffer,      data, bytes)
+SQLITE_DEF_VAL_BLOB_OPS(SqliteValueView,  SqliteBuffer,      data, bytes)
+SQLITE_DEF_VAL_BLOB_OPS(SqliteValueOwned, SqliteBufferSlice, data, bytes)
+SQLITE_DEF_VAL_BLOB_OPS(SqliteValueView,  SqliteBufferSlice, data, bytes)
+
+// Cross-comparison: SqliteBlobOwned vs SqliteBuffer / SqliteBufferSlice
+inline bool operator==(const SqliteBlobOwned& lhs, const SqliteBuffer& rhs) noexcept {
+    return SqliteBlobUtil::equal(lhs.data(), lhs.size(), rhs.data(), static_cast<int>(rhs.bytes()));
+}
+inline bool operator==(const SqliteBuffer& lhs, const SqliteBlobOwned& rhs) noexcept { return rhs == lhs; }
+inline bool operator!=(const SqliteBlobOwned& lhs, const SqliteBuffer& rhs) noexcept { return !(lhs == rhs); }
+inline bool operator!=(const SqliteBuffer& lhs, const SqliteBlobOwned& rhs) noexcept { return !(lhs == rhs); }
+inline bool operator<(const SqliteBlobOwned& lhs, const SqliteBuffer& rhs) noexcept {
+    return SqliteBlobUtil::less(lhs.data(), lhs.size(), rhs.data(), static_cast<int>(rhs.bytes()));
+}
+inline bool operator<(const SqliteBuffer& lhs, const SqliteBlobOwned& rhs) noexcept {
+    return SqliteBlobUtil::less(lhs.data(), static_cast<int>(lhs.bytes()), rhs.data(), rhs.size());
+}
+inline bool operator>(const SqliteBlobOwned& lhs, const SqliteBuffer& rhs) noexcept { return rhs < lhs; }
+inline bool operator>(const SqliteBuffer& lhs, const SqliteBlobOwned& rhs) noexcept { return rhs < lhs; }
+inline bool operator<=(const SqliteBlobOwned& lhs, const SqliteBuffer& rhs) noexcept { return !(rhs < lhs); }
+inline bool operator<=(const SqliteBuffer& lhs, const SqliteBlobOwned& rhs) noexcept { return !(rhs < lhs); }
+inline bool operator>=(const SqliteBlobOwned& lhs, const SqliteBuffer& rhs) noexcept { return !(lhs < rhs); }
+inline bool operator>=(const SqliteBuffer& lhs, const SqliteBlobOwned& rhs) noexcept { return !(lhs < rhs); }
+
+inline bool operator==(const SqliteBlobOwned& lhs, const SqliteBufferSlice& rhs) noexcept {
+    return SqliteBlobUtil::equal(lhs.data(), lhs.size(), rhs.data(), static_cast<int>(rhs.bytes()));
+}
+inline bool operator==(const SqliteBufferSlice& lhs, const SqliteBlobOwned& rhs) noexcept { return rhs == lhs; }
+inline bool operator!=(const SqliteBlobOwned& lhs, const SqliteBufferSlice& rhs) noexcept { return !(lhs == rhs); }
+inline bool operator!=(const SqliteBufferSlice& lhs, const SqliteBlobOwned& rhs) noexcept { return !(lhs == rhs); }
+inline bool operator<(const SqliteBlobOwned& lhs, const SqliteBufferSlice& rhs) noexcept {
+    return SqliteBlobUtil::less(lhs.data(), lhs.size(), rhs.data(), static_cast<int>(rhs.bytes()));
+}
+inline bool operator<(const SqliteBufferSlice& lhs, const SqliteBlobOwned& rhs) noexcept {
+    return SqliteBlobUtil::less(lhs.data(), static_cast<int>(lhs.bytes()), rhs.data(), rhs.size());
+}
+inline bool operator>(const SqliteBlobOwned& lhs, const SqliteBufferSlice& rhs) noexcept { return rhs < lhs; }
+inline bool operator>(const SqliteBufferSlice& lhs, const SqliteBlobOwned& rhs) noexcept { return rhs < lhs; }
+inline bool operator<=(const SqliteBlobOwned& lhs, const SqliteBufferSlice& rhs) noexcept { return !(rhs < lhs); }
+inline bool operator<=(const SqliteBufferSlice& lhs, const SqliteBlobOwned& rhs) noexcept { return !(rhs < lhs); }
+inline bool operator>=(const SqliteBlobOwned& lhs, const SqliteBufferSlice& rhs) noexcept { return !(lhs < rhs); }
+inline bool operator>=(const SqliteBufferSlice& lhs, const SqliteBlobOwned& rhs) noexcept { return !(lhs < rhs); }
 
 // ============================================================================
 // HETEROGENEOUS LOOKUPS: VALUES VS PRIMITIVES
@@ -3606,6 +3721,9 @@ SQLITE_DEF_VAL_PRIM_OPS(SqliteValueView)
     inline size_t operator()(const SqliteStringOwned& str) const noexcept { return static_cast<size_t>(str.hash()); } \
     inline size_t operator()(const SqliteBlobView& blob) const noexcept   { return static_cast<size_t>(blob.hash()); } \
     inline size_t operator()(const SqliteBlobOwned& blob) const noexcept  { return static_cast<size_t>(blob.hash()); } \
+    inline size_t operator()(const SqliteString& str) const noexcept      { return static_cast<size_t>(str.hash()); } \
+    inline size_t operator()(const SqliteBuffer& buf) const noexcept      { return static_cast<size_t>(buf.hash()); } \
+    inline size_t operator()(const SqliteBufferSlice& slice) const noexcept { return static_cast<size_t>(slice.hash()); } \
     inline size_t operator()(const char* str) const noexcept { \
         return static_cast<size_t>(SqliteStringUtil::hash(str, SqliteStringUtil::sqlite_strlen(str))); \
     } \

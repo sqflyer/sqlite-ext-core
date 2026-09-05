@@ -830,6 +830,84 @@ void test_value_view_ergonomics(sqlite3* db) {
     assert(owned_null.is_null());
     assert(!static_cast<bool>(owned_null));
 
+    // to_owned() on SqliteValueOwned
+    SqliteValueOwned o_copy = owned_text.to_owned();
+    assert(o_copy.is_text());
+    assert(o_copy.as_text() == "hello");
+    assert(o_copy == owned_text);
+
+    SqliteValueOwned o_clone = owned_text.clone();
+    assert(o_clone == owned_text);
+
+    SqliteValueOwned o_val = SqliteValueOwned::from_integer(999).to_owned();
+    assert(o_val.is_integer());
+    assert(o_val.as_int64() == 999);
+
+    // to_owned() on SqliteStringOwned & SqliteBlobOwned
+    SqliteStringOwned s_owned("test_str");
+    SqliteStringOwned s_copy = s_owned.to_owned();
+    assert(s_copy.view() == "test_str");
+    SqliteStringOwned s_val = SqliteStringOwned("temp_str").to_owned();
+    assert(s_val.view() == "temp_str");
+
+    const uint8_t raw_bytes[] = { 0xAA, 0xBB, 0xCC };
+    SqliteBlobOwned b_owned(raw_bytes, 3);
+    SqliteBlobOwned b_copy = b_owned.to_owned();
+    assert(b_copy.size() == 3);
+    SqliteBlobOwned b_val = SqliteBlobOwned(raw_bytes, 3).to_owned();
+    assert(b_val.size() == 3);
+
+    // take() on SqliteValueOwned (SBO)
+    SqliteValueOwned o_source = SqliteValueOwned::from_text("take_me");
+    SqliteValueOwned o_taken = o_source.take();
+    assert(o_taken.is_text());
+    assert(o_taken.as_text() == "take_me");
+    assert(o_source.is_null());
+    assert(o_source.type() == SQLITE_NULL);
+    assert(!static_cast<bool>(o_source));
+    assert(!o_source.is_heap_allocated());
+
+    // take() on SqliteValueOwned (Heap buffer transfer)
+    const char* long_str = "this is a very long string exceeding the 21-byte inline SBO limit!";
+    SqliteValueOwned o_heap_src = SqliteValueOwned::from_text(long_str);
+    assert(o_heap_src.is_heap_allocated());
+    SqliteValueOwned o_heap_taken = o_heap_src.take();
+    assert(o_heap_taken.is_heap_allocated());
+    assert(o_heap_taken.as_text() == long_str);
+    assert(o_heap_src.is_null());
+    assert(!o_heap_src.is_heap_allocated());
+    assert(o_heap_src.type() == SQLITE_NULL);
+    assert(!static_cast<bool>(o_heap_src));
+
+    // take() on immutable SqliteValueOwned (preserves immutability invariant via copy)
+    SqliteValueOwned o_imm = SqliteValueOwned::from_integer(777).as_immutable();
+    assert(o_imm.is_immutable());
+    SqliteValueOwned o_imm_taken = o_imm.take();
+    assert(o_imm_taken.as_int64() == 777);
+    assert(o_imm.as_int64() == 777);
+    assert(!o_imm.is_null());
+
+    // take() on SqliteStringOwned
+    SqliteStringOwned s_src("string_take");
+    assert(s_src.is_valid());
+    SqliteStringOwned s_taken = s_src.take();
+    assert(s_taken.view() == "string_take");
+    assert(s_taken.is_valid());
+    assert(s_src.length() == 0);
+    assert(s_src.value() == nullptr);
+    assert(!s_src.is_valid());
+    assert(!static_cast<bool>(s_src));
+
+    // take() on SqliteBlobOwned
+    SqliteBlobOwned b_src(raw_bytes, 3);
+    assert(!b_src.empty());
+    SqliteBlobOwned b_taken = b_src.take();
+    assert(b_taken.size() == 3);
+    assert(!b_taken.empty());
+    assert(b_src.size() == 0);
+    assert(b_src.data() == nullptr);
+    assert(b_src.empty());
+
     sqlite3_finalize(stmt);
 }
 

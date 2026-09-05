@@ -247,6 +247,32 @@ template <> struct TupleHashHelper<1> {
 // STANDARD TUPLE & VECTOR MODIFIER SYNTHESIS MACROS
 // ============================================================================
 
+#ifndef SQLITE_DERIVE_CONTAINER_RESET_METHODS
+/**
+ * @def SQLITE_DERIVE_CONTAINER_RESET_METHODS
+ * @brief Synthesizes set_null_all(), reset_to_null(), and initialize_as_null()
+ *        for fixed and dynamic tuple and vector containers.
+ * @param DataPtr Contiguous pointer to beginning of elements.
+ * @param SizeVal Number of elements.
+ */
+#define SQLITE_DERIVE_CONTAINER_RESET_METHODS(DataPtr, SizeVal) \
+  /** @brief Resets all columns/elements in the container to SQLITE_NULL. */ \
+  inline void set_null_all() noexcept { \
+    size_t sz = static_cast<size_t>(SizeVal); \
+    for (size_t i = 0; i < sz; ++i) { \
+      (DataPtr)[i].set_null(); \
+    } \
+  } \
+  /** @brief Resets all columns/elements in the container to SQLITE_NULL. */ \
+  inline void reset_to_null() noexcept { \
+    set_null_all(); \
+  } \
+  /** @brief Initializes all columns/elements in the container to SQLITE_NULL. */ \
+  inline void initialize_as_null() noexcept { \
+    set_null_all(); \
+  }
+#endif
+
 #ifndef SQLITE_DERIVE_STD_TUPLE_MODIFIERS
 /**
  * @def SQLITE_DERIVE_STD_TUPLE_MODIFIERS
@@ -739,12 +765,7 @@ public:
   /** @brief Returns const pointer to contiguous in-situ element array. */
   inline const_pointer data() const noexcept { return m_values; }
 
-  /** @brief Resets all N columns in the tuple to SQLITE_NULL. */
-  inline void set_null_all() noexcept {
-    for (size_t i = 0; i < N; ++i) {
-      m_values[i].set_null();
-    }
-  }
+  SQLITE_DERIVE_CONTAINER_RESET_METHODS(m_values, N)
 
   // Standard Array Accessors, Iterators, and Modifiers
   SQLITE_DERIVE_STD_ARRAY_METHODS(m_values, N, fallback_null(), N)
@@ -1034,12 +1055,7 @@ public:
   /** @brief Returns const pointer to contiguous heap buffer. */
   inline const_pointer data() const noexcept { return m_data; }
 
-  /** @brief Resets all columns in the heap tuple to SQLITE_NULL. */
-  inline void set_null_all() noexcept {
-    for (uint32_t i = 0; i < m_size; ++i) {
-      m_data[i].set_null();
-    }
-  }
+  SQLITE_DERIVE_CONTAINER_RESET_METHODS(m_data, m_size)
 
   // Standard Array Accessors, Iterators, and Modifiers
   SQLITE_DERIVE_STD_ARRAY_METHODS(m_data, m_size, fallback_null(), m_size)
@@ -1367,14 +1383,7 @@ public:
    * (size <= N). */
   inline bool is_inline() const noexcept { return !is_heap(); }
 
-  /** @brief Resets all active elements in the vector to SQLITE_NULL. */
-  inline void set_null_all() noexcept {
-    int sz = size();
-    SqliteValueOwned *d = data();
-    for (int i = 0; i < sz; ++i) {
-      d[i].set_null();
-    }
-  }
+  SQLITE_DERIVE_CONTAINER_RESET_METHODS(data(), size())
 
   /**
    * @brief Contracts dynamic heap allocation back into in-situ stack array when
@@ -2038,13 +2047,6 @@ public:
   /** @brief Always true for N == 0 (resides on heap). */
   inline constexpr bool is_heap() const noexcept { return true; }
 
-  /** @brief Resets all active elements in the heap vector to SQLITE_NULL. */
-  inline void set_null_all() noexcept {
-    for (uint32_t i = 0; i < m_size; ++i) {
-      m_data[i].set_null();
-    }
-  }
-
   /**
    * @brief Dynamically resizes vector buffer via sqlite3_malloc64 /
    * sqlite3_free.
@@ -2103,6 +2105,8 @@ public:
    * subsequent insertions.
    */
   inline void clear() noexcept { resize(0); }
+
+  SQLITE_DERIVE_CONTAINER_RESET_METHODS(m_data, m_size)
 
   /**
    * @brief Returns currently allocated buffer capacity.

@@ -58,12 +58,40 @@ void test_transparent_hashing(sqlite3* db) {
     assert(eq(v_alice, str_alice));
     assert(eq(v_alice, "alice"));
 
+    // Verify SqliteString, SqliteBuffer, and SqliteBufferSlice hashing and equality
+    SqliteString s_alice("alice");
+    SqliteBuffer b_alice("alice", 5);
+    SqliteBufferSlice sl_alice("alice", 5);
+
+    assert(hasher(o_alice) == hasher(s_alice));
+    assert(hasher(o_alice) == hasher(b_alice));
+    assert(hasher(o_alice) == hasher(sl_alice));
+
+    assert(eq(o_alice, s_alice));
+    assert(eq(s_alice, o_alice));
+    assert(eq(v_alice, s_alice));
+    assert(eq(s_alice, v_alice));
+
+    // In SQLite type hierarchy: TEXT != BLOB, and TEXT < BLOB
+    assert(!eq(o_alice, b_alice));
+    assert(o_alice != b_alice);
+    assert(o_alice < b_alice);
+    assert(b_alice > o_alice);
+
+    // Matching BLOB value
+    SqliteValueOwned o_blob = SqliteValueOwned::from_blob("alice", 5);
+    assert(eq(o_blob, b_alice));
+    assert(eq(b_alice, o_blob));
+    assert(eq(o_blob, sl_alice));
+    assert(eq(sl_alice, o_blob));
+
     // 4. Heterogeneous Map Lookup with std::less<>
     std::map<SqliteValueOwned, int, std::less<>> map;
     map[SqliteValueOwned(42LL)] = 100;
     map[SqliteValueOwned::from_text("alice")] = 200;
     map[v_bob.to_owned()] = 300;
     map[SqliteValueOwned(3.14)] = 400;
+    map[SqliteValueOwned::from_blob("alice", 5)] = 500;
 
     assert(map.find(v_int) != map.end());
     assert(map.find(v_int)->second == 100);
@@ -73,6 +101,15 @@ void test_transparent_hashing(sqlite3* db) {
 
     assert(map.find(str_alice) != map.end());
     assert(map.find(str_alice)->second == 200);
+
+    assert(map.find(s_alice) != map.end());
+    assert(map.find(s_alice)->second == 200);
+
+    assert(map.find(b_alice) != map.end());
+    assert(map.find(b_alice)->second == 500);
+
+    assert(map.find(sl_alice) != map.end());
+    assert(map.find(sl_alice)->second == 500);
 
     assert(map.find("alice") != map.end());
     assert(map.find("alice")->second == 200);

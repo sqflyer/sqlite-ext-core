@@ -4,6 +4,7 @@
 #include <sqlite3.h>
 #include "sqlite3_value.hpp"
 #include "sqlite3_row.hpp"
+#include "sqlite3_buffer.hpp"
 
 /**
  * @brief Zero-dependency C++ RAII wrapper over SQLite prepared statements (`sqlite3_stmt*`).
@@ -342,6 +343,39 @@ public:
      */
     inline int bind(int col, const SqliteBlobOwned& blob) {
         return m_stmt ? blob.bind(m_stmt, col) : SQLITE_MISUSE;
+    }
+
+    /**
+     * @brief Binds a dynamic SqliteBuffer (as BLOB) to a 1-based parameter index.
+     * @param col 1-based parameter index.
+     * @param buf SqliteBuffer instance.
+     * @param dtor Memory disposal strategy callback (default SQLITE_TRANSIENT).
+     * @return SQLITE_OK on success, or error code.
+     */
+    inline int bind(int col, const SqliteBuffer& buf, void (*dtor)(void*) = SQLITE_TRANSIENT) {
+        return m_stmt ? buf.bind(m_stmt, col, dtor) : SQLITE_MISUSE;
+    }
+
+    /**
+     * @brief Binds a dynamic SqliteString (as TEXT) to a 1-based parameter index.
+     * @param col 1-based parameter index.
+     * @param str SqliteString instance.
+     * @param dtor Memory disposal strategy callback (default SQLITE_TRANSIENT).
+     * @return SQLITE_OK on success, or error code.
+     */
+    inline int bind(int col, const SqliteString& str, void (*dtor)(void*) = SQLITE_TRANSIENT) {
+        return m_stmt ? str.bind(m_stmt, col, dtor) : SQLITE_MISUSE;
+    }
+
+    /**
+     * @brief Binds a non-owning SqliteBufferSlice (as BLOB) to a 1-based parameter index.
+     * @param col 1-based parameter index.
+     * @param slice SqliteBufferSlice instance.
+     * @param dtor Memory disposal strategy callback (default SQLITE_TRANSIENT).
+     * @return SQLITE_OK on success, or error code.
+     */
+    inline int bind(int col, const SqliteBufferSlice& slice, void (*dtor)(void*) = SQLITE_TRANSIENT) {
+        return m_stmt ? slice.bind(m_stmt, col, dtor) : SQLITE_MISUSE;
     }
 
     /**
