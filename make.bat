@@ -43,6 +43,7 @@ if "%TARGET%"=="example-cpp" ( call :example_cpp & goto end )
 if "%TARGET%"=="example-c" ( call :example_c & goto end )
 if "%TARGET%"=="example-coro-c" ( call :example_coro_c & goto end )
 if "%TARGET%"=="example-coro-cpp" ( call :example_coro_cpp & goto end )
+if "%TARGET%"=="examples" ( call :examples & goto end )
 
 echo Unknown target: %TARGET%
 exit /b 1
@@ -248,6 +249,14 @@ goto :eof
 :example_coro_cpp
 echo [Running C++ Coroutine Extension Example]
 cd example-coro-cpp && call make.bat && cd ..
+goto :eof
+
+:examples
+echo [Running All Extension Examples]
+call :example_c
+call :example_coro_c
+call :example_cpp
+call :example_coro_cpp
 goto :eof
 
 :clean

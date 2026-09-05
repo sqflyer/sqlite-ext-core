@@ -172,6 +172,10 @@ public:
  */
 class SqliteVTabCursor {
 public:
+    /**
+     * @brief Virtual destructor to ensure proper cleanup of derived virtual table cursors
+     * when destroyed polymorphically via base pointer in sqlite_delete().
+     */
     virtual ~SqliteVTabCursor() = default;
 
     // Provide class-specific delete to prevent linker errors with -nostdlib++
@@ -213,6 +217,11 @@ protected:
     
 public:
     inline explicit SqliteVTable(sqlite3* db) : m_db(db) {}
+
+    /**
+     * @brief Virtual destructor to ensure proper cleanup of derived virtual tables
+     * when destroyed polymorphically via base pointer in sqlite_delete().
+     */
     virtual ~SqliteVTable() = default;
 
     // Provide class-specific delete to prevent linker errors with -nostdlib++

@@ -2263,15 +2263,7 @@ public:
   /**
    * @brief Attempts to duplicate/clone this heap vector, returning SqliteResult.
    */
-  inline SqliteResult<SqliteValueVec<0>> try_clone() const {
-    SqliteValueVec<0> copy;
-    for (int i = 0; i < size(); ++i) {
-      SqliteStatus stat = copy.try_push_back((*this)[i]);
-      if (stat.is_err())
-        return SqliteResult<SqliteValueVec<0>>::err(stat.err_code(), stat.err_message());
-    }
-    return SqliteResult<SqliteValueVec<0>>::ok(sqlite_move(copy));
-  }
+  SqliteResult<SqliteValueVec<0>> try_clone() const;
 
   /**
    * @brief In-place constructs a new element at the end of the heap vector.

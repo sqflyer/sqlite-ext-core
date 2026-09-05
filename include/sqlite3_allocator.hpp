@@ -466,7 +466,7 @@ inline void *sqlite_realloc_zeroed(void *ptr, size_t old_bytes,
  */
 template <typename T> inline void sqlite_delete(T *ptr) {
   if (ptr) {
-    ptr->T::~T();
+    ptr->~T();
     sqlite3_free(ptr);
   }
 }
@@ -482,7 +482,7 @@ template <typename T> inline void sqlite_delete(T *ptr) {
  */
 template <typename T> inline void sqlite_destroy_at(T *p) noexcept {
   if (p) {
-    p->T::~T();
+    p->~T();
   }
 }
 
@@ -935,6 +935,16 @@ template <typename T> struct SqliteResult {
    * message with default value. */
   inline SqliteResult(int code, const char *msg = nullptr) noexcept
       : val(), stat(code, msg) {}
+
+  /** @brief Converting constructor for convertible payload types (e.g. Derived* to Base*). */
+  template <typename U>
+  inline SqliteResult(const SqliteResult<U> &other) noexcept
+      : val(static_cast<T>(other.val)), stat(other.stat) {}
+
+  /** @brief Converting move constructor for convertible payload types. */
+  template <typename U>
+  inline SqliteResult(SqliteResult<U> &&other) noexcept
+      : val(static_cast<T>(sqlite_move(other.val))), stat(other.stat) {}
 
   /** @brief Returns true if the result represents success (is_ok()). */
   inline bool is_ok() const noexcept { return stat.is_ok(); }

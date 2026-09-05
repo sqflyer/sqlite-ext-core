@@ -558,6 +558,23 @@ static inline void sqlite3_coro_yield(void) {
  *
  * @param val Pointer to data to yield back to caller.
  */
+/*
+ * GCC 12+ introduces -Wdangling-pointer, which warns when the address of a local variable
+ * or temporary is assigned to an object with longer lifetime (such as thread-local
+ * g_active_coro_state->yield_value).
+ *
+ * In stackful coroutines/fibers, this assignment is completely safe:
+ * 1. The fiber's stack frame is NOT destroyed or unwound upon yielding; it is frozen in place
+ *    by swapcontext() / SwitchToFiber().
+ * 2. The resuming caller on the main stack immediately reads st->yield_value while the fiber's
+ *    stack frame remains fully valid and live.
+ * 3. We locally suppress -Wdangling-pointer here to prevent false-positive diagnostic warnings
+ *    under GCC 12+ on Linux without sacrificing safety.
+ */
+#if defined(__GNUC__) && !defined(__clang__) && (__GNUC__ >= 12)
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wdangling-pointer"
+#endif
 static inline void sqlite3_coro_yield_value(void* val) {
     sqlite3_coro_state_t* st = sqlite3_coro_active_state();
     if (st) {
@@ -565,6 +582,9 @@ static inline void sqlite3_coro_yield_value(void* val) {
     }
     sqlite3_coro_yield();
 }
+#if defined(__GNUC__) && !defined(__clang__) && (__GNUC__ >= 12)
+#pragma GCC diagnostic pop
+#endif
 
 /**
  * @brief Retrieves the last value yielded by the POSIX coroutine.

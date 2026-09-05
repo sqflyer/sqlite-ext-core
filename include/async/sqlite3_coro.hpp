@@ -309,12 +309,23 @@ public:
      */
     class YieldHandle {
     public:
-        /** @brief Yields an lvalue reference value to the consumer. */
+        /**
+         * @brief Yields an lvalue reference value to the consumer.
+         * 
+         * The yielded value's address is preserved across the stackful context switch.
+         * The fiber's stack frame is frozen in place, ensuring the reference remains valid
+         * while the consumer caller inspects the value.
+         */
         inline void operator()(const T& val) const {
             sqlite3_coro_yield_value(const_cast<void*>(static_cast<const void*>(&val)));
         }
 
-        /** @brief Yields an rvalue reference value to the consumer. */
+        /**
+         * @brief Yields an rvalue reference value to the consumer.
+         * 
+         * The temporary's address remains valid on the frozen fiber stack until the
+         * fiber is resumed and the temporary expression completes.
+         */
         inline void operator()(T&& val) const {
             sqlite3_coro_yield_value(const_cast<void*>(static_cast<const void*>(&val)));
         }

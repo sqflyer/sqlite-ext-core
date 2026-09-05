@@ -18,12 +18,12 @@
  * You must also provide a `static constexpr const char* schema()` method in your derived class.
  */
 class SqliteTvfIterator {
-protected:
-    // Protected non-virtual destructor prevents deletion via base pointer,
-    // avoiding the need for a global operator delete while silencing -Wnon-virtual-dtor
-    ~SqliteTvfIterator() = default;
-
 public:
+    /**
+     * @brief Virtual destructor to ensure proper cleanup of derived TVF iterators
+     * when destroyed polymorphically via base pointer in sqlite_delete().
+     */
+    virtual ~SqliteTvfIterator() = default;
     /**
      * @brief Computes the estimated cost of the TVF given the number of bound arguments.
      * 

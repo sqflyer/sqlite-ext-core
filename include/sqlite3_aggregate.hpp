@@ -23,10 +23,12 @@ struct SqliteAggregateMarker {};
  */
 template <typename ReturnType = void>
 class SqliteAggregateBase : public SqliteAggregateMarker {
-protected:
-    ~SqliteAggregateBase() = default;
-
 public:
+    /**
+     * @brief Virtual destructor to ensure proper cleanup of derived aggregate instances
+     * when destroyed polymorphically via base pointer in sqlite_delete().
+     */
+    virtual ~SqliteAggregateBase() = default;
     /**
      * @brief Aggregation step callback invoked for each row.
      * @param args Bounds-safe wrapper over row argument values.
@@ -69,10 +71,12 @@ public:
  */
 template <>
 class SqliteAggregateBase<void> : public SqliteAggregateMarker {
-protected:
-    ~SqliteAggregateBase() = default;
-
 public:
+    /**
+     * @brief Virtual destructor to ensure proper cleanup of derived aggregate instances
+     * when destroyed polymorphically via base pointer in sqlite_delete().
+     */
+    virtual ~SqliteAggregateBase() = default;
     /**
      * @brief Aggregation step callback invoked for each row.
      * @param args Bounds-safe wrapper over row argument values.
