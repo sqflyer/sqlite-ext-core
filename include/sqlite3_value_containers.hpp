@@ -1326,26 +1326,33 @@ public:
    * @return Number of active elements (0..N when inline, 0..m_heap.size when on
    * heap).
    */
+#if defined(_MSC_VER)
+#pragma warning(push)
+#pragma warning(disable: 4127) // conditional expression is constant
+#endif
   inline int size() const noexcept {
     if (is_heap())
       return static_cast<int>(m_heap.size);
     int sz = m_inline[0].is_active() ? 1 : 0;
-    if (N >= 2)
+    if (N > 1)
       sz += (m_inline[1].is_active() ? 1 : 0);
-    if (N >= 3)
+    if (N > 2)
       sz += (m_inline[2].is_active() ? 1 : 0);
-    if (N >= 4)
+    if (N > 3)
       sz += (m_inline[3].is_active() ? 1 : 0);
-    if (N >= 5)
+    if (N > 4)
       sz += (m_inline[4].is_active() ? 1 : 0);
-    if (N >= 6)
+    if (N > 5)
       sz += (m_inline[5].is_active() ? 1 : 0);
-    if (N >= 7)
+    if (N > 6)
       sz += (m_inline[6].is_active() ? 1 : 0);
-    if (N >= 8)
+    if (N > 7)
       sz += (m_inline[7].is_active() ? 1 : 0);
     return sz;
   }
+#if defined(_MSC_VER)
+#pragma warning(pop)
+#endif
 
   /** @brief Alias for size() returning the active element count. */
   inline int count() const noexcept { return size(); }
