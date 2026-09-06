@@ -1,14 +1,19 @@
-# Virtual Table Architecture (`sqlite3_vtab.hpp`)
+# Virtual Table Architecture (`sqlite3_vtab.hpp` & `sqlite3_vtab_arg.hpp`)
 
-The `sqlite3_module` framework in SQLite is incredibly powerful but inherently hostile to type-safe languages like C++.
+The `sqlite3_module` framework in SQLite is incredibly powerful but inherently hostile to type-safe languages like C++. This document outlines the architectural patterns, standard-layout wrappers, memory layouts, and argument parsing state machines used to build zero-overhead, type-safe SQLite Virtual Tables.
+
+> **Deep Component References**:
+> - [Virtual Table Developer Guide (`docs/VTAB_README.md`)](VTAB_README.md)
+> - [Virtual Table Argument Parser Architecture (`docs/VTAB_ARG_ARCHITECTURE.md`)](VTAB_ARG_ARCHITECTURE.md)
+> - [Virtual Table Argument Parser Developer Guide (`docs/VTAB_ARG_README.md`)](VTAB_ARG_README.md)
 
 ---
 
 ## 1. The Core Architectural Challenge
 
-A SQLite virtual table module is an array of raw function pointers (`xCreate`, `xConnect`, `xBestIndex`, `xOpen`, etc.). Every one of these functions is passed a type-erased `sqlite3_vtab*` or `sqlite3_vtab_cursor*` C struct. 
+A SQLite virtual table module is an array of raw C function pointers (`xCreate`, `xConnect`, `xBestIndex`, `xOpen`, etc.). Every one of these functions is passed a type-erased `sqlite3_vtab*` or `sqlite3_vtab_cursor*` C struct. 
 
-In pure C, developers subclass these by declaring a struct whose very first element is `sqlite3_vtab`, relying on standard-layout pointer arithmetic:
+In pure C, developers subclass these structs by embedding `sqlite3_vtab` as the first field, relying on standard-layout pointer arithmetic:
 
 ```c
 // The C way
@@ -18,13 +23,13 @@ struct MyVTab {
 };
 ```
 
-In C++, doing this with classes containing `virtual` methods breaks standard layout guarantees due to the hidden `vptr` (vtable pointer) injected by the compiler. Casting `sqlite3_vtab*` directly to a polymorphic C++ object yields **Undefined Behavior**.
+In C++, attempting to inherit or embed `sqlite3_vtab` inside a class with `virtual` methods breaks standard layout guarantees due to the hidden compiler-injected `vptr` (vtable pointer). Casting `sqlite3_vtab*` directly to a polymorphic C++ object yields **Undefined Behavior**.
 
 ---
 
 ## 2. Standard-Layout Wrapper Solution
 
-`sqlite3_vtab.hpp` circumvents this issue entirely by wrapping the C++ objects in standard-layout C-structs dynamically allocated by the module router via SQLite's allocator (`sqlite_new`):
+`sqlite3_vtab.hpp` circumvents this issue entirely by wrapping C++ class instances inside standard-layout C-structs dynamically allocated by the module router via SQLite's native allocator (`sqlite_new`):
 
 ```cpp
 template<typename VTableType, VTabOptions Options>
@@ -32,20 +37,20 @@ class SqliteVTabModule {
 private:
     struct TableWrapper {
         sqlite3_vtab base;
-        VTableType* instance;  // Safe polymorphic C++ pointer!
-        void* raw_state;       // Injected connection-level shared state!
+        VTableType*  instance;   // Safe polymorphic C++ pointer!
+        void*        raw_state;  // Injected connection-level shared state!
     };
     
     struct CursorWrapper {
         sqlite3_vtab_cursor base;
-        SqliteVTabCursor* instance; // Safe polymorphic C++ cursor pointer!
+        SqliteVTabCursor*   instance; // Safe polymorphic C++ cursor pointer!
     };
 };
 ```
 
 When SQLite invokes `xColumn(sqlite3_vtab_cursor* pCursor, sqlite3_context* ctx, int N)`:
 1. The router safely downcasts `pCursor` to `CursorWrapper*` and `pCursor->pVtab` to `TableWrapper*`.
-2. It constructs `SqliteContext(ctx, tab->raw_state)` directly on the stack.
+2. It constructs a lightweight `SqliteContext(ctx, tab->raw_state)` directly on the stack.
 3. Invokes `instance->column(sqlite_ctx, N)`.
 
 ---
@@ -92,9 +97,9 @@ When SQLite invokes `xColumn(sqlite3_vtab_cursor* pCursor, sqlite3_context* ctx,
 
 ---
 
-## 4. Compile-Time On-The-Fly Options Computation
+## 4. Compile-Time Options Computation (`VTabOptions`)
 
-The `sqlite3_module` function pointer table is generated statically at compile time from `VTabOptions`:
+The `sqlite3_module` function pointer table is generated statically at compile time using `constexpr` evaluation:
 
 ```cpp
 static constexpr bool is_writable = ((Options & VTabOptions::Writable) != VTabOptions::ReadOnly) || 
@@ -134,76 +139,15 @@ static constexpr sqlite3_module module_def = {
 
 ---
 
-## 5. Abstraction Mappings
+## 5. Unified Error Propagation Architecture (`zErrMsg` Lifecycle)
 
-- **`xBestIndex`**: Wrapped by `SqliteIndexInfo` with type-safe `constraint(i)`, `usage(i)`, `set_estimated_cost()`.
-- **`xFindFunction`**: Overloaded via `SqliteFunctionDef` without raw pointer allocations.
-- **`xUpdate`**: Dispatched with `SqliteUdfArgs` for safe parameter indexing during `INSERT`, `UPDATE`, and `DELETE`.
+SQLite virtual tables report descriptive error messages by allocating a null-terminated string via `sqlite3_mprintf` / `sqlite3_malloc` and assigning it to `pVTab->zErrMsg`.
 
----
-
-## 6. Zero Overhead Guarantees
-- **No Extra Allocations**: Only the two necessary wrapper structs (`TableWrapper` and `CursorWrapper`) are allocated using `sqlite_new` which transparently routes to `sqlite3_malloc64`.
-- **Zero VTable Overhead for Invariant Paths**: Option checks (`is_writable`, `is_findable`, etc.) are computed via `constexpr` template logic, allowing the compiler optimizer to completely dead-code strip unused callbacks at compile time.
-
----
-
-## 7. Virtual Table Argument & Composite Primary Key Parsing (`sqlite3_vtab_arg.hpp`)
-
-When SQLite creates or connects to a virtual table (`CREATE VIRTUAL TABLE tab USING module(...)`), it passes user arguments in `argv[3..argc-1]`.
-
-`sqlite3_vtab_arg.hpp` provides zero-allocation typed parsing for all argument formats:
-
-### Argument Categorization
-1. **Engine Parameters (`SqliteVTabParam`)**:
-   - `key=value` format (e.g. `capacity=1024`, `ttl=60`, `mode=strict`, `strict=true`).
-   - Typed accessors: `as_int()`, `as_long()`, `as_double()`, `as_size()`, `as_bool()`, `as_str()`.
-2. **Column Declarations (`SqliteVTabColumn`)**:
-   - Column declarations (e.g. `id INTEGER PRIMARY KEY`, `score REAL NOT NULL`, `tag HIDDEN`).
-   - Schema properties: `name()`, `definition()`, `affinity()` (Integer, Text, Blob, Real, Numeric), `flags()` (`NotNull`, `PrimaryKey`, `Unique`, `AutoIncr`, `Hidden`).
-3. **Table-Level Constraints (`SqliteVTabConstraint`)**:
-   - Multi-column / Composite Primary Keys: `PRIMARY KEY (user_id, device_id, version)`
-   - Named constraints: `CONSTRAINT pk_custom PRIMARY KEY (tenant_id, org_id)`
-   - Table-level unique, check, and foreign key constraints: `UNIQUE(a, b)`, `CHECK(expr)`, `FOREIGN KEY(a) REFERENCES t(b)`.
-   - Iteration: `for_each_column_name(fn)` parses comma-separated column names.
-
-### Unified Primary Key & Index Accessors (`SqliteVTabArgs`)
-`SqliteVTabArgs` provides zero-allocation index resolution and primary key aggregation:
-- `column_count()`: Total number of declared schema columns (excluding parameters & constraints).
-- `param_count()`: Total number of `key=value` engine parameters.
-- `constraint_count()`: Total number of table-level constraints.
-- `column_index(col_name)`: Returns 0-based column index (e.g. `"payload"` $\rightarrow 2$), or `-1` if not found.
-- `column_at(idx)`: Returns the $i$-th declared `SqliteVTabColumn`.
-- `for_each_column_indexed(fn)`: Iterates columns passing `(col, col_index)` for direct mapping to `xColumn(i)` or `aConstraint[j].iColumn`.
-- `for_each_primary_key(fn)`: Iterates all PK column names regardless of whether defined inline (`id INT PRIMARY KEY`) or via table constraint (`PRIMARY KEY (a, b)`).
-- `primary_key_count()`: Total number of primary key columns.
-- `is_composite_primary_key()`: Returns `true` if $\ge 2$ primary key columns exist.
-- `is_primary_key_column(col_name)`: Checks if a given column name is part of the primary key.
-
-### Declarative Schema Binding (`SqliteVTabParamSchema`)
-Pre-declares expected parameters with fluent type binding and case-insensitive enum validation:
-```cpp
-static const char* kModes[] = { "normal", "strict", "fast" };
-size_t capacity = 1024;
-int mode_idx = 0;
-
-SqliteVTabParamSchema schema;
-schema.bind_size("capacity", &capacity)
-      .bind_enum("mode", kModes, 3, &mode_idx);
-schema.parse(vargs);
-```
-
----
-
-## 8. Unified Error Propagation Architecture (`set_error_message` & `zErrMsg` Lifecycle)
-
-SQLite virtual tables report custom, human-readable error messages by allocating a string via `sqlite3_mprintf` / `sqlite3_malloc` and assigning it to the `zErrMsg` field of `sqlite3_vtab`.
-
-### A. Lifecycle & Memory Ownership
-1. **Invocation**: When a user-defined virtual table or cursor returns a non-zero error code (e.g. `SQLITE_ERROR`, `SQLITE_CONSTRAINT`), the router calls `set_error_message(pVTab, wrapper->instance)`.
-2. **Querying Error State**: `set_error_message` calls `instance->get_error_message()`. If non-null and `pVTab->zErrMsg` is not yet set, it allocates the string via `sqlite3_mprintf("%s", err)`.
-3. **SQLite Engine Consumption**: SQLite reads `pVTab->zErrMsg`, incorporates the message into `sqlite3_errmsg(db)`, and automatically frees `zErrMsg` using `sqlite3_free`.
-4. **Disconnect Safety**: If a table is torn down with an active `zErrMsg`, `xDisconnect` explicitly invokes `sqlite3_free(wrapper->base.zErrMsg)` to guarantee zero memory leaks under AddressSanitizer.
+### Lifecycle & Memory Ownership
+1. **Error Trigger**: When any user method (`update`, `filter`, `next`, etc.) returns a non-zero code, the router invokes `set_error_message(pVTab, instance)`.
+2. **Querying Error State**: `set_error_message` checks `instance->get_error_message()`. If non-null and `pVTab->zErrMsg` is not yet set, it calls `sqlite3_mprintf("%s", err)`.
+3. **SQLite Engine Consumption**: SQLite reads `pVTab->zErrMsg`, incorporates the text into `sqlite3_errmsg(db)`, and frees `zErrMsg` using `sqlite3_free`.
+4. **Leak-Free Disconnect**: During `xDisconnect`, any active `zErrMsg` is explicitly freed with `sqlite3_free(wrapper->base.zErrMsg)` to guarantee zero memory leaks under AddressSanitizer.
 
 ```cpp
 static inline void set_error_message(sqlite3_vtab* pVTab, VTableType* instance) {
@@ -216,15 +160,44 @@ static inline void set_error_message(sqlite3_vtab* pVTab, VTableType* instance) 
 }
 ```
 
-### B. Callback Coverage Matrix
-| Subsystem | Callback | Trigger Condition | Error Message Channel |
-| :--- | :--- | :--- | :--- |
-| **Creation & Connect** | `xCreate` / `xConnect` | `connect(args)` fails | `*pzErr = sqlite3_mprintf(...)` via `args.set_error()` |
-| **Query Planning** | `xBestIndex` | `bestIndex(info)` fails | `pVTab->zErrMsg = sqlite3_mprintf(...)` via `get_error_message()` |
-| **Cursor Operations** | `xFilter`, `xNext`, `xRowid` | `filter()`, `next()`, `rowid()` fail | `pCursor->pVtab->zErrMsg = sqlite3_mprintf(...)` |
-| **Data Mutations** | `xUpdate` | `update(args, pRowid)` fails | `pVTab->zErrMsg = sqlite3_mprintf(...)` |
-| **Transactions** | `xBegin`, `xSync`, `xCommit`, `xRollback` | `begin()`, `sync()`, `commit()`, `rollback()` fail | `pVTab->zErrMsg = sqlite3_mprintf(...)` |
-| **Savepoints** | `xSavepoint`, `xRelease`, `xRollbackTo` | `savepoint()`, `release()`, `rollbackTo()` fail | `pVTab->zErrMsg = sqlite3_mprintf(...)` |
-| **Schema Operations** | `xRename` | `rename(zNewName)` fails | `pVTab->zErrMsg = sqlite3_mprintf(...)` |
+---
 
+## 6. Virtual Table Argument & Schema Parser (`sqlite3_vtab_arg.hpp`)
 
+When SQLite executes `CREATE VIRTUAL TABLE tab USING module(...)`, it delivers arguments as raw C-strings in `argv[3..argc-1]`. `sqlite3_vtab_arg.hpp` provides zero-allocation parsing across all argument types:
+
+### A. Argument Classification & Tagged Union (`SqliteVTabArg`)
+Arguments are classified in a single pass into:
+1. **Engine Parameters (`SqliteVTabParam`)**: `key=value` pairs (`capacity=1024`, `mode='strict'`).
+2. **Column Declarations (`SqliteVTabColumn`)**: `id INTEGER PRIMARY KEY`, `score REAL NOT NULL`, `tag HIDDEN`.
+3. **Table Constraints (`SqliteVTabConstraint`)**: `PRIMARY KEY (tenant_id, device_id)`, `CONSTRAINT pk_name UNIQUE (a, b)`.
+4. **Table Options (`Kind::Option`)**: `WITHOUT ROWID`.
+
+### B. SQLite 5 Official Type Affinities
+`col.affinity()` computes the official SQLite type affinity:
+- **Integer**: Contains `"INT"`
+- **Text**: Contains `"CHAR"`, `"CLOB"`, `"TEXT"`
+- **Blob**: Contains `"BLOB"` or is untyped
+- **Real**: Contains `"REAL"`, `"FLOA"`, `"DOUB"`
+- **Numeric**: All other data types
+
+### C. Multi-PK Aggregator & Integer RowID Aliases
+- `vargs.for_each_primary_key(fn)`: Merges inline column PKs (`id INT PRIMARY KEY`) with table composite PKs (`PRIMARY KEY (a, b)`).
+- `vargs.is_composite_primary_key()`: Returns `true` if $\ge 2$ PK columns exist.
+- `vargs.rowid_alias_column_index()`: Returns the 0-based index of the `INTEGER PRIMARY KEY` rowid alias (or `-1` if table is `WITHOUT ROWID` or composite).
+
+### D. Clean DDL Synthesis (`format_declare_vtab_sql`)
+`format_declare_vtab_sql()` formats standard SQL DDL for `sqlite3_declare_vtab()`:
+- Emits all declared SQL columns (preserving user `HIDDEN` clauses).
+- Injects programmatic hidden columns for Table-Valued Functions (`extra_cols`).
+- Emits table-level constraints.
+- Appends `WITHOUT ROWID` if specified.
+- **Strips engine parameters** (`key=value`) so `sqlite3_declare_vtab` never encounters syntax errors.
+
+---
+
+## 7. Zero-Overhead & Freestanding Guarantees
+
+1. **No Runtime Allocations**: All string views (`SqliteStringView`) are non-owning stack slices pointing into SQLite's `argv` memory.
+2. **Freestanding `-nostdlib++`**: No dependency on `<string>`, `<vector>`, or `<memory>`.
+3. **Compile-Time Feature Dead-Code Elimination**: Feature checks (`is_writable`, `is_findable`, etc.) use `constexpr` logic, allowing the compiler to completely eliminate unused callback entry points.

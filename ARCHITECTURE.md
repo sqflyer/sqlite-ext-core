@@ -101,6 +101,7 @@ For a deeper dive into the specific mechanics and C++ paradigms used in individu
 - [**Table-Valued Functions (TVF)**](docs/TVF_ARCHITECTURE.md): Statically generated `sqlite3_module` structs mapping to strictly-typed C++ classes.
 - [**Coroutine Table-Valued Functions (TVF)**](docs/TVF_CORO_ARCHITECTURE.md): Zero-boilerplate single generator functions using Stackful Fibers or Stackless C++20 `co_yield` with automatic column multiplexing.
 - [**Virtual Tables (VTAB)**](docs/VTAB_ARCHITECTURE.md): Polymorphic standard-layout routing, transactions, savepoints, and direct context state injection.
+- [**Virtual Table Argument Parser & DDL Synthesizer (`sqlite3_vtab_arg.hpp`)**](docs/VTAB_ARG_ARCHITECTURE.md): Zero-allocation argument classification (`SqliteVTabArg`), 5 official SQLite type affinities, column constraint flags, composite PK aggregators, rowid alias detection, and clean DDL synthesis for `sqlite3_declare_vtab()`.
 - [**Unified Extensibility (`SqliteExt` / `sqlite3_ext.h`)**](include/sqlite3_ext.hpp): Symmetrical registration facade combining UDFs, Aggregates, TVFs, and Virtual Tables.
 - [**C++ Extension Tutorial**](example-cpp/README.md): Turnkey C++ example showcasing compilation, testing, and multi-language loading.
 - [**Pure C Extension Tutorial**](example-c/README.md): Turnkey Pure C (C99/C11) example demonstrating state management and UDF registration.
@@ -157,6 +158,7 @@ To enforce complete standard library independence while providing modern C++ erg
 ## 9. Modular Test Suite Organization
 
 The test framework is strictly modularized by domain and isolation level:
+- **`tests/cpp_vtab/`**: Virtual table routing (`test_vtab.cpp`), multi-connection state isolation (`test_vtab_state.cpp`), and zero-allocation argument parsing, schema validation, and multi-PK aggregation (`test_vtab_arg.cpp`).
 - **`tests/cpp_value/`**: Scalar and polymorphic value types (`SqliteValueOwned`, `SqliteValueView`, `SqliteStringView`, `SqliteBlobView`), SBO heap transitions, subtype tagging, and scalar operator overloads.
 - **`tests/cpp_row/`**: Universal row wrappers (`SqliteRowView`, `SqliteRowOwnedWrapper`), multi-column row relational comparisons, and scope-guarded stack execution (`withSqliteRowOwned`).
 - **`tests/cpp_value_containers/`**: Dedicated container verification split into core mechanics (`test_value_containers.cpp`), cross-container relational matrix (`test_value_containers_comparisons.cpp`), and C++14 STL container integration (`test_value_containers_std.cpp`).

@@ -303,6 +303,24 @@ An object-oriented, zero-overhead routing framework for building advanced SQLite
 - [Virtual Tables README](docs/VTAB_README.md)
 - [Virtual Tables Architecture](docs/VTAB_ARCHITECTURE.md)
 
+### 15.5. Virtual Table Argument Parser & DDL Synthesizer (`sqlite3_vtab_arg.hpp`)
+A zero-allocation, high-performance C++17 argument parser, schema inspector, validator, and SQL DDL synthesizer for SQLite `CREATE VIRTUAL TABLE` statements.
+
+#### Key Features:
+- **100% Zero Heap Allocations**: Non-owning stack slices (`SqliteStringView`) reference SQLite-owned `argv` buffers directly without dynamic allocation.
+- **Freestanding & `-nostdlib++`**: 100% header-only implementation with zero runtime C++ standard library dependencies.
+- **Argument Tagged Union (`SqliteVTabArg`)**: Single-pass classification of `argv[3..argc-1]` into Parameters (`SqliteVTabParam`), Column Declarations (`SqliteVTabColumn`), Table Constraints (`SqliteVTabConstraint`), or Options (`WITHOUT ROWID`).
+- **Official SQLite Type Affinities**: Implements the official 5-rule SQLite type affinity determination (`Integer`, `Text`, `Blob`, `Real`, `Numeric`).
+- **Column Flags & Modifiers**: Parses inline constraints (`NOT NULL`, `PRIMARY KEY`, `UNIQUE`, `AUTOINCREMENT`, `HIDDEN`, `DEFAULT`, `COLLATE`).
+- **Generated Columns**: Recognizes `GENERATED ALWAYS AS (expr) STORED/VIRTUAL` and shorthand `AS (expr)` definitions.
+- **Multi-PK Aggregator & RowID Aliases**: Aggregates inline column primary keys with table-level composite constraints (`PRIMARY KEY (a, b)`), and detects 64-bit integer rowid aliases (`INTEGER PRIMARY KEY`).
+- **Declarative Schema Binding (`SqliteVTabParamSchema`)**: Fluent bounded builder (`MAX_PARAMS = 16`) providing single-pass validation, type coercion, enum string mapping, and unknown key error detection.
+- **Clean DDL Synthesis (`format_declare_vtab_sql`)**: Automatically formats valid `CREATE TABLE ...` DDL for `sqlite3_declare_vtab()`, stripping engine parameters and injecting programmatic Table-Valued Function (TVF) hidden columns.
+
+#### Documentation:
+- [Virtual Table Argument Parser README](docs/VTAB_ARG_README.md)
+- [Virtual Table Argument Parser Architecture](docs/VTAB_ARG_ARCHITECTURE.md)
+
 ### 16. Extension Creation Macros (`sqlite3_ext_creator.h` / `sqlite3_ext_creator.hpp`)
 Zero-boilerplate entrypoint macros and dynamic symbol exports for creating native loadable SQLite extensions in Pure C (C99/C11) and modern C++11.
 
