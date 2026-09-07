@@ -734,10 +734,11 @@ static void test_dispatch_framework() {
       });
       if (c >= 1 && c <= 8) {
         assert(observed_c == static_cast<size_t>(c));
-        assert(observed_k == (k >= 1 && k <= c ? static_cast<size_t>(k) : 0));
+        // k in 1..c yields k; k > c or k == 0 clamps to c (ColsN)
+        assert(observed_k == (k >= 1 && k <= c ? static_cast<size_t>(k) : static_cast<size_t>(c)));
       } else {
         assert(observed_c == 0);
-        assert(observed_k == 0);
+        assert(observed_k == (k >= 1 && k <= 8 ? static_cast<size_t>(k) : 0));
       }
     }
   }
@@ -808,10 +809,10 @@ static void test_dispatch_framework() {
       assert(t_row->get_tag() == k * 1000 + c);
       if (c >= 1 && c <= 8) {
         assert(t_row->get_cols_n() == static_cast<size_t>(c));
-        assert(t_row->get_key_n() == (k >= 1 && k <= c ? static_cast<size_t>(k) : 0));
+        assert(t_row->get_key_n() == (k >= 1 && k <= c ? static_cast<size_t>(k) : static_cast<size_t>(c)));
       } else {
         assert(t_row->get_cols_n() == 0);
-        assert(t_row->get_key_n() == 0);
+        assert(t_row->get_key_n() == (k >= 1 && k <= 8 ? static_cast<size_t>(k) : 0));
       }
       sqlite_delete(t_row);
     }

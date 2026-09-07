@@ -2463,14 +2463,14 @@ static_assert(sizeof(SqliteValueVec<8>) == 192,
     }
 
 // ============================================================================
-// PART 5: 2D Generic Compile-Time Matrix Dispatcher (8x8 = 64 Matrix Combinations)
+// PART 5: 2D Generic Compile-Time Matrix Dispatcher (9x9 = 81 Matrix Combinations: N in 0..8)
 // ============================================================================
 
 /**
  * @def SQLITE_DISPATCH_2D_8X8
- * @brief Dispatches runtime count_a (1..8) and count_b (1..8) to compile-time 
- *        constexpr size_t 'CntA' and 'CntB' variables inside the provided block.
- *        Counts outside [1..8] dispatch to CntA = 0 / CntB = 0 (direct dynamic heap types).
+ * @brief Dispatches runtime count_a (0..8) and count_b (0..8) to compile-time 
+ *        constexpr size_t 'CntA' and 'CntB' variables across 9x9 = 81 matrix combinations.
+ *        Counts 1..8 map to constexpr 1..8, while 0 and >8 map to CntA = 0 / CntB = 0 (direct dynamic heap types).
  * 
  * Works with ANY container, template types, or custom factory logic.
  * 
@@ -2519,33 +2519,35 @@ static_assert(sizeof(SqliteValueVec<8>) == 192,
  *        and 'ColsN' with lower-triangular bound pruning (KeyN <= ColsN).
  *
  * In relational table rows, the Primary Key column count cannot exceed the total declared
- * columns (KeyN <= ColsN). Constraining the 8x8 matrix to lower-triangular valid pairs
- * eliminates 28 impossible template instantiations (a 44% reduction in generated code).
+ * columns (KeyN <= ColsN). For stack columns (ColsN in 1..8), KeyN is constrained to 1..ColsN (36 pairs).
+ * KeyN = 0 (dynamic heap key) is only present for dynamic heap tables (ColsN = 0, 9 pairs).
+ * Constraining the 9x9 matrix to valid pairs eliminates 36 impossible template instantiations (44.4% reduction).
  *
- * Matrix breakdown (KeyN in 1..ColsN):
- *   ColsN = 1 -> KeyN in {1}
- *   ColsN = 2 -> KeyN in {1, 2}
- *   ColsN = 3 -> KeyN in {1, 2, 3}
- *   ColsN = 4 -> KeyN in {1, 2, 3, 4}
- *   ColsN = 5 -> KeyN in {1, 2, 3, 4, 5}
- *   ColsN = 6 -> KeyN in {1, 2, 3, 4, 5, 6}
- *   ColsN = 7 -> KeyN in {1, 2, 3, 4, 5, 6, 7}
- *   ColsN = 8 -> KeyN in {1, 2, 3, 4, 5, 6, 7, 8}
- *   Total valid combinations = 36 (vs 64 in full 8x8 matrix).
+ * Matrix breakdown:
+ *   ColsN = 1 -> KeyN in {1} (1 pair)
+ *   ColsN = 2 -> KeyN in {1, 2} (2 pairs)
+ *   ColsN = 3 -> KeyN in {1, 2, 3} (3 pairs)
+ *   ColsN = 4 -> KeyN in {1, 2, 3, 4} (4 pairs)
+ *   ColsN = 5 -> KeyN in {1, 2, 3, 4, 5} (5 pairs)
+ *   ColsN = 6 -> KeyN in {1, 2, 3, 4, 5, 6} (6 pairs)
+ *   ColsN = 7 -> KeyN in {1, 2, 3, 4, 5, 6, 7} (7 pairs)
+ *   ColsN = 8 -> KeyN in {1, 2, 3, 4, 5, 6, 7, 8} (8 pairs)
+ *   ColsN = 0 -> KeyN in {1, 2, 3, 4, 5, 6, 7, 8, 0} (9 pairs)
+ *   Total valid combinations = 1 + 2 + 3 + 4 + 5 + 6 + 7 + 8 + 9 = 45 (vs 81 in full 9x9 matrix).
  */
 #define SQLITE_DISPATCH_ROW_KEY_COLS_8X8(KeyN, ColsN, key_count, col_count, ...) \
     switch (col_count) { \
         case 1: { constexpr size_t ColsN = 1; \
             switch (key_count) { \
                 case 1: { constexpr size_t KeyN = 1; __VA_ARGS__; } break; \
-                default: { constexpr size_t KeyN = 0; __VA_ARGS__; } break; \
+                default: { constexpr size_t KeyN = ColsN; __VA_ARGS__; } break; \
             } \
         } break; \
         case 2: { constexpr size_t ColsN = 2; \
             switch (key_count) { \
                 case 1: { constexpr size_t KeyN = 1; __VA_ARGS__; } break; \
                 case 2: { constexpr size_t KeyN = 2; __VA_ARGS__; } break; \
-                default: { constexpr size_t KeyN = 0; __VA_ARGS__; } break; \
+                default: { constexpr size_t KeyN = ColsN; __VA_ARGS__; } break; \
             } \
         } break; \
         case 3: { constexpr size_t ColsN = 3; \
@@ -2553,7 +2555,7 @@ static_assert(sizeof(SqliteValueVec<8>) == 192,
                 case 1: { constexpr size_t KeyN = 1; __VA_ARGS__; } break; \
                 case 2: { constexpr size_t KeyN = 2; __VA_ARGS__; } break; \
                 case 3: { constexpr size_t KeyN = 3; __VA_ARGS__; } break; \
-                default: { constexpr size_t KeyN = 0; __VA_ARGS__; } break; \
+                default: { constexpr size_t KeyN = ColsN; __VA_ARGS__; } break; \
             } \
         } break; \
         case 4: { constexpr size_t ColsN = 4; \
@@ -2562,7 +2564,7 @@ static_assert(sizeof(SqliteValueVec<8>) == 192,
                 case 2: { constexpr size_t KeyN = 2; __VA_ARGS__; } break; \
                 case 3: { constexpr size_t KeyN = 3; __VA_ARGS__; } break; \
                 case 4: { constexpr size_t KeyN = 4; __VA_ARGS__; } break; \
-                default: { constexpr size_t KeyN = 0; __VA_ARGS__; } break; \
+                default: { constexpr size_t KeyN = ColsN; __VA_ARGS__; } break; \
             } \
         } break; \
         case 5: { constexpr size_t ColsN = 5; \
@@ -2572,7 +2574,7 @@ static_assert(sizeof(SqliteValueVec<8>) == 192,
                 case 3: { constexpr size_t KeyN = 3; __VA_ARGS__; } break; \
                 case 4: { constexpr size_t KeyN = 4; __VA_ARGS__; } break; \
                 case 5: { constexpr size_t KeyN = 5; __VA_ARGS__; } break; \
-                default: { constexpr size_t KeyN = 0; __VA_ARGS__; } break; \
+                default: { constexpr size_t KeyN = ColsN; __VA_ARGS__; } break; \
             } \
         } break; \
         case 6: { constexpr size_t ColsN = 6; \
@@ -2583,7 +2585,7 @@ static_assert(sizeof(SqliteValueVec<8>) == 192,
                 case 4: { constexpr size_t KeyN = 4; __VA_ARGS__; } break; \
                 case 5: { constexpr size_t KeyN = 5; __VA_ARGS__; } break; \
                 case 6: { constexpr size_t KeyN = 6; __VA_ARGS__; } break; \
-                default: { constexpr size_t KeyN = 0; __VA_ARGS__; } break; \
+                default: { constexpr size_t KeyN = ColsN; __VA_ARGS__; } break; \
             } \
         } break; \
         case 7: { constexpr size_t ColsN = 7; \
@@ -2595,7 +2597,7 @@ static_assert(sizeof(SqliteValueVec<8>) == 192,
                 case 5: { constexpr size_t KeyN = 5; __VA_ARGS__; } break; \
                 case 6: { constexpr size_t KeyN = 6; __VA_ARGS__; } break; \
                 case 7: { constexpr size_t KeyN = 7; __VA_ARGS__; } break; \
-                default: { constexpr size_t KeyN = 0; __VA_ARGS__; } break; \
+                default: { constexpr size_t KeyN = ColsN; __VA_ARGS__; } break; \
             } \
         } break; \
         case 8: { constexpr size_t ColsN = 8; \
@@ -2608,10 +2610,22 @@ static_assert(sizeof(SqliteValueVec<8>) == 192,
                 case 6: { constexpr size_t KeyN = 6; __VA_ARGS__; } break; \
                 case 7: { constexpr size_t KeyN = 7; __VA_ARGS__; } break; \
                 case 8: { constexpr size_t KeyN = 8; __VA_ARGS__; } break; \
+                default: { constexpr size_t KeyN = ColsN; __VA_ARGS__; } break; \
+            } \
+        } break; \
+        default: { constexpr size_t ColsN = 0; \
+            switch (key_count) { \
+                case 1: { constexpr size_t KeyN = 1; __VA_ARGS__; } break; \
+                case 2: { constexpr size_t KeyN = 2; __VA_ARGS__; } break; \
+                case 3: { constexpr size_t KeyN = 3; __VA_ARGS__; } break; \
+                case 4: { constexpr size_t KeyN = 4; __VA_ARGS__; } break; \
+                case 5: { constexpr size_t KeyN = 5; __VA_ARGS__; } break; \
+                case 6: { constexpr size_t KeyN = 6; __VA_ARGS__; } break; \
+                case 7: { constexpr size_t KeyN = 7; __VA_ARGS__; } break; \
+                case 8: { constexpr size_t KeyN = 8; __VA_ARGS__; } break; \
                 default: { constexpr size_t KeyN = 0; __VA_ARGS__; } break; \
             } \
         } break; \
-        default: { constexpr size_t ColsN = 0; constexpr size_t KeyN = 0; __VA_ARGS__; } break; \
     }
 
 /**

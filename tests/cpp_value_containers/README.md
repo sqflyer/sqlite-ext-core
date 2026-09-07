@@ -33,8 +33,8 @@ An exhaustive test suite verifying the **dual value container templates** (`Sqli
    - Verifies complete branch coverage (negative sizes, 0..8 stack branches, 9..64 heap allocations) and return forwarding.
 6. **SQLite SQL Binding & Row Reflection**:
    - Verifies binding containers directly to prepared statements (`bind_row`) and reading query result sets.
-7. **Generic $8 \times 8$ Compile-Time Matrix Dispatch & Triangular Bound Pruning**:
-   - Tests `SQLITE_DISPATCH_1D_8`, `SQLITE_DISPATCH_2D_8X8`, `SQLITE_DISPATCH_ROW_KEY_COLS_8X8`, `SQLITE_DISPATCH_VALID_2D` compile-time pruning (36 valid pairs vs 64), and `SQLITE_MAKE_ROW_KEY_COLS_STORAGE_8X8` / `SQLITE_MAKE_DEFAULT_STORAGE_8X8` single-line container factories.
+7. **Generic $9 \times 9 = 81$ Compile-Time Matrix Dispatch & Triangular Bound Pruning**:
+   - Tests `SQLITE_DISPATCH_1D_8`, `SQLITE_DISPATCH_2D_8X8` ($9 \times 9 = 81$ combinations), `SQLITE_DISPATCH_ROW_KEY_COLS_8X8` (45 valid lower-triangular combinations), `SQLITE_DISPATCH_VALID_2D` compile-time pruning, and `SQLITE_MAKE_ROW_KEY_COLS_STORAGE_8X8` / `SQLITE_MAKE_DEFAULT_STORAGE_8X8` single-line container factories.
 8. **Static Null Template & Single-Burst SIMD Initialization**:
    - Tests zero-cost null initialization using static SIMD memory blocks.
 9. **Generic Array, Initializer List & Variadic Heterogeneous Constructors**:

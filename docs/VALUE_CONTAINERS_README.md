@@ -90,12 +90,12 @@ withSqliteRowOwned(num_cols, [&](SqliteRowOwnedWrapper row) {
 });
 ```
 
-### D. Generic $8 \times 8$ Compile-Time Dispatch & Scope Macros
+### D. Generic $9 \times 9 = 81$ Compile-Time Dispatch & Scope Macros
 
 ```cpp
 #include "sqlite3_value_containers.hpp"
 
-// 1. Shorthand 8x8 factory instantiating orthogonal Key x Val template combinations (64 pairs):
+// 1. Shorthand 8x8 factory instantiating orthogonal Key x Val template combinations (81 pairs):
 ITableStorage* create_kv_storage(int total_cols, int pk_count, const int* pk_indices) {
     int val_count = total_cols - pk_count;
     SQLITE_MAKE_DEFAULT_STORAGE_8X8(MapTableImpl, pk_count, val_count, total_cols, pk_count, pk_indices);
@@ -108,7 +108,7 @@ SQLITE_WITH_KEY_VAL_OWNED_8X8(key, val, pk_cnt, val_cnt, {
     insert_vtab_row(key, val);
 });
 
-// 3. Generic 2D orthogonal matrix dispatcher:
+// 3. Generic 2D orthogonal matrix dispatcher (9x9 = 81 combinations):
 SQLITE_DISPATCH_2D_8X8(CntA, CntB, count_a, count_b, {
     return sqlite_new<MyCustom2DContainer<CntA, CntB>>(args...);
 });
@@ -118,12 +118,14 @@ SQLITE_DISPATCH_2D_8X8(CntA, CntB, count_a, count_b, {
 
 In relational tables and virtual table rows, the Primary Key column count cannot exceed the total declared columns ($KeyN \le ColsN$).
 
-Constraining matrix dispatch to valid lower-triangular pairs eliminates 28 impossible combinations (e.g. $KeyN = 8, ColsN = 1$), achieving a **44% reduction** in generated template code (36 valid combinations vs. 64 in full $8 \times 8$).
+Constraining matrix dispatch across $N \in 0..8$ to valid lower-triangular pairs ($1 \le KeyN \le ColsN$ for stack, $KeyN \in \{1..8, 0\}$ for heap $ColsN=0$) reduces template instantiations to **45 valid combinations** (vs. 81 in the full $9 \times 9$ matrix), eliminating 36 impossible combinations (44.4% reduction):
+
+$$\text{Valid Combinations} = \sum_{c=1}^{8} c + 9 = 36 + 9 = 45 \quad (\text{vs. } 81)$$
 
 ```cpp
 #include "sqlite3_value_containers.hpp"
 
-// 1. Direct lower-triangular row key/cols schema dispatcher (36 valid pairs):
+// 1. Direct lower-triangular row key/cols schema dispatcher (45 valid pairs):
 SQLITE_DISPATCH_ROW_KEY_COLS_8X8(KeyN, ColsN, pk_count, total_cols, {
     return sqlite_new<RelationalRowTable<KeyN, ColsN>>(pk_count, total_cols);
 });

@@ -117,11 +117,11 @@ Both `SqliteValueTuple` and `SqliteValueVec` are synthesized using modular macro
 
 ---
 
-## 5. Generic $8 \times 8$ Compile-Time Matrix Dispatchers & Scope Allocators
+## 5. Generic $9 \times 9 = 81$ Compile-Time Matrix Dispatchers & Scope Allocators
 
 Virtual tables and in-memory key-value engines (`memkv_map`, `memkv_lru`, `memkv_zset`, `memkv_ring`) determine table schemas at runtime (`pk_count` and `val_count`).
 
-To avoid runtime branching inside inner iteration loops, `sqlite3_value_containers.hpp` provides compile-time expansion and scope-guarded stack allocation:
+To avoid runtime branching inside inner iteration loops, `sqlite3_value_containers.hpp` provides compile-time expansion and scope-guarded stack allocation across all 9 arities ($N \in \{0, 1, \dots, 8\}$, generating $9 \times 9 = 81$ matrix combinations):
 
 ```cpp
 #define SQLITE_DISPATCH_1D_8(N, runtime_count, ...) \
@@ -148,16 +148,21 @@ SQLITE_WITH_KEY_VAL_OWNED_8X8(key, val, pk_cnt, val_cnt, { ... });
 
 In relational schemas, Primary Key column count cannot exceed the total declared table columns ($KeyN \le ColsN$). 
 
-A full rectangular $8 \times 8 = 64$ template matrix generates 28 impossible combinations (e.g. $KeyN = 8, ColsN = 1$). Constraining dispatch to valid lower-triangular pairs ($KeyN \le ColsN$) eliminates 28 impossible template instantiations (a **43.75% / ~44% reduction** in generated code and binary footprint).
+For stack columns ($ColsN \in [1..8]$), $KeyN$ is constrained to valid lower-triangular pairs $1 \le KeyN \le ColsN$ (36 pairs). Dynamic heap key $KeyN = 0$ is only present when $ColsN = 0$ (9 pairs: $KeyN \in \{1..8, 0\}$). A full rectangular $9 \times 9 = 81$ template matrix contains 36 impossible combinations (e.g. $KeyN = 8, ColsN = 1$), and lower-triangular bound pruning reduces template instantiations to **45 valid combinations** (a **44.4% reduction**).
 
-$$\text{Valid Combinations} = \sum_{c=1}^{8} c = 1 + 2 + 3 + 4 + 5 + 6 + 7 + 8 = 36 \quad (\text{vs. } 64)$$
+$$\text{Valid Combinations} = \sum_{c=1}^{8} c + 9 = 36 + 9 = 45 \quad (\text{vs. } 81)$$
 
 ```cpp
 // Prunes impossible arities at compile-time:
-#define SQLITE_DISPATCH_VALID_2D(KeyN, ColsN, ...) \
-    if constexpr (KeyN <= ColsN && ColsN > 0) { __VA_ARGS__; }
+#if defined(__cplusplus) && __cplusplus >= 201703L
+#  define SQLITE_DISPATCH_VALID_2D(KeyN, ColsN, ...) \
+      if constexpr ((KeyN) <= (ColsN) && (ColsN) > 0) { __VA_ARGS__; }
+#else
+#  define SQLITE_DISPATCH_VALID_2D(KeyN, ColsN, ...) \
+      if ((KeyN) <= (ColsN) && (ColsN) > 0) { __VA_ARGS__; }
+#endif
 
-// Direct lower-triangular row key/cols schema dispatcher (36 valid pairs):
+// Direct lower-triangular row key/cols schema dispatcher (45 valid pairs):
 SQLITE_DISPATCH_ROW_KEY_COLS_8X8(KeyN, ColsN, pk_count, col_count, {
     return sqlite_new<MyRelationalTable<KeyN, ColsN>>(pk_count, col_count);
 });
