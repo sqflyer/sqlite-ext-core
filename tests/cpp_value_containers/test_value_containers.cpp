@@ -648,6 +648,29 @@ static IMockTable *create_storage_8x8_custom(int pk, int val, int tag) {
   SQLITE_MAKE_STORAGE_8X8(MockStorageTable, SqliteValueTuple, SqliteValueTuple, pk, val, tag);
 }
 
+struct IMockRowKeyColsTable {
+  virtual ~IMockRowKeyColsTable() {}
+  virtual int get_tag() const = 0;
+  virtual size_t get_key_n() const = 0;
+  virtual size_t get_cols_n() const = 0;
+};
+
+template <size_t KeyN, size_t ColsN>
+struct MockRowKeyColsTable : public IMockRowKeyColsTable {
+  SqliteValueTuple<KeyN> key;
+  SqliteValueTuple<ColsN> cols;
+  int tag;
+
+  MockRowKeyColsTable(int t) : tag(t) {}
+  virtual int get_tag() const override { return tag; }
+  virtual size_t get_key_n() const override { return KeyN; }
+  virtual size_t get_cols_n() const override { return ColsN; }
+};
+
+static IMockRowKeyColsTable *create_row_key_cols_storage(int pk, int cols, int tag) {
+  SQLITE_MAKE_ROW_KEY_COLS_STORAGE_8X8(MockRowKeyColsTable, pk, cols, tag);
+}
+
 static void test_dispatch_framework() {
   printf("7. Testing Generic 8x8 compile-time dispatch framework...\n");
 
@@ -666,17 +689,56 @@ static void test_dispatch_framework() {
     }
   }
 
-  // 2. 2D Dispatch test across -2..10 x -2..10 matrix
-  for (int k = -2; k <= 10; ++k) {
-    for (int v = -2; v <= 10; ++v) {
-      size_t observed_k = 999;
-      size_t observed_v = 999;
-      SQLITE_DISPATCH_2D_8X8(KeyN, ValN, k, v, {
-        observed_k = KeyN;
-        observed_v = ValN;
+  // 2. 2D Generic Dispatch test across -2..10 x -2..10 matrix
+  for (int a = -2; a <= 10; ++a) {
+    for (int b = -2; b <= 10; ++b) {
+      size_t observed_a = 999;
+      size_t observed_b = 999;
+      SQLITE_DISPATCH_2D_8X8(CntA, CntB, a, b, {
+        observed_a = CntA;
+        observed_b = CntB;
       });
-      assert(observed_k == (k >= 1 && k <= 8 ? static_cast<size_t>(k) : 0));
-      assert(observed_v == (v >= 1 && v <= 8 ? static_cast<size_t>(v) : 0));
+      assert(observed_a == (a >= 1 && a <= 8 ? static_cast<size_t>(a) : 0));
+      assert(observed_b == (b >= 1 && b <= 8 ? static_cast<size_t>(b) : 0));
+    }
+  }
+
+  // 2b. Lower-Triangular Row Schema 2D Dispatch test (KeyN <= ColsN bound pruning)
+  int valid_pruned_count = 0;
+  for (int c = 1; c <= 8; ++c) {
+    for (int k = 1; k <= 8; ++k) {
+      bool entered = false;
+      SQLITE_DISPATCH_2D_8X8(CntA, CntB, k, c, {
+        SQLITE_DISPATCH_VALID_2D(CntA, CntB, {
+          entered = true;
+          valid_pruned_count++;
+        });
+      });
+      if (k <= c) {
+        assert(entered == true);
+      } else {
+        assert(entered == false); // Impossible combinations (k > c) are pruned at compile-time!
+      }
+    }
+  }
+  assert(valid_pruned_count == 36); // Exact 36 valid pairs out of 64 (44% reduction)
+
+  // 2c. Direct Row Key/Cols 2D Dispatcher Verification across 0..10 x 0..10
+  for (int c = 0; c <= 10; ++c) {
+    for (int k = 0; k <= 10; ++k) {
+      size_t observed_k = 999;
+      size_t observed_c = 999;
+      SQLITE_DISPATCH_ROW_KEY_COLS_8X8(KeyN, ColsN, k, c, {
+        observed_k = KeyN;
+        observed_c = ColsN;
+      });
+      if (c >= 1 && c <= 8) {
+        assert(observed_c == static_cast<size_t>(c));
+        assert(observed_k == (k >= 1 && k <= c ? static_cast<size_t>(k) : 0));
+      } else {
+        assert(observed_c == 0);
+        assert(observed_k == 0);
+      }
     }
   }
 
@@ -735,6 +797,23 @@ static void test_dispatch_framework() {
       assert(t_cust != nullptr);
       assert(t_cust->get_tag() == 5000 + k * 10 + v);
       sqlite_delete(t_cust);
+    }
+  }
+
+  // 4b. Lower-Triangular Relational Row Storage Factory Macro Verification (SQLITE_MAKE_ROW_KEY_COLS_STORAGE_8X8)
+  for (int c = 0; c <= 10; ++c) {
+    for (int k = 0; k <= 10; ++k) {
+      IMockRowKeyColsTable *t_row = create_row_key_cols_storage(k, c, k * 1000 + c);
+      assert(t_row != nullptr);
+      assert(t_row->get_tag() == k * 1000 + c);
+      if (c >= 1 && c <= 8) {
+        assert(t_row->get_cols_n() == static_cast<size_t>(c));
+        assert(t_row->get_key_n() == (k >= 1 && k <= c ? static_cast<size_t>(k) : 0));
+      } else {
+        assert(t_row->get_cols_n() == 0);
+        assert(t_row->get_key_n() == 0);
+      }
+      sqlite_delete(t_row);
     }
   }
 

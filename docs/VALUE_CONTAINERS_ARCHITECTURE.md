@@ -132,16 +132,38 @@ To avoid runtime branching inside inner iteration loops, `sqlite3_value_containe
         default: { constexpr size_t N = 0; __VA_ARGS__; } break; \
     }
 
-#define SQLITE_DISPATCH_2D_8X8(KeyN, ValN, pk_count, val_count, ...) \
-    switch (pk_count) { \
-        case 1:  { constexpr size_t KeyN = 1; SQLITE_DISPATCH_1D_8(ValN, val_count, __VA_ARGS__) } break; \
+#define SQLITE_DISPATCH_2D_8X8(CntA, CntB, count_a, count_b, ...) \
+    switch (count_a) { \
+        case 1:  { constexpr size_t CntA = 1; SQLITE_DISPATCH_1D_8(CntB, count_b, __VA_ARGS__) } break; \
         ... \
-        default: { constexpr size_t KeyN = 0; SQLITE_DISPATCH_1D_8(ValN, val_count, __VA_ARGS__) } break; \
+        default: { constexpr size_t CntA = 0; SQLITE_DISPATCH_1D_8(CntB, count_b, __VA_ARGS__) } break; \
     }
 
 // Direct SqliteRowOwnedWrapper scope wrappers:
 SQLITE_WITH_ROW_OWNED_1D(row, num_cols, { ... });
 SQLITE_WITH_KEY_VAL_OWNED_8X8(key, val, pk_cnt, val_cnt, { ... });
+```
+
+### Triangular Bound Pruning ($KeyN \le ColsN$)
+
+In relational schemas, Primary Key column count cannot exceed the total declared table columns ($KeyN \le ColsN$). 
+
+A full rectangular $8 \times 8 = 64$ template matrix generates 28 impossible combinations (e.g. $KeyN = 8, ColsN = 1$). Constraining dispatch to valid lower-triangular pairs ($KeyN \le ColsN$) eliminates 28 impossible template instantiations (a **43.75% / ~44% reduction** in generated code and binary footprint).
+
+$$\text{Valid Combinations} = \sum_{c=1}^{8} c = 1 + 2 + 3 + 4 + 5 + 6 + 7 + 8 = 36 \quad (\text{vs. } 64)$$
+
+```cpp
+// Prunes impossible arities at compile-time:
+#define SQLITE_DISPATCH_VALID_2D(KeyN, ColsN, ...) \
+    if constexpr (KeyN <= ColsN && ColsN > 0) { __VA_ARGS__; }
+
+// Direct lower-triangular row key/cols schema dispatcher (36 valid pairs):
+SQLITE_DISPATCH_ROW_KEY_COLS_8X8(KeyN, ColsN, pk_count, col_count, {
+    return sqlite_new<MyRelationalTable<KeyN, ColsN>>(pk_count, col_count);
+});
+
+// Single-line relational table row instantiator:
+SQLITE_MAKE_ROW_KEY_COLS_STORAGE_8X8(MyRelationalTable, pk_count, col_count, args...);
 ```
 
 ---

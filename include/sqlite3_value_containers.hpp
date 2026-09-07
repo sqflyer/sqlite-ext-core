@@ -2468,29 +2468,160 @@ static_assert(sizeof(SqliteValueVec<8>) == 192,
 
 /**
  * @def SQLITE_DISPATCH_2D_8X8
- * @brief Dispatches runtime key_count (1..8) and val_count (1..8) to compile-time 
- *        constexpr size_t 'KeyN' and 'ValN' variables inside the provided block.
- *        Counts outside [1..8] dispatch to KeyN = 0 / ValN = 0 (direct dynamic heap types).
+ * @brief Dispatches runtime count_a (1..8) and count_b (1..8) to compile-time 
+ *        constexpr size_t 'CntA' and 'CntB' variables inside the provided block.
+ *        Counts outside [1..8] dispatch to CntA = 0 / CntB = 0 (direct dynamic heap types).
  * 
  * Works with ANY container, template types, or custom factory logic.
  * 
  * Usage:
- *   SQLITE_DISPATCH_2D_8X8(KeyN, ValN, pk_count, val_count, {
- *       return sqlite_new<MyContainer<SqliteValueTuple<KeyN>, SqliteValueVec<ValN>>>(args...);
+ *   SQLITE_DISPATCH_2D_8X8(CntA, CntB, count_a, count_b, {
+ *       return sqlite_new<MyContainer<SqliteValueTuple<CntA>, SqliteValueVec<CntB>>>(args...);
  *   });
  */
-#define SQLITE_DISPATCH_2D_8X8(KeyN, ValN, pk_count, val_count, ...) \
-    switch (pk_count) { \
-        case 1:  { constexpr size_t KeyN = 1; SQLITE_DISPATCH_1D_8(ValN, val_count, __VA_ARGS__) } break; \
-        case 2:  { constexpr size_t KeyN = 2; SQLITE_DISPATCH_1D_8(ValN, val_count, __VA_ARGS__) } break; \
-        case 3:  { constexpr size_t KeyN = 3; SQLITE_DISPATCH_1D_8(ValN, val_count, __VA_ARGS__) } break; \
-        case 4:  { constexpr size_t KeyN = 4; SQLITE_DISPATCH_1D_8(ValN, val_count, __VA_ARGS__) } break; \
-        case 5:  { constexpr size_t KeyN = 5; SQLITE_DISPATCH_1D_8(ValN, val_count, __VA_ARGS__) } break; \
-        case 6:  { constexpr size_t KeyN = 6; SQLITE_DISPATCH_1D_8(ValN, val_count, __VA_ARGS__) } break; \
-        case 7:  { constexpr size_t KeyN = 7; SQLITE_DISPATCH_1D_8(ValN, val_count, __VA_ARGS__) } break; \
-        case 8:  { constexpr size_t KeyN = 8; SQLITE_DISPATCH_1D_8(ValN, val_count, __VA_ARGS__) } break; \
-        default: { constexpr size_t KeyN = 0; SQLITE_DISPATCH_1D_8(ValN, val_count, __VA_ARGS__) } break; \
+#define SQLITE_DISPATCH_2D_8X8(CntA, CntB, count_a, count_b, ...) \
+    switch (count_a) { \
+        case 1:  { constexpr size_t CntA = 1; SQLITE_DISPATCH_1D_8(CntB, count_b, __VA_ARGS__) } break; \
+        case 2:  { constexpr size_t CntA = 2; SQLITE_DISPATCH_1D_8(CntB, count_b, __VA_ARGS__) } break; \
+        case 3:  { constexpr size_t CntA = 3; SQLITE_DISPATCH_1D_8(CntB, count_b, __VA_ARGS__) } break; \
+        case 4:  { constexpr size_t CntA = 4; SQLITE_DISPATCH_1D_8(CntB, count_b, __VA_ARGS__) } break; \
+        case 5:  { constexpr size_t CntA = 5; SQLITE_DISPATCH_1D_8(CntB, count_b, __VA_ARGS__) } break; \
+        case 6:  { constexpr size_t CntA = 6; SQLITE_DISPATCH_1D_8(CntB, count_b, __VA_ARGS__) } break; \
+        case 7:  { constexpr size_t CntA = 7; SQLITE_DISPATCH_1D_8(CntB, count_b, __VA_ARGS__) } break; \
+        case 8:  { constexpr size_t CntA = 8; SQLITE_DISPATCH_1D_8(CntB, count_b, __VA_ARGS__) } break; \
+        default: { constexpr size_t CntA = 0; SQLITE_DISPATCH_1D_8(CntB, count_b, __VA_ARGS__) } break; \
     }
+
+/**
+ * @def SQLITE_DISPATCH_VALID_2D
+ * @brief Prunes impossible relational arities at compile-time where Primary Key column
+ *        count exceeds total declared column count (KeyN > ColsN).
+ *
+ * Usage:
+ *   SQLITE_DISPATCH_2D_8X8(CntA, CntB, pk_count, col_count, {
+ *       SQLITE_DISPATCH_VALID_2D(CntA, CntB, {
+ *           return sqlite_new<MyTable<CntA, CntB>>(args...);
+ *       });
+ *   });
+ */
+#if defined(__cplusplus) && __cplusplus >= 201703L
+#  define SQLITE_DISPATCH_VALID_2D(KeyN, ColsN, ...) \
+      if constexpr ((KeyN) <= (ColsN) && (ColsN) > 0) { __VA_ARGS__; }
+#else
+#  define SQLITE_DISPATCH_VALID_2D(KeyN, ColsN, ...) \
+      if ((KeyN) <= (ColsN) && (ColsN) > 0) { __VA_ARGS__; }
+#endif
+
+/**
+ * @def SQLITE_DISPATCH_ROW_KEY_COLS_8X8
+ * @brief Dispatches runtime table row schema dimensions (primary key count 'key_count' (1..8)
+ *        and total column count 'col_count' (1..8)) to compile-time constexpr size_t 'KeyN' 
+ *        and 'ColsN' with lower-triangular bound pruning (KeyN <= ColsN).
+ *
+ * In relational table rows, the Primary Key column count cannot exceed the total declared
+ * columns (KeyN <= ColsN). Constraining the 8x8 matrix to lower-triangular valid pairs
+ * eliminates 28 impossible template instantiations (a 44% reduction in generated code).
+ *
+ * Matrix breakdown (KeyN in 1..ColsN):
+ *   ColsN = 1 -> KeyN in {1}
+ *   ColsN = 2 -> KeyN in {1, 2}
+ *   ColsN = 3 -> KeyN in {1, 2, 3}
+ *   ColsN = 4 -> KeyN in {1, 2, 3, 4}
+ *   ColsN = 5 -> KeyN in {1, 2, 3, 4, 5}
+ *   ColsN = 6 -> KeyN in {1, 2, 3, 4, 5, 6}
+ *   ColsN = 7 -> KeyN in {1, 2, 3, 4, 5, 6, 7}
+ *   ColsN = 8 -> KeyN in {1, 2, 3, 4, 5, 6, 7, 8}
+ *   Total valid combinations = 36 (vs 64 in full 8x8 matrix).
+ */
+#define SQLITE_DISPATCH_ROW_KEY_COLS_8X8(KeyN, ColsN, key_count, col_count, ...) \
+    switch (col_count) { \
+        case 1: { constexpr size_t ColsN = 1; \
+            switch (key_count) { \
+                case 1: { constexpr size_t KeyN = 1; __VA_ARGS__; } break; \
+                default: { constexpr size_t KeyN = 0; __VA_ARGS__; } break; \
+            } \
+        } break; \
+        case 2: { constexpr size_t ColsN = 2; \
+            switch (key_count) { \
+                case 1: { constexpr size_t KeyN = 1; __VA_ARGS__; } break; \
+                case 2: { constexpr size_t KeyN = 2; __VA_ARGS__; } break; \
+                default: { constexpr size_t KeyN = 0; __VA_ARGS__; } break; \
+            } \
+        } break; \
+        case 3: { constexpr size_t ColsN = 3; \
+            switch (key_count) { \
+                case 1: { constexpr size_t KeyN = 1; __VA_ARGS__; } break; \
+                case 2: { constexpr size_t KeyN = 2; __VA_ARGS__; } break; \
+                case 3: { constexpr size_t KeyN = 3; __VA_ARGS__; } break; \
+                default: { constexpr size_t KeyN = 0; __VA_ARGS__; } break; \
+            } \
+        } break; \
+        case 4: { constexpr size_t ColsN = 4; \
+            switch (key_count) { \
+                case 1: { constexpr size_t KeyN = 1; __VA_ARGS__; } break; \
+                case 2: { constexpr size_t KeyN = 2; __VA_ARGS__; } break; \
+                case 3: { constexpr size_t KeyN = 3; __VA_ARGS__; } break; \
+                case 4: { constexpr size_t KeyN = 4; __VA_ARGS__; } break; \
+                default: { constexpr size_t KeyN = 0; __VA_ARGS__; } break; \
+            } \
+        } break; \
+        case 5: { constexpr size_t ColsN = 5; \
+            switch (key_count) { \
+                case 1: { constexpr size_t KeyN = 1; __VA_ARGS__; } break; \
+                case 2: { constexpr size_t KeyN = 2; __VA_ARGS__; } break; \
+                case 3: { constexpr size_t KeyN = 3; __VA_ARGS__; } break; \
+                case 4: { constexpr size_t KeyN = 4; __VA_ARGS__; } break; \
+                case 5: { constexpr size_t KeyN = 5; __VA_ARGS__; } break; \
+                default: { constexpr size_t KeyN = 0; __VA_ARGS__; } break; \
+            } \
+        } break; \
+        case 6: { constexpr size_t ColsN = 6; \
+            switch (key_count) { \
+                case 1: { constexpr size_t KeyN = 1; __VA_ARGS__; } break; \
+                case 2: { constexpr size_t KeyN = 2; __VA_ARGS__; } break; \
+                case 3: { constexpr size_t KeyN = 3; __VA_ARGS__; } break; \
+                case 4: { constexpr size_t KeyN = 4; __VA_ARGS__; } break; \
+                case 5: { constexpr size_t KeyN = 5; __VA_ARGS__; } break; \
+                case 6: { constexpr size_t KeyN = 6; __VA_ARGS__; } break; \
+                default: { constexpr size_t KeyN = 0; __VA_ARGS__; } break; \
+            } \
+        } break; \
+        case 7: { constexpr size_t ColsN = 7; \
+            switch (key_count) { \
+                case 1: { constexpr size_t KeyN = 1; __VA_ARGS__; } break; \
+                case 2: { constexpr size_t KeyN = 2; __VA_ARGS__; } break; \
+                case 3: { constexpr size_t KeyN = 3; __VA_ARGS__; } break; \
+                case 4: { constexpr size_t KeyN = 4; __VA_ARGS__; } break; \
+                case 5: { constexpr size_t KeyN = 5; __VA_ARGS__; } break; \
+                case 6: { constexpr size_t KeyN = 6; __VA_ARGS__; } break; \
+                case 7: { constexpr size_t KeyN = 7; __VA_ARGS__; } break; \
+                default: { constexpr size_t KeyN = 0; __VA_ARGS__; } break; \
+            } \
+        } break; \
+        case 8: { constexpr size_t ColsN = 8; \
+            switch (key_count) { \
+                case 1: { constexpr size_t KeyN = 1; __VA_ARGS__; } break; \
+                case 2: { constexpr size_t KeyN = 2; __VA_ARGS__; } break; \
+                case 3: { constexpr size_t KeyN = 3; __VA_ARGS__; } break; \
+                case 4: { constexpr size_t KeyN = 4; __VA_ARGS__; } break; \
+                case 5: { constexpr size_t KeyN = 5; __VA_ARGS__; } break; \
+                case 6: { constexpr size_t KeyN = 6; __VA_ARGS__; } break; \
+                case 7: { constexpr size_t KeyN = 7; __VA_ARGS__; } break; \
+                case 8: { constexpr size_t KeyN = 8; __VA_ARGS__; } break; \
+                default: { constexpr size_t KeyN = 0; __VA_ARGS__; } break; \
+            } \
+        } break; \
+        default: { constexpr size_t ColsN = 0; constexpr size_t KeyN = 0; __VA_ARGS__; } break; \
+    }
+
+/**
+ * @def SQLITE_MAKE_ROW_KEY_COLS_STORAGE_8X8
+ * @brief Instantiates a relational row table container with lower-triangular bound pruning (KeyN <= ColsN).
+ */
+#define SQLITE_MAKE_ROW_KEY_COLS_STORAGE_8X8(ContainerT, pk_count, col_count, ...) \
+    SQLITE_DISPATCH_ROW_KEY_COLS_8X8(_K_N, _C_N, pk_count, col_count, { \
+        return sqlite_new<ContainerT<_K_N, _C_N>>(__VA_ARGS__); \
+    })
 
 // ============================================================================
 // PART 6: Shorthand Factory Macros (Direct sqlite_new Instantiation with Templates)
