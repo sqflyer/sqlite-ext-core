@@ -148,9 +148,11 @@ SQLITE_WITH_KEY_VAL_OWNED_8X8(key, val, pk_cnt, val_cnt, { ... });
 
 In relational schemas, Primary Key column count cannot exceed the total declared table columns ($KeyN \le ColsN$). 
 
-For stack columns ($ColsN \in [1..8]$), $KeyN$ is constrained to valid lower-triangular pairs $1 \le KeyN \le ColsN$ (36 pairs). Dynamic heap key $KeyN = 0$ is only present when $ColsN = 0$ (9 pairs: $KeyN \in \{1..8, 0\}$). A full rectangular $9 \times 9 = 81$ template matrix contains 36 impossible combinations (e.g. $KeyN = 8, ColsN = 1$), and lower-triangular bound pruning reduces template instantiations to **45 valid combinations** (a **44.4% reduction**).
+For stack columns ($ColsN \in [1..8]$) with declared primary keys ($KeyN \ge 1$), $KeyN$ is constrained to valid lower-triangular pairs $1 \le KeyN \le ColsN$ (36 pairs). Dynamic heap key $KeyN = 0$ is only present when $ColsN = 0$ (9 pairs: $KeyN \in \{1..8, 0\}$). A full rectangular $9 \times 9 = 81$ template matrix contains 36 impossible combinations (e.g. $KeyN = 8, ColsN = 1$), and lower-triangular bound pruning reduces template instantiations to **45 valid combinations** (a **44.4% reduction**).
 
-$$\text{Valid Combinations} = \sum_{c=1}^{8} c + 9 = 36 + 9 = 45 \quad (\text{vs. } 81)$$
+For tables with **0 Primary Keys (ROWID-only / `key_count == 0`)**, `SQLITE_DISPATCH_ROW_KEY_COLS_8X8` internally auto-routes to a single 1D column dispatch `SQLITE_DISPATCH_1D_8(ColsN, col_count, ...)` setting `KeyN = 0`, providing a unified 1-line interface for all SQLite table structures.
+
+$$\text{Valid Lower-Triangular Combinations} = \sum_{c=1}^{8} c + 9 = 36 + 9 = 45 \quad (\text{vs. } 81)$$
 
 ```cpp
 // Prunes impossible arities at compile-time:
@@ -162,7 +164,7 @@ $$\text{Valid Combinations} = \sum_{c=1}^{8} c + 9 = 36 + 9 = 45 \quad (\text{vs
       if ((KeyN) <= (ColsN) && (ColsN) > 0) { __VA_ARGS__; }
 #endif
 
-// Direct lower-triangular row key/cols schema dispatcher (45 valid pairs):
+// Turnkey row key/cols schema dispatcher (handles both 0-PK and composite PK tables):
 SQLITE_DISPATCH_ROW_KEY_COLS_8X8(KeyN, ColsN, pk_count, col_count, {
     return sqlite_new<MyRelationalTable<KeyN, ColsN>>(pk_count, col_count);
 });

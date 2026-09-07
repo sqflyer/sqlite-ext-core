@@ -2514,118 +2514,112 @@ static_assert(sizeof(SqliteValueVec<8>) == 192,
 
 /**
  * @def SQLITE_DISPATCH_ROW_KEY_COLS_8X8
- * @brief Dispatches runtime table row schema dimensions (primary key count 'key_count' (1..8)
+ * @brief Dispatches runtime table row schema dimensions (primary key count 'key_count' (0..8)
  *        and total column count 'col_count' (1..8)) to compile-time constexpr size_t 'KeyN' 
  *        and 'ColsN' with lower-triangular bound pruning (KeyN <= ColsN).
  *
- * In relational table rows, the Primary Key column count cannot exceed the total declared
- * columns (KeyN <= ColsN). For stack columns (ColsN in 1..8), KeyN is constrained to 1..ColsN (36 pairs).
- * KeyN = 0 (dynamic heap key) is only present for dynamic heap tables (ColsN = 0, 9 pairs).
- * Constraining the 9x9 matrix to valid pairs eliminates 36 impossible template instantiations (44.4% reduction).
- *
- * Matrix breakdown:
- *   ColsN = 1 -> KeyN in {1} (1 pair)
- *   ColsN = 2 -> KeyN in {1, 2} (2 pairs)
- *   ColsN = 3 -> KeyN in {1, 2, 3} (3 pairs)
- *   ColsN = 4 -> KeyN in {1, 2, 3, 4} (4 pairs)
- *   ColsN = 5 -> KeyN in {1, 2, 3, 4, 5} (5 pairs)
- *   ColsN = 6 -> KeyN in {1, 2, 3, 4, 5, 6} (6 pairs)
- *   ColsN = 7 -> KeyN in {1, 2, 3, 4, 5, 6, 7} (7 pairs)
- *   ColsN = 8 -> KeyN in {1, 2, 3, 4, 5, 6, 7, 8} (8 pairs)
- *   ColsN = 0 -> KeyN in {1, 2, 3, 4, 5, 6, 7, 8, 0} (9 pairs)
- *   Total valid combinations = 1 + 2 + 3 + 4 + 5 + 6 + 7 + 8 + 9 = 45 (vs 81 in full 9x9 matrix).
+ * Handles tables without primary keys (key_count == 0) via a single 1D column dispatch (KeyN = 0).
+ * For tables with declared primary keys (key_count >= 1), dispatches using a lower-triangular matrix
+ * where 1 <= KeyN <= ColsN for stack columns (ColsN in 1..8), and KeyN in {1..8, 0} for dynamic heap tables (ColsN = 0).
  */
 #define SQLITE_DISPATCH_ROW_KEY_COLS_8X8(KeyN, ColsN, key_count, col_count, ...) \
-    switch (col_count) { \
-        case 1: { constexpr size_t ColsN = 1; \
-            switch (key_count) { \
-                case 1: { constexpr size_t KeyN = 1; __VA_ARGS__; } break; \
-                default: { constexpr size_t KeyN = ColsN; __VA_ARGS__; } break; \
-            } \
-        } break; \
-        case 2: { constexpr size_t ColsN = 2; \
-            switch (key_count) { \
-                case 1: { constexpr size_t KeyN = 1; __VA_ARGS__; } break; \
-                case 2: { constexpr size_t KeyN = 2; __VA_ARGS__; } break; \
-                default: { constexpr size_t KeyN = ColsN; __VA_ARGS__; } break; \
-            } \
-        } break; \
-        case 3: { constexpr size_t ColsN = 3; \
-            switch (key_count) { \
-                case 1: { constexpr size_t KeyN = 1; __VA_ARGS__; } break; \
-                case 2: { constexpr size_t KeyN = 2; __VA_ARGS__; } break; \
-                case 3: { constexpr size_t KeyN = 3; __VA_ARGS__; } break; \
-                default: { constexpr size_t KeyN = ColsN; __VA_ARGS__; } break; \
-            } \
-        } break; \
-        case 4: { constexpr size_t ColsN = 4; \
-            switch (key_count) { \
-                case 1: { constexpr size_t KeyN = 1; __VA_ARGS__; } break; \
-                case 2: { constexpr size_t KeyN = 2; __VA_ARGS__; } break; \
-                case 3: { constexpr size_t KeyN = 3; __VA_ARGS__; } break; \
-                case 4: { constexpr size_t KeyN = 4; __VA_ARGS__; } break; \
-                default: { constexpr size_t KeyN = ColsN; __VA_ARGS__; } break; \
-            } \
-        } break; \
-        case 5: { constexpr size_t ColsN = 5; \
-            switch (key_count) { \
-                case 1: { constexpr size_t KeyN = 1; __VA_ARGS__; } break; \
-                case 2: { constexpr size_t KeyN = 2; __VA_ARGS__; } break; \
-                case 3: { constexpr size_t KeyN = 3; __VA_ARGS__; } break; \
-                case 4: { constexpr size_t KeyN = 4; __VA_ARGS__; } break; \
-                case 5: { constexpr size_t KeyN = 5; __VA_ARGS__; } break; \
-                default: { constexpr size_t KeyN = ColsN; __VA_ARGS__; } break; \
-            } \
-        } break; \
-        case 6: { constexpr size_t ColsN = 6; \
-            switch (key_count) { \
-                case 1: { constexpr size_t KeyN = 1; __VA_ARGS__; } break; \
-                case 2: { constexpr size_t KeyN = 2; __VA_ARGS__; } break; \
-                case 3: { constexpr size_t KeyN = 3; __VA_ARGS__; } break; \
-                case 4: { constexpr size_t KeyN = 4; __VA_ARGS__; } break; \
-                case 5: { constexpr size_t KeyN = 5; __VA_ARGS__; } break; \
-                case 6: { constexpr size_t KeyN = 6; __VA_ARGS__; } break; \
-                default: { constexpr size_t KeyN = ColsN; __VA_ARGS__; } break; \
-            } \
-        } break; \
-        case 7: { constexpr size_t ColsN = 7; \
-            switch (key_count) { \
-                case 1: { constexpr size_t KeyN = 1; __VA_ARGS__; } break; \
-                case 2: { constexpr size_t KeyN = 2; __VA_ARGS__; } break; \
-                case 3: { constexpr size_t KeyN = 3; __VA_ARGS__; } break; \
-                case 4: { constexpr size_t KeyN = 4; __VA_ARGS__; } break; \
-                case 5: { constexpr size_t KeyN = 5; __VA_ARGS__; } break; \
-                case 6: { constexpr size_t KeyN = 6; __VA_ARGS__; } break; \
-                case 7: { constexpr size_t KeyN = 7; __VA_ARGS__; } break; \
-                default: { constexpr size_t KeyN = ColsN; __VA_ARGS__; } break; \
-            } \
-        } break; \
-        case 8: { constexpr size_t ColsN = 8; \
-            switch (key_count) { \
-                case 1: { constexpr size_t KeyN = 1; __VA_ARGS__; } break; \
-                case 2: { constexpr size_t KeyN = 2; __VA_ARGS__; } break; \
-                case 3: { constexpr size_t KeyN = 3; __VA_ARGS__; } break; \
-                case 4: { constexpr size_t KeyN = 4; __VA_ARGS__; } break; \
-                case 5: { constexpr size_t KeyN = 5; __VA_ARGS__; } break; \
-                case 6: { constexpr size_t KeyN = 6; __VA_ARGS__; } break; \
-                case 7: { constexpr size_t KeyN = 7; __VA_ARGS__; } break; \
-                case 8: { constexpr size_t KeyN = 8; __VA_ARGS__; } break; \
-                default: { constexpr size_t KeyN = ColsN; __VA_ARGS__; } break; \
-            } \
-        } break; \
-        default: { constexpr size_t ColsN = 0; \
-            switch (key_count) { \
-                case 1: { constexpr size_t KeyN = 1; __VA_ARGS__; } break; \
-                case 2: { constexpr size_t KeyN = 2; __VA_ARGS__; } break; \
-                case 3: { constexpr size_t KeyN = 3; __VA_ARGS__; } break; \
-                case 4: { constexpr size_t KeyN = 4; __VA_ARGS__; } break; \
-                case 5: { constexpr size_t KeyN = 5; __VA_ARGS__; } break; \
-                case 6: { constexpr size_t KeyN = 6; __VA_ARGS__; } break; \
-                case 7: { constexpr size_t KeyN = 7; __VA_ARGS__; } break; \
-                case 8: { constexpr size_t KeyN = 8; __VA_ARGS__; } break; \
-                default: { constexpr size_t KeyN = 0; __VA_ARGS__; } break; \
-            } \
-        } break; \
+    if ((key_count) == 0) { \
+        SQLITE_DISPATCH_1D_8(ColsN, col_count, { \
+            constexpr size_t KeyN = 0; \
+            __VA_ARGS__; \
+        }); \
+    } else { \
+        switch (col_count) { \
+            case 1: { constexpr size_t ColsN = 1; \
+                switch (key_count) { \
+                    case 1: { constexpr size_t KeyN = 1; __VA_ARGS__; } break; \
+                    default: { constexpr size_t KeyN = ColsN; __VA_ARGS__; } break; \
+                } \
+            } break; \
+            case 2: { constexpr size_t ColsN = 2; \
+                switch (key_count) { \
+                    case 1: { constexpr size_t KeyN = 1; __VA_ARGS__; } break; \
+                    case 2: { constexpr size_t KeyN = 2; __VA_ARGS__; } break; \
+                    default: { constexpr size_t KeyN = ColsN; __VA_ARGS__; } break; \
+                } \
+            } break; \
+            case 3: { constexpr size_t ColsN = 3; \
+                switch (key_count) { \
+                    case 1: { constexpr size_t KeyN = 1; __VA_ARGS__; } break; \
+                    case 2: { constexpr size_t KeyN = 2; __VA_ARGS__; } break; \
+                    case 3: { constexpr size_t KeyN = 3; __VA_ARGS__; } break; \
+                    default: { constexpr size_t KeyN = ColsN; __VA_ARGS__; } break; \
+                } \
+            } break; \
+            case 4: { constexpr size_t ColsN = 4; \
+                switch (key_count) { \
+                    case 1: { constexpr size_t KeyN = 1; __VA_ARGS__; } break; \
+                    case 2: { constexpr size_t KeyN = 2; __VA_ARGS__; } break; \
+                    case 3: { constexpr size_t KeyN = 3; __VA_ARGS__; } break; \
+                    case 4: { constexpr size_t KeyN = 4; __VA_ARGS__; } break; \
+                    default: { constexpr size_t KeyN = ColsN; __VA_ARGS__; } break; \
+                } \
+            } break; \
+            case 5: { constexpr size_t ColsN = 5; \
+                switch (key_count) { \
+                    case 1: { constexpr size_t KeyN = 1; __VA_ARGS__; } break; \
+                    case 2: { constexpr size_t KeyN = 2; __VA_ARGS__; } break; \
+                    case 3: { constexpr size_t KeyN = 3; __VA_ARGS__; } break; \
+                    case 4: { constexpr size_t KeyN = 4; __VA_ARGS__; } break; \
+                    case 5: { constexpr size_t KeyN = 5; __VA_ARGS__; } break; \
+                    default: { constexpr size_t KeyN = ColsN; __VA_ARGS__; } break; \
+                } \
+            } break; \
+            case 6: { constexpr size_t ColsN = 6; \
+                switch (key_count) { \
+                    case 1: { constexpr size_t KeyN = 1; __VA_ARGS__; } break; \
+                    case 2: { constexpr size_t KeyN = 2; __VA_ARGS__; } break; \
+                    case 3: { constexpr size_t KeyN = 3; __VA_ARGS__; } break; \
+                    case 4: { constexpr size_t KeyN = 4; __VA_ARGS__; } break; \
+                    case 5: { constexpr size_t KeyN = 5; __VA_ARGS__; } break; \
+                    case 6: { constexpr size_t KeyN = 6; __VA_ARGS__; } break; \
+                    default: { constexpr size_t KeyN = ColsN; __VA_ARGS__; } break; \
+                } \
+            } break; \
+            case 7: { constexpr size_t ColsN = 7; \
+                switch (key_count) { \
+                    case 1: { constexpr size_t KeyN = 1; __VA_ARGS__; } break; \
+                    case 2: { constexpr size_t KeyN = 2; __VA_ARGS__; } break; \
+                    case 3: { constexpr size_t KeyN = 3; __VA_ARGS__; } break; \
+                    case 4: { constexpr size_t KeyN = 4; __VA_ARGS__; } break; \
+                    case 5: { constexpr size_t KeyN = 5; __VA_ARGS__; } break; \
+                    case 6: { constexpr size_t KeyN = 6; __VA_ARGS__; } break; \
+                    case 7: { constexpr size_t KeyN = 7; __VA_ARGS__; } break; \
+                    default: { constexpr size_t KeyN = ColsN; __VA_ARGS__; } break; \
+                } \
+            } break; \
+            case 8: { constexpr size_t ColsN = 8; \
+                switch (key_count) { \
+                    case 1: { constexpr size_t KeyN = 1; __VA_ARGS__; } break; \
+                    case 2: { constexpr size_t KeyN = 2; __VA_ARGS__; } break; \
+                    case 3: { constexpr size_t KeyN = 3; __VA_ARGS__; } break; \
+                    case 4: { constexpr size_t KeyN = 4; __VA_ARGS__; } break; \
+                    case 5: { constexpr size_t KeyN = 5; __VA_ARGS__; } break; \
+                    case 6: { constexpr size_t KeyN = 6; __VA_ARGS__; } break; \
+                    case 7: { constexpr size_t KeyN = 7; __VA_ARGS__; } break; \
+                    case 8: { constexpr size_t KeyN = 8; __VA_ARGS__; } break; \
+                    default: { constexpr size_t KeyN = ColsN; __VA_ARGS__; } break; \
+                } \
+            } break; \
+            default: { constexpr size_t ColsN = 0; \
+                switch (key_count) { \
+                    case 1: { constexpr size_t KeyN = 1; __VA_ARGS__; } break; \
+                    case 2: { constexpr size_t KeyN = 2; __VA_ARGS__; } break; \
+                    case 3: { constexpr size_t KeyN = 3; __VA_ARGS__; } break; \
+                    case 4: { constexpr size_t KeyN = 4; __VA_ARGS__; } break; \
+                    case 5: { constexpr size_t KeyN = 5; __VA_ARGS__; } break; \
+                    case 6: { constexpr size_t KeyN = 6; __VA_ARGS__; } break; \
+                    case 7: { constexpr size_t KeyN = 7; __VA_ARGS__; } break; \
+                    case 8: { constexpr size_t KeyN = 8; __VA_ARGS__; } break; \
+                    default: { constexpr size_t KeyN = 0; __VA_ARGS__; } break; \
+                } \
+            } break; \
+        } \
     }
 
 /**

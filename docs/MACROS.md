@@ -279,11 +279,11 @@ Synthesizes transparent hash, equality, and ordering structs with `using is_tran
 - `SQLITE_DISPATCH_1D_8(N, runtime_count, ...)`: Dispatches runtime column count ($1 \dots 8$) to compile-time `constexpr size_t N` (falls back to $N = 0$ for dynamic heap).
 - `SQLITE_DISPATCH_2D_8X8(CntA, CntB, count_a, count_b, ...)`: Dispatches runtime 2D orthogonal grid ($9 \times 9 = 81$ combinations across $N \in 0..8$).
 - `SQLITE_DISPATCH_VALID_2D(KeyN, ColsN, ...)`: Prunes impossible relational combinations at compile-time where Primary Key count exceeds total column count (`KeyN > ColsN`), eliminating 36 impossible combinations.
-- `SQLITE_DISPATCH_ROW_KEY_COLS_8X8(KeyN, ColsN, key_count, col_count, ...)`: Lower-triangular row schema dispatcher for key and column counts ($KeyN \le ColsN$, 45 valid combinations).
+- `SQLITE_DISPATCH_ROW_KEY_COLS_8X8(KeyN, ColsN, key_count, col_count, ...)`: Turnkey relational row schema dispatcher. Auto-routes 0-PK tables (`key_count == 0`) via `SQLITE_DISPATCH_1D_8` (`KeyN = 0`), and composite-PK tables (`key_count >= 1`) via lower-triangular bound pruning ($1 \le KeyN \le ColsN$, 45 valid combinations).
 - `SQLITE_WITH_ROW_OWNED_1D(var, count, ...)`: Dispatches runtime count to stack-allocated `SqliteRowOwnedWrapper` span.
 - `SQLITE_WITH_KEY_VAL_OWNED_8X8(key, val, pk_count, val_count, ...)`: Dispatches 2D runtime counts to key/val `SqliteRowOwnedWrapper` spans.
 - `SQLITE_MAKE_STORAGE_8X8`: 1-line heap factory macro instantiating container specializations via `sqlite_new` ($9 \times 9 = 81$ combinations).
-- `SQLITE_MAKE_ROW_KEY_COLS_STORAGE_8X8`: 1-line heap factory macro instantiating lower-triangular relational schema templates ($KeyN \le ColsN$, 45 valid combinations).
+- `SQLITE_MAKE_ROW_KEY_COLS_STORAGE_8X8`: 1-line heap factory macro instantiating lower-triangular relational schema templates ($KeyN \le ColsN$).
 
 ---
 

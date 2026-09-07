@@ -734,8 +734,8 @@ static void test_dispatch_framework() {
       });
       if (c >= 1 && c <= 8) {
         assert(observed_c == static_cast<size_t>(c));
-        // k in 1..c yields k; k > c or k == 0 clamps to c (ColsN)
-        assert(observed_k == (k >= 1 && k <= c ? static_cast<size_t>(k) : static_cast<size_t>(c)));
+        // k == 0 -> KeyN = 0; k in 1..c -> KeyN = k; k > c -> KeyN = c (clamped)
+        assert(observed_k == (k == 0 ? 0 : (k >= 1 && k <= c ? static_cast<size_t>(k) : static_cast<size_t>(c))));
       } else {
         assert(observed_c == 0);
         assert(observed_k == (k >= 1 && k <= 8 ? static_cast<size_t>(k) : 0));

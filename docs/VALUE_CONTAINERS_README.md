@@ -118,14 +118,16 @@ SQLITE_DISPATCH_2D_8X8(CntA, CntB, count_a, count_b, {
 
 In relational tables and virtual table rows, the Primary Key column count cannot exceed the total declared columns ($KeyN \le ColsN$).
 
-Constraining matrix dispatch across $N \in 0..8$ to valid lower-triangular pairs ($1 \le KeyN \le ColsN$ for stack, $KeyN \in \{1..8, 0\}$ for heap $ColsN=0$) reduces template instantiations to **45 valid combinations** (vs. 81 in the full $9 \times 9$ matrix), eliminating 36 impossible combinations (44.4% reduction):
+`SQLITE_DISPATCH_ROW_KEY_COLS_8X8` provides a single unified macro for all relational tables:
+- **0-PK Tables (`pk_count == 0`)**: Automatically dispatched via a single 1D column call (`SQLITE_DISPATCH_1D_8`) with `KeyN = 0`.
+- **Primary Key Tables (`pk_count >= 1`)**: Dispatched via a lower-triangular matrix ($1 \le KeyN \le ColsN$ for stack, $KeyN \in \{1..8, 0\}$ for heap $ColsN=0$), yielding **45 valid combinations** (vs. 81 in the full $9 \times 9$ matrix) and eliminating 36 impossible combinations (44.4% reduction):
 
-$$\text{Valid Combinations} = \sum_{c=1}^{8} c + 9 = 36 + 9 = 45 \quad (\text{vs. } 81)$$
+$$\text{Valid Lower-Triangular Combinations} = \sum_{c=1}^{8} c + 9 = 36 + 9 = 45 \quad (\text{vs. } 81)$$
 
 ```cpp
 #include "sqlite3_value_containers.hpp"
 
-// 1. Direct lower-triangular row key/cols schema dispatcher (45 valid pairs):
+// 1. Turnkey row key/cols schema dispatcher (handles both 0-PK and composite PK tables):
 SQLITE_DISPATCH_ROW_KEY_COLS_8X8(KeyN, ColsN, pk_count, total_cols, {
     return sqlite_new<RelationalRowTable<KeyN, ColsN>>(pk_count, total_cols);
 });
