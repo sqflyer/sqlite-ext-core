@@ -234,11 +234,31 @@ Generates symmetric global non-member reverse relational operators (`scalar OP c
 
 ---
 
-## 4. Value Container Modifier Suite (`include/sqlite3_value_containers.hpp`)
+## 4. Value Container Modifier Suite (`include/sqlite3_value_containers.hpp` & `include/sqlite3_row.hpp`)
 
-These macros synthesize standard library container modifiers specific to tuples and dynamic vectors.
+These macros synthesize standard library container modifiers specific to tuples, dynamic vectors, and row wrappers.
 
-### 4.1 `SQLITE_DERIVE_STD_TUPLE_MODIFIERS(DataPtr, SizeVal)`
+### 4.1 `SQLITE_DERIVE_CONTAINER_RESET_METHODS(DataPtr, SizeVal)`
+
+Synthesizes null-reset and initialization methods (`set_null_all()`, `reset_to_null()`, `initialize_as_null()`) across fixed/dynamic tuples, dynamic vectors, and row wrappers:
+
+```cpp
+#define SQLITE_DERIVE_CONTAINER_RESET_METHODS(DataPtr, SizeVal) \
+  inline void set_null_all() noexcept { \
+    size_t sz = static_cast<size_t>(SizeVal); \
+    for (size_t i = 0; i < sz; ++i) { \
+      (DataPtr)[i].set_null(); \
+    } \
+  } \
+  inline void reset_to_null() noexcept { \
+    set_null_all(); \
+  } \
+  inline void initialize_as_null() noexcept { \
+    set_null_all(); \
+  }
+```
+
+### 4.2 `SQLITE_DERIVE_STD_TUPLE_MODIFIERS(DataPtr, SizeVal)`
 
 Synthesizes standard `fill()` methods for fixed-size tuple containers:
 
@@ -255,7 +275,7 @@ Synthesizes standard `fill()` methods for fixed-size tuple containers:
     }
 ```
 
-### 4.2 `SQLITE_DERIVE_STD_VEC_METHODS(ContainerType)`
+### 4.3 `SQLITE_DERIVE_STD_VEC_METHODS(ContainerType)`
 
 Synthesizes complete `std::vector` compliant modifiers:
 - `max_size()`

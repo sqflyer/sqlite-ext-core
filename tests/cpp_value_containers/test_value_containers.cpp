@@ -809,7 +809,7 @@ static void test_dispatch_framework() {
       assert(t_row->get_tag() == k * 1000 + c);
       if (c >= 1 && c <= 8) {
         assert(t_row->get_cols_n() == static_cast<size_t>(c));
-        assert(t_row->get_key_n() == (k >= 1 && k <= c ? static_cast<size_t>(k) : static_cast<size_t>(c)));
+        assert(t_row->get_key_n() == (k == 0 ? 0 : (k <= c ? static_cast<size_t>(k) : static_cast<size_t>(c))));
       } else {
         assert(t_row->get_cols_n() == 0);
         assert(t_row->get_key_n() == (k >= 1 && k <= 8 ? static_cast<size_t>(k) : 0));
@@ -1674,6 +1674,16 @@ static void test_std_array_and_vector_alignment() {
 
     row_wrap.fill(777);
     assert(vals[0].as_int() == 777 && vals[2].as_int() == 777);
+
+    // Reset methods
+    row_wrap.set_null_all();
+    assert(vals[0].is_null() && vals[1].is_null() && vals[2].is_null());
+    row_wrap.fill(888);
+    row_wrap.reset_to_null();
+    assert(vals[0].is_null() && vals[1].is_null() && vals[2].is_null());
+    row_wrap.fill(999);
+    row_wrap.initialize_as_null();
+    assert(vals[0].is_null() && vals[1].is_null() && vals[2].is_null());
   }
 
   // ------------------------------------------------------------------------

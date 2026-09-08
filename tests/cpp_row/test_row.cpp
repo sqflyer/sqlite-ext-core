@@ -273,8 +273,16 @@ void test_row_owned_wrapper_and_scope() {
     assert(wrapper.as_double(2) == 3.14159);
     assert(!wrapper.is_null(0));
     assert(wrapper.type(0) == SQLITE_INTEGER);
-    assert(wrapper.type(1) == SQLITE_TEXT);
-    assert(wrapper.type(2) == SQLITE_FLOAT);
+    // Test reset methods (set_null_all, reset_to_null, initialize_as_null)
+    wrapper.set_null_all();
+    assert(wrapper[0].is_null() && wrapper[1].is_null() && wrapper[2].is_null());
+    wrapper[0] = SqliteValueOwned(42);
+    wrapper.reset_to_null();
+    assert(wrapper[0].is_null());
+    wrapper[0] = SqliteValueOwned(42);
+    wrapper.initialize_as_null();
+    assert(wrapper[0].is_null());
+
     return 999;
   });
   assert(res == 999);

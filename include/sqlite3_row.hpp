@@ -494,6 +494,32 @@ public:
   inline constexpr size_type max_size() const noexcept { return (MaxSizeVal); }
 #endif
 
+#ifndef SQLITE_DERIVE_CONTAINER_RESET_METHODS
+/**
+ * @def SQLITE_DERIVE_CONTAINER_RESET_METHODS
+ * @brief Synthesizes set_null_all(), reset_to_null(), and initialize_as_null()
+ *        for fixed and dynamic tuple, vector, and row wrapper containers.
+ * @param DataPtr Contiguous pointer to beginning of elements.
+ * @param SizeVal Number of elements.
+ */
+#define SQLITE_DERIVE_CONTAINER_RESET_METHODS(DataPtr, SizeVal)                \
+  /** @brief Resets all columns/elements in the container to SQLITE_NULL. */   \
+  inline void set_null_all() noexcept {                                        \
+    size_t sz = static_cast<size_t>(SizeVal);                                  \
+    for (size_t i = 0; i < sz; ++i) {                                          \
+      (DataPtr)[i].set_null();                                                 \
+    }                                                                          \
+  }                                                                            \
+  /** @brief Resets all columns/elements in the container to SQLITE_NULL. */   \
+  inline void reset_to_null() noexcept {                                       \
+    set_null_all();                                                            \
+  }                                                                            \
+  /** @brief Initializes all columns/elements in the container to SQLITE_NULL. */ \
+  inline void initialize_as_null() noexcept {                                  \
+    set_null_all();                                                            \
+  }
+#endif
+
 // ============================================================================
 // Macro Helpers for Complete Relational Operators
 // ============================================================================
@@ -1500,6 +1526,8 @@ public:
     for (int i = 0; i < m_len; ++i)
       m_data[i] = SqliteValueOwned(val);
   }
+
+  SQLITE_DERIVE_CONTAINER_RESET_METHODS(m_data, m_len)
 
   // Typed Column Extraction Accessors, Composite Hashing & Legacy Iterator
   SQLITE_DERIVE_ARRAY_ACCESSORS
