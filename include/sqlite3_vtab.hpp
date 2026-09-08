@@ -224,6 +224,18 @@ public:
      */
     virtual ~SqliteVTable() = default;
 
+    /**
+     * @brief Called when a connection disconnects from the virtual table (xDisconnect).
+     * Override if per-connection teardown logic is needed before destruction.
+     */
+    virtual int disconnect() { return SQLITE_OK; }
+
+    /**
+     * @brief Called when the virtual table is dropped via DROP TABLE (xDestroy).
+     * Override to delete underlying persistent or shared storage.
+     */
+    virtual int destroy() { return disconnect(); }
+
     // Provide class-specific delete to prevent linker errors with -nostdlib++
     void operator delete(void* p) noexcept { sqlite3_free(p); }
     void operator delete(void* p, size_t) noexcept { sqlite3_free(p); }
@@ -385,14 +397,32 @@ private:
         TableWrapper* wrapper = reinterpret_cast<TableWrapper*>(pVTab);
         if (wrapper->base.zErrMsg) {
             sqlite3_free(wrapper->base.zErrMsg);
+            wrapper->base.zErrMsg = nullptr;
         }
-        sqlite_delete(wrapper->instance);
+        int rc = SQLITE_OK;
+        if (wrapper->instance) {
+            rc = wrapper->instance->disconnect();
+            sqlite_delete(wrapper->instance);
+            wrapper->instance = nullptr;
+        }
         sqlite_delete(wrapper);
-        return SQLITE_OK;
+        return rc;
     }
 
     static int xDestroy(sqlite3_vtab* pVTab) {
-        return xDisconnect(pVTab);
+        TableWrapper* wrapper = reinterpret_cast<TableWrapper*>(pVTab);
+        if (wrapper->base.zErrMsg) {
+            sqlite3_free(wrapper->base.zErrMsg);
+            wrapper->base.zErrMsg = nullptr;
+        }
+        int rc = SQLITE_OK;
+        if (wrapper->instance) {
+            rc = wrapper->instance->destroy();
+            sqlite_delete(wrapper->instance);
+            wrapper->instance = nullptr;
+        }
+        sqlite_delete(wrapper);
+        return rc;
     }
 
     static int xOpen(sqlite3_vtab* pVTab, sqlite3_vtab_cursor** ppCursor) {

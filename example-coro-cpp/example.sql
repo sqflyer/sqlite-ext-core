@@ -81,3 +81,14 @@ SELECT
 -- | total_tasks_completed | global_accumulated_sum |
 -- |:----------------------|:-----------------------|
 -- | 6                     | 1410                   |
+
+-- %% Scenario 7: Query Coroutine Metrics Virtual Table (Eponymous)
+SELECT 
+    tasks_completed,
+    global_sum,
+    active_conns
+FROM coro_metrics;
+-- @snapshot
+-- | tasks_completed | global_sum | active_conns |
+-- |:----------------|:-----------|:-------------|
+-- | 6               | 1410       | 1            |

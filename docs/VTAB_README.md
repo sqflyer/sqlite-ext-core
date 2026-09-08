@@ -322,6 +322,48 @@ When an invalid query executes, SQLite reports:
 
 ---
 
+## Virtual Table Lifecycle Management: `disconnect()` vs `destroy()`
+
+`SqliteVTable` provides distinct virtual lifecycle hooks separating connection disconnection from table destruction:
+
+1. **`disconnect()` (`xDisconnect`)**:
+   - Invoked when a database connection closes (`sqlite3_close()`) or detaches from the virtual table.
+   - Override to flush connection-bound buffers, release connection resources, or detach listeners.
+   - Default implementation returns `SQLITE_OK`.
+
+2. **`destroy()` (`xDestroy`)**:
+   - Invoked when the virtual table is explicitly dropped via `DROP TABLE`.
+   - Override to delete underlying persistent disk files, drop shadow tables, or purge shared state.
+   - Default implementation delegates directly to `disconnect()`.
+
+```cpp
+class PersistentStorageTable : public SqliteVTable {
+public:
+    PersistentStorageTable(sqlite3* db) : SqliteVTable(db) {}
+
+    int disconnect() override {
+        // 1. Flush per-connection write-ahead buffer or decrement connection refcount
+        flush_connection_buffer();
+        return SQLITE_OK;
+    }
+
+    int destroy() override {
+        // 1. Teardown connection state
+        disconnect();
+
+        // 2. Permanently delete underlying storage file on disk when DROP TABLE runs
+        delete_persistent_file("/var/data/my_table.dat");
+        return SQLITE_OK;
+    }
+};
+```
+
+> [!IMPORTANT]
+> **Multi-Connection Storage Sharing**:
+> Separating `disconnect()` from `destroy()` is critical for engines shared across multiple active database connections (such as in-memory key-value stores or shared process caches). When Connection A closes, SQLite triggers `disconnect()`, cleaning up Connection A's resources while leaving the shared tables intact for Connection B. Only an explicit `DROP TABLE` triggers `destroy()`.
+
+---
+
 ## Eponymous Virtual Tables (Table-Valued Functions)
 
 For tables that can be queried directly without `CREATE VIRTUAL TABLE` statements:

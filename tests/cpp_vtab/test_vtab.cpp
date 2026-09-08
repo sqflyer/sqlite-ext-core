@@ -578,9 +578,110 @@ void test_vtab_error_messages() {
     printf("All Virtual Table Error Message Propagation Tests Passed!\n");
 }
 
+// ============================================================================
+// 7. Lifecycle Test Table (Comprehensive disconnect() & destroy() tests)
+// ============================================================================
+
+class LifecycleTable : public SqliteVTable {
+public:
+    static int s_connect_count;
+    static int s_disconnect_count;
+    static int s_destroy_count;
+
+    explicit LifecycleTable(sqlite3* db) : SqliteVTable(db) {}
+
+    static int connect(SqliteConnectArgs& args) {
+        int rc = sqlite3_declare_vtab(args.db(), "CREATE TABLE x(id, val)");
+        if (rc == SQLITE_OK) {
+            s_connect_count++;
+            args.set_instance(sqlite_new<LifecycleTable>(args.db()));
+        }
+        return rc;
+    }
+
+    int bestIndex(SqliteIndexInfo& info) override {
+        info.set_estimated_cost(10.0);
+        return SQLITE_OK;
+    }
+
+    SqliteVTabCursor* open() override {
+        return sqlite_new<SeriesCursor>();
+    }
+
+    int disconnect() override {
+        s_disconnect_count++;
+        return SQLITE_OK;
+    }
+
+    int destroy() override {
+        s_destroy_count++;
+        return disconnect();
+    }
+};
+
+int LifecycleTable::s_connect_count = 0;
+int LifecycleTable::s_disconnect_count = 0;
+int LifecycleTable::s_destroy_count = 0;
+
+void test_vtab_disconnect_and_destroy() {
+    printf("Testing Virtual Table disconnect() and destroy() Lifecycle Hooks...\n");
+
+    LifecycleTable::s_connect_count = 0;
+    LifecycleTable::s_disconnect_count = 0;
+    LifecycleTable::s_destroy_count = 0;
+
+    // 1. Test disconnect() called on sqlite3_close
+    {
+        sqlite3* db = nullptr;
+        assert(sqlite3_open(":memory:", &db) == SQLITE_OK);
+
+        int rc = SqliteVTab::define<LifecycleTable>(db, "lifecycle_tab");
+        assert(rc == SQLITE_OK);
+
+        rc = sqlite3_exec(db, "CREATE VIRTUAL TABLE t1 USING lifecycle_tab;", nullptr, nullptr, nullptr);
+        assert(rc == SQLITE_OK);
+        assert(LifecycleTable::s_connect_count == 1);
+        assert(LifecycleTable::s_disconnect_count == 0);
+        assert(LifecycleTable::s_destroy_count == 0);
+
+        // Closing the connection triggers xDisconnect
+        assert(sqlite3_close(db) == SQLITE_OK);
+        assert(LifecycleTable::s_disconnect_count == 1);
+        assert(LifecycleTable::s_destroy_count == 0);
+    }
+
+    // 2. Test destroy() called on DROP TABLE
+    {
+        sqlite3* db = nullptr;
+        assert(sqlite3_open(":memory:", &db) == SQLITE_OK);
+
+        int rc = SqliteVTab::define<LifecycleTable>(db, "lifecycle_tab");
+        assert(rc == SQLITE_OK);
+
+        rc = sqlite3_exec(db, "CREATE VIRTUAL TABLE t2 USING lifecycle_tab;", nullptr, nullptr, nullptr);
+        assert(rc == SQLITE_OK);
+        assert(LifecycleTable::s_connect_count == 2);
+
+        // DROP TABLE triggers xDestroy
+        rc = sqlite3_exec(db, "DROP TABLE t2;", nullptr, nullptr, nullptr);
+        assert(rc == SQLITE_OK);
+        assert(LifecycleTable::s_destroy_count == 1);
+        // destroy() called disconnect() in our implementation
+        assert(LifecycleTable::s_disconnect_count == 2);
+
+        // Closing DB should not trigger disconnect again for dropped table
+        assert(sqlite3_close(db) == SQLITE_OK);
+        assert(LifecycleTable::s_destroy_count == 1);
+        assert(LifecycleTable::s_disconnect_count == 2);
+    }
+
+    printf("All Virtual Table disconnect() and destroy() Lifecycle Tests Passed!\n");
+}
+
 int main() {
     test_vtab();
     test_vtab_error_messages();
+    test_vtab_disconnect_and_destroy();
     return 0;
 }
 

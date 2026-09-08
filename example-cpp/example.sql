@@ -125,6 +125,17 @@ ORDER BY val;
 -- | 6             | 8        |
 -- | 9             | 34       |
 
--- %% Scenario 7: Clean Teardown
+-- %% Scenario 7: Full Virtual Table & Lifecycle (session_log)
+CREATE VIRTUAL TABLE my_session_log USING session_log;
+
+SELECT id, tag FROM my_session_log;
+-- @snapshot
+-- | id | tag            |
+-- |:---|:---------------|
+-- | 1  | ACTIVE_SESSION |
+-- | 2  | ACTIVE_SESSION |
+
+-- %% Scenario 8: Clean Teardown (triggers xDestroy on virtual table)
+DROP TABLE my_session_log;
 DROP TABLE sample_numbers;
 

@@ -89,7 +89,69 @@ static void sql_coro_cpp_ref_count(SqliteContext ctx, SqliteUdfArgs args) {
 }
 
 // ============================================================================
-// 3. Extension Lifecycle & Registration
+// 3. Coroutine Metrics Virtual Table (with disconnect & destroy lifecycle hooks)
+// ============================================================================
+class CoroMetricsCursor : public SqliteVTabCursor {
+private:
+    int m_row = 0;
+public:
+    int filter(int, const char*, SqliteUdfArgs) override {
+        m_row = 1;
+        return SQLITE_OK;
+    }
+    int next() override {
+        m_row++;
+        return SQLITE_OK;
+    }
+    bool eof() override {
+        return m_row > 1;
+    }
+    int column(SqliteContext& ctx, int N) override {
+        if (N == 0) ctx.result_int(g_cpp_total_tasks.load());
+        else if (N == 1) ctx.result_int(g_cpp_global_sum.load());
+        else if (N == 2) ctx.result_int(ExampleCoroPool::ref_count());
+        return SQLITE_OK;
+    }
+    int rowid(sqlite3_int64& pRowid) override {
+        pRowid = m_row;
+        return SQLITE_OK;
+    }
+};
+
+class CoroMetricsTable : public SqliteVTable {
+public:
+    explicit CoroMetricsTable(sqlite3* db) : SqliteVTable(db) {}
+
+    static int connect(SqliteConnectArgs& args) {
+        int rc = sqlite3_declare_vtab(args.db(), "CREATE TABLE x(tasks_completed INT, global_sum INT, active_conns INT)");
+        if (rc == SQLITE_OK) {
+            args.set_instance(sqlite_new<CoroMetricsTable>(args.db()));
+        }
+        return rc;
+    }
+
+    int bestIndex(SqliteIndexInfo& info) override {
+        info.set_estimated_cost(1.0);
+        return SQLITE_OK;
+    }
+
+    SqliteVTabCursor* open() override {
+        return sqlite_new<CoroMetricsCursor>();
+    }
+
+    // Lifecycle hook: called on connection disconnect (xDisconnect)
+    int disconnect() override {
+        return SQLITE_OK;
+    }
+
+    // Lifecycle hook: called on DROP TABLE (xDestroy)
+    int destroy() override {
+        return disconnect();
+    }
+};
+
+// ============================================================================
+// 4. Extension Lifecycle & Registration
 // ============================================================================
 
 static void on_db_disconnect(void* arg) {
@@ -118,6 +180,9 @@ static int register_coro_cpp_extension(SqliteDatabaseView db) {
     SqliteExt::define_scalar(db, "coro_cpp_global_sum", 0, sql_coro_cpp_global_sum);
     SqliteExt::define_scalar(db, "coro_cpp_tasks_completed", 0, sql_coro_cpp_tasks_completed);
     SqliteExt::define_scalar(db, "coro_cpp_ref_count", 0, sql_coro_cpp_ref_count);
+
+    // 3. Register Virtual Table for pool metrics inspection
+    SqliteExt::define_vtab<CoroMetricsTable, VTabOptions::Eponymous>(db, "coro_metrics");
 
     return SQLITE_OK;
 }

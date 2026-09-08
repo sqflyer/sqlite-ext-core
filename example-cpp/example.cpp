@@ -168,7 +168,68 @@ struct FibonacciIterator : public SqliteTvfIterator {
 };
 
 // ============================================================================
-// 5. Extension Entrypoint: Named (sqlite3_example_init) & Default (sqlite3_extension_init)
+// 5. Full Virtual Table: session_log (with disconnect & destroy lifecycle hooks)
+// ============================================================================
+class SessionLogCursor : public SqliteVTabCursor {
+private:
+    int m_row = 0;
+public:
+    int filter(int, const char*, SqliteUdfArgs) override {
+        m_row = 1;
+        return SQLITE_OK;
+    }
+    int next() override {
+        m_row++;
+        return SQLITE_OK;
+    }
+    bool eof() override {
+        return m_row > 2;
+    }
+    int column(SqliteContext& ctx, int N) override {
+        if (N == 0) ctx.result_int(m_row);
+        else if (N == 1) ctx.result_text("ACTIVE_SESSION");
+        return SQLITE_OK;
+    }
+    int rowid(sqlite3_int64& pRowid) override {
+        pRowid = m_row;
+        return SQLITE_OK;
+    }
+};
+
+class SessionLogTable : public SqliteVTable {
+public:
+    explicit SessionLogTable(sqlite3* db) : SqliteVTable(db) {}
+
+    static int connect(SqliteConnectArgs& args) {
+        int rc = sqlite3_declare_vtab(args.db(), "CREATE TABLE x(id INT, tag TEXT)");
+        if (rc == SQLITE_OK) {
+            args.set_instance(sqlite_new<SessionLogTable>(args.db()));
+        }
+        return rc;
+    }
+
+    int bestIndex(SqliteIndexInfo& info) override {
+        info.set_estimated_cost(10.0);
+        return SQLITE_OK;
+    }
+
+    SqliteVTabCursor* open() override {
+        return sqlite_new<SessionLogCursor>();
+    }
+
+    // Lifecycle hook: called when connection closes (xDisconnect)
+    int disconnect() override {
+        return SQLITE_OK;
+    }
+
+    // Lifecycle hook: called on DROP TABLE (xDestroy)
+    int destroy() override {
+        return disconnect();
+    }
+};
+
+// ============================================================================
+// 6. Extension Entrypoint: Named (sqlite3_example_init) & Default (sqlite3_extension_init)
 // ============================================================================
 
 static int register_all_components(SqliteDatabaseView db) {
@@ -197,6 +258,10 @@ static int register_all_components(SqliteDatabaseView db) {
 
     // 4. Register TVF
     rc = SqliteExt::define_tvf<FibonacciIterator>(db, "fibonacci");
+    if (rc != SQLITE_OK) return rc;
+
+    // 5. Register Full Virtual Table
+    rc = SqliteExt::define_vtab<SessionLogTable>(db, "session_log");
     if (rc != SQLITE_OK) return rc;
 
     return SQLITE_OK;

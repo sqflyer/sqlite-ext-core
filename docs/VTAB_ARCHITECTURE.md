@@ -139,7 +139,66 @@ static constexpr sqlite3_module module_def = {
 
 ---
 
-## 5. Unified Error Propagation Architecture (`zErrMsg` Lifecycle)
+## 5. Lifecycle Architecture: `xDisconnect` & `xDestroy` Dispatch
+
+SQLite distinguishes between connection closure (`xDisconnect`) and table destruction (`xDestroy` via `DROP TABLE`):
+
+```
+                       ┌──────────────────────────────────────────────┐
+                       │               SQLite Engine                  │
+                       └──────────────────────┬───────────────────────┘
+                                              │
+                      ┌───────────────────────┴───────────────────────┐
+                      │                                               │
+             sqlite3_close() / detach                            DROP TABLE
+                      │                                               │
+                      v                                               v
+          ┌───────────────────────┐                       ┌───────────────────────┐
+          │     xDisconnect       │                       │       xDestroy        │
+          └───────────┬───────────┘                       └───────────┬───────────┘
+                      │                                               │
+                      v                                               v
+          ┌───────────────────────┐                       ┌───────────────────────┐
+          │ instance->disconnect()│                       │  instance->destroy()  │
+          └───────────┬───────────┘                       └───────────┬───────────┘
+                      │                                               │ (defaults to disconnect())
+                      │                                               v
+                      │                                   ┌───────────────────────┐
+                      │                                   │ instance->disconnect()│
+                      │                                   └───────────┬───────────┘
+                      │                                               │
+                      └───────────────────────┬───────────────────────┘
+                                              │
+                                              v
+                              ┌───────────────────────────────┐
+                              │ sqlite3_free(zErrMsg)         │
+                              │ sqlite_delete(instance)       │
+                              │ sqlite_delete(wrapper)        │
+                              └───────────────────────────────┘
+```
+
+### Dispatch Sequence
+1. **`xDisconnect`**:
+   - Frees any active `base.zErrMsg` allocation.
+   - Dispatches polymorphic `wrapper->instance->disconnect()`.
+   - Calls `sqlite_delete(wrapper->instance)` to invoke the C++ destructor.
+   - Calls `sqlite_delete(wrapper)` to release the `sqlite3_vtab` wrapper struct.
+2. **`xDestroy`**:
+   - Frees any active `base.zErrMsg` allocation.
+   - Dispatches polymorphic `wrapper->instance->destroy()` (which delegates to `disconnect()` by default).
+   - Calls `sqlite_delete(wrapper->instance)` to invoke the C++ destructor.
+   - Calls `sqlite_delete(wrapper)` to release the `sqlite3_vtab` wrapper struct.
+
+### Multi-Connection Shared State & Storage Architecture
+When multiple SQLite database connections attach to the same shared virtual table engine (e.g., in-memory key-value stores or process-level caches):
+- Each connection instantiates its own `TableWrapper` via `xConnect`.
+- When Connection 1 terminates, SQLite executes `xDisconnect`, invoking `disconnect()` to clean up Connection 1's local handles and decrement connection reference counters without destroying shared state.
+- Other active connections (Connection 2, Connection 3) continue operating on the underlying shared storage completely uninterrupted.
+- Only when an explicit `DROP TABLE` DDL statement is executed does SQLite route to `xDestroy`, invoking `destroy()` to purge persistent files and shared process tables.
+
+---
+
+## 6. Unified Error Propagation Architecture (`zErrMsg` Lifecycle)
 
 SQLite virtual tables report descriptive error messages by allocating a null-terminated string via `sqlite3_mprintf` / `sqlite3_malloc` and assigning it to `pVTab->zErrMsg`.
 
