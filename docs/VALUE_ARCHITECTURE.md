@@ -127,12 +127,12 @@ static_assert(sizeof(SqliteValueOwned) == 24, "Must be exactly 24 bytes!");
 
 ```
 Struct 1: SqliteTypeRep (Primitives & Large Heap Payloads)
-Byte Offset:  0       4       8      11  12      13              21  22      23
-              ┌───────────────────────┬───┬───────┬───────────────────┬───────┬───────┐
-              │ payload union         │hp_│aff-   │reserved[9]        │sub-   │tag    │
-              │ (iValue/dValue/pData/ │len│inity  │                   │tag    │byte   │
-              │  ptrVal) [8 Bytes]    │[4]│[1B]   │[9 Bytes]          │[1B]   │[1B]   │
-              └───────────────────────┴───┴───────┴───────────────────┴───────┴───────┘
+Byte Offset:  0       4       8      11  12  13  14              21  22      23
+              ┌───────────────────────┬───┬───┬───────────────────┬───────┬───────┐
+              │ payload union         │hp_│aff│bor│reserved[8]    │sub-   │tag    │
+              │ (iValue/dValue/pData/ │len│ini│row│               │tag    │byte   │
+              │  ptrVal) [8 Bytes]    │[4]│[1]│[1]│[8 Bytes]      │[1B]   │[1B]   │
+              └───────────────────────┴───┴───┴───────────────────┴───────┴───────┘
 
 Struct 2: InlineBufferRep (Short Strings & Blobs - SBO)
 Byte Offset:  0                                                   21  22      23
@@ -160,10 +160,26 @@ Byte Offset:  0                               15  16  17          21  22      23
    * `ptrVal` (`void*`): Opaque C/C++ typed pointer passed via `sqlite3_bind_pointer` / `from_pointer<T>()`. By isolating pointers to `ptrVal`, client pointers are strictly decoupled from `pData`, guaranteeing that `free_heap()` never frees client pointers and preventing any heap length contamination.
 2. **`heap_len` (Offset 8..11, 4 Bytes)**: Explicit byte length for heap-allocated text/blob values (set to `0` for primitives and pointers).
 3. **`affinity` (Offset 12, 1 Byte)**: Native SQLite affinity character (`SQLITE_AFF_INTEGER='D'`, `SQLITE_AFF_REAL='E'`, `SQLITE_AFF_TEXT='B'`, `SQLITE_AFF_BLOB='A'`, `SQLITE_AFF_NONE='@'`).
-4. **`reserved[9]` (Offset 13..21, 9 Bytes)**: Reserved for ABI compatibility and future engine flags (always zeroed).
-5. **`flags` (Offset 16 in `InlineUuidRep`, 1 Byte)**: Orthogonal formatting flags (`SqliteUuidUtil::UuidFormatFlags`) controlling canonical string conversion.
-6. **`subtag` (Offset 22, 1 Byte - SHARED)**: Control subtag register (`SqliteOwnedValueSubTag`) holding bit 7 immutability flag and bits 0..6 SQLite subtype (`'J'`, `'D'`, `'U'`, `'V'`, `'G'`, `'T'`, `'B'`, `'Z'`, `'p'`).
-7. **`tag` (Offset 23, 1 Byte - SHARED)**: Bit-packed control register (`SqliteOwnedValueTag`) holding 3-bit state and 5-bit inline length.
+4. **`is_borrowed` (Offset 13, 1 Byte)**: Zero-copy borrowed buffer flag (`bool`). When `true`, `payload.pData` points to memory owned by an external subsystem (e.g. Lua stack string, `mmap` file, or static literal). `free_heap()` safely bypasses `sqlite3_free()`.
+5. **`reserved[8]` (Offset 14..21, 8 Bytes)**: Reserved for ABI compatibility and future engine flags (always zeroed).
+6. **`flags` (Offset 16 in `InlineUuidRep`, 1 Byte)**: Orthogonal formatting flags (`SqliteUuidUtil::UuidFormatFlags`) controlling canonical string conversion.
+7. **`subtag` (Offset 22, 1 Byte - SHARED)**: Control subtag register (`SqliteOwnedValueSubTag`) holding bit 7 immutability flag and bits 0..6 SQLite subtype (`'J'`, `'D'`, `'U'`, `'V'`, `'G'`, `'T'`, `'B'`, `'Z'`, `'p'`).
+8. **`tag` (Offset 23, 1 Byte - SHARED)**: Bit-packed control register (`SqliteOwnedValueTag`) holding 3-bit state and 5-bit inline length.
+
+### Zero-Copy Borrowed Buffers (`is_borrowed`)
+
+`SqliteValueOwned` provides zero-allocation adoption of externally owned buffers:
+- `from_borrowed_text(const char* text, int len = -1, uint8_t subtype = SQLITE_SUBTYPE_NONE)`
+- `from_borrowed_blob(const void* data, int len, uint8_t subtype = SQLITE_SUBTYPE_NONE)`
+
+If the payload fits within inline SBO limits ($\le 21\text{B}$ text, $\le 22\text{B}$ blob), it is copied directly into `m_inline.buf`. If it exceeds inline limits, it points directly to the external buffer via `payload.pData` and sets `is_borrowed = true`. When destructed, `free_heap()` skips calling `sqlite3_free()`. Calling `.clone()` or `.try_clone()` promotes a borrowed value to an owned heap allocation by deep-copying into a fresh `sqlite3_malloc64` buffer.
+
+#### Primary Use Cases
+1. **Scripting Interop (Lua, Python, QuickJS, WASM)**: Wrapping string arguments from foreign runtimes (e.g. `lua_tolstring()`) without heap allocations or GC pressure.
+2. **Memory-Mapped Tabular I/O (`mmap`, Arrow, Parquet)**: Ingesting columnar data slices directly from disk-mapped pages with zero memory copying.
+3. **Static Schema & String Literals**: Wrapping `.rodata` static strings and schemas without calling `sqlite3_malloc64`.
+4. **Filtering Pipelines with Deferred Promotion**: Evaluating SQL `WHERE` predicates on borrowed row candidates, calling `.clone()` only for retained rows.
+5. **Stack Scratch Formatting**: Consuming stack-formatted strings (`snprintf(scratch, ...)`) in downstream aggregators without heap allocation.
 
 ---
 

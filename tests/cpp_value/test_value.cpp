@@ -3808,6 +3808,88 @@ void test_datetime_exhaustive_suite(sqlite3* db) {
     sqlite3_finalize(stmt);
 }
 
+void test_borrowed_values() {
+    // 1. Short text (<= 21 bytes) -> inlined into 24-byte SBO struct
+    const char* short_str = "hello world";
+    SqliteValueOwned val_short = SqliteValueOwned::from_borrowed_text(short_str, 11);
+    assert(val_short.is_text());
+    assert(!val_short.is_heap_allocated());
+    assert(!val_short.is_borrowed());
+    assert(val_short.as_text() == "hello world");
+
+    // 2. Long text (> 21 bytes) pointing to stack memory
+    // If free_heap() attempted to free this stack buffer, ASan would crash immediately!
+    char stack_buf[64];
+    snprintf(stack_buf, sizeof(stack_buf), "This is a long string that lives entirely on the stack frame!");
+    int stack_len = static_cast<int>(strlen(stack_buf));
+
+    {
+        SqliteValueOwned val_borrowed = SqliteValueOwned::from_borrowed_text(stack_buf, stack_len, SQLITE_SUBTYPE_JSON);
+        assert(val_borrowed.is_text());
+        assert(val_borrowed.is_heap_allocated());
+        assert(val_borrowed.is_borrowed());
+        assert(val_borrowed.subtype() == SQLITE_SUBTYPE_JSON);
+        assert(val_borrowed.as_text() == stack_buf);
+        assert(val_borrowed.as_text().data() == stack_buf); // Zero-copy pointer adoption!
+
+        // Deep copy via clone() must become an independent owned allocation
+        SqliteValueOwned cloned = val_borrowed.clone();
+        assert(cloned.is_text());
+        assert(cloned.is_heap_allocated());
+        assert(!cloned.is_borrowed()); // Cloned copy is owned!
+        assert(cloned.as_text() == stack_buf);
+        assert(cloned.as_text().data() != stack_buf); // Independent heap buffer
+
+        // try_clone() also creates an independent owned allocation
+        auto res_clone = val_borrowed.try_clone();
+        assert(res_clone.is_ok());
+        assert(res_clone.value().is_borrowed() == false);
+        assert(res_clone.value().as_text() == stack_buf);
+        assert(res_clone.value().as_text().data() != stack_buf);
+
+        // Move construction preserves borrowed state safely
+        SqliteValueOwned moved(sqlite_move(val_borrowed));
+        assert(moved.is_borrowed());
+        assert(val_borrowed.is_null()); // Source reset to null
+        assert(moved.as_text() == stack_buf);
+    } // Out of scope: must NOT call sqlite3_free on stack_buf!
+
+    // 3. Short blob (<= 22 bytes) -> inlined
+    const uint8_t short_blob[10] = {1, 2, 3, 4, 5, 6, 7, 8, 9, 10};
+    SqliteValueOwned b_short = SqliteValueOwned::from_borrowed_blob(short_blob, 10);
+    assert(b_short.is_blob());
+    assert(!b_short.is_heap_allocated());
+    assert(!b_short.is_borrowed());
+    assert(b_short.as_blob().size() == 10);
+
+    // 4. Long blob (> 22 bytes) on stack
+    uint8_t long_blob[32];
+    memset(long_blob, 0xEE, sizeof(long_blob));
+    {
+        SqliteValueOwned b_borrowed = SqliteValueOwned::from_borrowed_blob(long_blob, 32);
+        assert(b_borrowed.is_blob());
+        assert(b_borrowed.is_heap_allocated());
+        assert(b_borrowed.is_borrowed());
+        assert(b_borrowed.as_blob().size() == 32);
+        assert(b_borrowed.as_blob().data() == long_blob); // Zero copy
+
+        // Deep copy via clone()
+        SqliteValueOwned b_cloned = b_borrowed.clone();
+        assert(!b_cloned.is_borrowed());
+        assert(b_cloned.as_blob().data() != long_blob);
+
+        // Idempotent set_null() does not free
+        b_borrowed.set_null();
+        assert(b_borrowed.is_null());
+    }
+
+    // 5. Null or empty string handling
+    SqliteValueOwned null_borrowed = SqliteValueOwned::from_borrowed_text(nullptr);
+    assert(null_borrowed.is_null());
+    SqliteValueOwned empty_borrowed = SqliteValueOwned::from_borrowed_text("", 0);
+    assert(empty_borrowed.is_null());
+}
+
 int main() {
     sqlite3_initialize();
     
@@ -3816,6 +3898,9 @@ int main() {
         printf("Failed to open sqlite db\n");
         return 1;
     }
+
+    printf("Testing Borrowed Values (Zero-Copy Pointers & Safe Destructor)...\n");
+    test_borrowed_values();
 
     printf("Testing String Types...\n");
     test_string_types(db);

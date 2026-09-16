@@ -1643,7 +1643,8 @@ static_assert(sizeof(SqliteOwnedValueSubTag) == 1, "SqliteOwnedValueSubTag must 
  * - Bytes  0..7  (Offset 0..7)  : 8-byte aligned primitive union (iValue, dValue, pData, ptrVal)
  * - Bytes  8..11 (Offset 8..11) : 4-byte heap payload length (heap_len)
  * - Byte   12    (Offset 12)    : 1-byte Native SQLite Affinity character ('@', 'A'..'F')
- * - Bytes  13..21(Offset 13..21): 9-byte reserved padding for ABI extensions
+ * - Byte   13    (Offset 13)    : 1-byte Borrowed buffer flag (is_borrowed: true = do not sqlite3_free)
+ * - Bytes  14..21(Offset 14..21): 8-byte reserved padding for ABI extensions
  * - Byte   22    (Offset 22)    : 1-byte Sub-Tag Byte: Subtype + Immutability (SHARED AT OFFSET 22)
  * - Byte   23    (Offset 23)    : 1-byte Control Tag (SHARED AT OFFSET 23)
  */
@@ -1657,7 +1658,8 @@ struct SqliteTypeRep {
     
     int32_t                 heap_len;    // 4 bytes (Offset 8..11: Byte length for heap text/blob)
     char                    affinity;    // 1 byte  (Offset 12: Native SQLite affinity '@', 'A'..'F')
-    uint8_t                 reserved[9]; // 9 bytes (Offset 13..21: Reserved for future ABI extensions)
+    bool                    is_borrowed; // 1 byte  (Offset 13: Borrowed buffer flag, do not sqlite3_free)
+    uint8_t                 reserved[8]; // 8 bytes (Offset 14..21: Reserved for future ABI extensions)
     SqliteOwnedValueSubTag  subtag;      // 1 byte  (Offset 22: Shared Sub-Tag: Subtype + Immutability)
     SqliteOwnedValueTag     tag;         // 1 byte  (Offset 23: Bit-packed State + Length / Flags)
 };
@@ -1720,10 +1722,10 @@ private:
      * @brief Safely releases heap memory if currently owning an allocated buffer.
      */
     inline void free_heap() noexcept {
-        if (is_heap_allocated() && m_sqlite.payload.pData) {
+        if (is_heap_allocated() && !is_borrowed() && m_sqlite.payload.pData) {
             sqlite3_free(m_sqlite.payload.pData);
-            m_sqlite.payload.pData = nullptr;
         }
+        m_sqlite.payload.pData = nullptr;
     }
 
     /**
@@ -1741,6 +1743,7 @@ private:
         m_sqlite.payload.pData = nullptr;
         m_sqlite.heap_len = 0;
         m_sqlite.affinity = SQLITE_AFF_NONE;
+        m_sqlite.is_borrowed = false;
         memset(m_sqlite.reserved, 0, sizeof(m_sqlite.reserved));
         m_sqlite.subtag.set(SQLITE_SUBTYPE_NONE, is_imm);
         set_tag(SQLITE_NULL, false, 0);
@@ -1756,6 +1759,7 @@ private:
         m_sqlite.payload.iValue = i;
         m_sqlite.heap_len = 0;
         m_sqlite.affinity = aff;
+        m_sqlite.is_borrowed = false;
         memset(m_sqlite.reserved, 0, sizeof(m_sqlite.reserved));
         m_sqlite.subtag.set(sub, is_imm);
         set_tag(SQLITE_INTEGER, false, 0);
@@ -1771,6 +1775,7 @@ private:
         m_sqlite.payload.dValue = d;
         m_sqlite.heap_len = 0;
         m_sqlite.affinity = aff;
+        m_sqlite.is_borrowed = false;
         memset(m_sqlite.reserved, 0, sizeof(m_sqlite.reserved));
         m_sqlite.subtag.set(sub, is_imm);
         set_tag(SQLITE_FLOAT, false, 0);
@@ -1818,6 +1823,7 @@ private:
             m_sqlite.payload.pData = buf;
             m_sqlite.heap_len = n;
             m_sqlite.affinity = aff;
+            m_sqlite.is_borrowed = false;
             memset(m_sqlite.reserved, 0, sizeof(m_sqlite.reserved));
             m_sqlite.subtag.set(sub, is_imm);
             set_tag(type, true, 0);
@@ -1883,8 +1889,10 @@ private:
                     memcpy(buf, other.m_sqlite.payload.pData, alloc_sz);
                 }
                 m_sqlite.payload.pData = buf;
+                m_sqlite.is_borrowed = false; // Deep copies are always owned
             } else {
                 m_sqlite.payload.pData = nullptr;
+                m_sqlite.is_borrowed = false;
             }
         }
     }
@@ -2235,6 +2243,75 @@ public:
         return from_blob(compressed_data, byte_len, SQLITE_SUBTYPE_COMPRESSED, is_immutable);
     }
 
+    /**
+     * @brief Zero-copy moves/borrows an existing string pointer without allocating or copying.
+     * Guaranteed safe for the duration of a function call where Lua or caller retains the string on its stack/memory.
+     *
+     * @param text String pointer (caller guarantees lifetime).
+     * @param len Length in bytes (or -1 to auto-calculate length via strlen).
+     * @param subtype Optional SQLite subtype.
+     */
+    static inline SqliteValueOwned from_borrowed_text(const char* text, int len = -1, uint8_t subtype = SQLITE_SUBTYPE_NONE) noexcept {
+        SqliteValueOwned val;
+        if (!text) {
+            val.init_null();
+            return val;
+        }
+
+        if (len < 0) {
+            len = SqliteStringUtil::sqlite_strlen(text);
+        }
+        if (len <= 0) {
+            val.init_null();
+            return val;
+        }
+
+        // 1. If small (<= 21 bytes), inline into 24-byte SBO struct
+        if (len <= 21) {
+            val.init_text(text, len, subtype);
+            return val;
+        }
+
+        // 2. If large (> 21 bytes), adopt pointer directly with ZERO heap allocation:
+        val.m_sqlite.payload.pData = const_cast<char*>(text);
+        val.m_sqlite.heap_len      = len;
+        val.m_sqlite.affinity      = SQLITE_AFF_TEXT;
+        val.m_sqlite.is_borrowed   = true; // Do NOT call sqlite3_free()!
+        memset(val.m_sqlite.reserved, 0, sizeof(val.m_sqlite.reserved));
+        val.m_sqlite.subtag.set(subtype, false);
+        val.set_tag(SQLITE_TEXT, true, 0); // is_heap = true, but borrowed
+        return val;
+    }
+
+    /**
+     * @brief Zero-copy moves/borrows an existing binary blob pointer without allocating or copying.
+     *
+     * @param data Blob pointer (caller guarantees lifetime).
+     * @param len Length in bytes.
+     * @param subtype Optional SQLite subtype.
+     */
+    static inline SqliteValueOwned from_borrowed_blob(const void* data, int len, uint8_t subtype = SQLITE_SUBTYPE_NONE) noexcept {
+        SqliteValueOwned val;
+        if (!data || len <= 0) {
+            val.init_null();
+            return val;
+        }
+
+        if (len <= 22) {
+            val.init_blob(data, len, subtype);
+            return val;
+        }
+
+        val.m_sqlite.payload.pData = const_cast<char*>(static_cast<const char*>(data));
+        val.m_sqlite.heap_len      = len;
+        val.m_sqlite.affinity      = SQLITE_AFF_BLOB;
+        val.m_sqlite.is_borrowed   = true; // Do NOT call sqlite3_free()!
+        memset(val.m_sqlite.reserved, 0, sizeof(val.m_sqlite.reserved));
+        val.m_sqlite.subtag.set(subtype, false);
+        val.set_tag(SQLITE_BLOB, true, 0);
+        return val;
+    }
+
     /** @brief Attempts to construct an inline or heap-backed string value, returning SqliteResult. */
     static inline SqliteResult<SqliteValueOwned> try_from_text(const char* text, int len = -1, uint8_t subtype = SQLITE_SUBTYPE_NONE, bool is_immutable = false) {
         SqliteValueOwned val;
@@ -2339,6 +2416,7 @@ public:
         val.m_sqlite.payload.ptrVal = const_cast<void*>(static_cast<const void*>(ptr));
         val.m_sqlite.heap_len = 0;
         val.m_sqlite.affinity = SQLITE_AFF_NONE;
+        val.m_sqlite.is_borrowed = false;
         memset(val.m_sqlite.reserved, 0, sizeof(val.m_sqlite.reserved));
         val.m_sqlite.subtag.set(SQLITE_SUBTYPE_POINTER, is_immutable);
         val.set_tag(SQLITE_NULL, false, 0);
@@ -2534,7 +2612,8 @@ public:
      * - Offset 0..7:   `pData = nullptr` (64-bit zeroed pointer)
      * - Offset 8..11:  `heap_len = 0` (32-bit zeroed length)
      * - Offset 12:     `affinity = SQLITE_AFF_NONE`
-     * - Offset 13..21: `reserved[9] = {0}`
+     * - Offset 13:     `is_borrowed = false`
+     * - Offset 14..21: `reserved[8] = {0}`
      * - Offset 22:     `subtag = 0x00` (SQLITE_SUBTYPE_NONE, mutable)
      * - Offset 23:     `tag = 0xA0` (type = SQLITE_NULL = 5, heap = false, len = 0)
      * 
@@ -2671,6 +2750,7 @@ public:
         m_sqlite.payload.pData = buf;
         m_sqlite.heap_len = n;
         m_sqlite.affinity = SQLITE_AFF_TEXT;
+        m_sqlite.is_borrowed = false;
         memset(m_sqlite.reserved, 0, sizeof(m_sqlite.reserved));
         m_sqlite.subtag.set(sub, false);
         set_tag(SQLITE_TEXT, true, 0);
@@ -2703,6 +2783,7 @@ public:
         m_sqlite.payload.pData = buf;
         m_sqlite.heap_len = len;
         m_sqlite.affinity = SQLITE_AFF_BLOB;
+        m_sqlite.is_borrowed = false;
         memset(m_sqlite.reserved, 0, sizeof(m_sqlite.reserved));
         m_sqlite.subtag.set(sub, false);
         set_tag(SQLITE_BLOB, true, 0);
@@ -2723,6 +2804,7 @@ public:
         SqliteValueOwned res;
         memcpy(static_cast<void*>(&res), this, sizeof(SqliteValueOwned));
         res.m_sqlite.payload.pData = buf;
+        res.m_sqlite.is_borrowed = false;
         return SqliteResult<SqliteValueOwned>::ok(sqlite_move(res));
     }
 
@@ -2734,6 +2816,7 @@ public:
         m_sqlite.payload.ptrVal = const_cast<void*>(static_cast<const void*>(ptr));
         m_sqlite.heap_len = 0;
         m_sqlite.affinity = SQLITE_AFF_NONE;
+        m_sqlite.is_borrowed = false;
         memset(m_sqlite.reserved, 0, sizeof(m_sqlite.reserved));
         m_sqlite.subtag.set(SQLITE_SUBTYPE_POINTER, false);
         set_tag(SQLITE_NULL, false, 0);
@@ -2831,6 +2914,11 @@ public:
     /** @brief Checks if the value is allocated on the heap. */
     inline bool is_heap_allocated() const noexcept {
         return m_sqlite.tag.is_heap();
+    }
+
+    /** @brief Checks if this value holds a borrowed, non-owned external buffer. */
+    inline bool is_borrowed() const noexcept {
+        return is_heap_allocated() && m_sqlite.is_borrowed;
     }
 
     /** @brief Returns the length of inline text or blob payload (0..14). */

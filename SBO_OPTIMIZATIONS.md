@@ -69,11 +69,11 @@ $$\text{sizeof}(\text{SqliteValueOwned}) \in \{16, 24, 32, \dots\} \text{ Bytes}
 
 ```
 Representation 1: Numbers, Nulls, Pointers, and Large Heap Payloads (SqliteTypeRep - 24 Bytes)
-Byte: 0       1       2       3       4       5       6       7       8      11  12  13              21  22      23
-      ┌───────────────────────────────────────────────────────────────┬───────┬───┬───────────────────┬───────┬───────┐
-      │ payload union: iValue (int64) / dValue (double) /             │heap_  │aff│reserved[9]        │subtag │tag    │
-      │ pData (heap ptr) / ptrVal (opaque client pointer) [8 Bytes]   │len[4B]│[1]│[9 Bytes]          │[1B]   │[1B]   │
-      └───────────────────────────────────────────────────────────────┴───────┴───┴───────────────────┴───────┴───────┘
+Byte: 0       1       2       3       4       5       6       7       8      11  12  13  14              21  22      23
+      ┌───────────────────────────────────────────────────────────────┬───────┬───┬───┬───────────────────┬───────┬───────┐
+      │ payload union: iValue (int64) / dValue (double) /             │heap_  │aff│bor│reserved[8]        │subtag │tag    │
+      │ pData (heap ptr) / ptrVal (opaque client pointer) [8 Bytes]   │len[4B]│[1]│[1]│[8 Bytes]          │[1B]   │[1B]   │
+      └───────────────────────────────────────────────────────────────┴───────┴───┴───┴───────────────────┴───────┴───────┘
 
 Representation 2: Inline Buffer SBO (Short Strings & Blobs - InlineBufferRep - 24 Bytes)
 Byte: 0   1   2   3   4   5   6   7   8   9   10  11  12  13  14  15  16  17  18  19  20  21          22      23
@@ -108,7 +108,8 @@ struct SqliteTypeRep {
     
     int32_t                 heap_len;    // 4 Bytes (Offset 8..11: Byte length for heap text/blob)
     char                    affinity;    // 1 Byte  (Offset 12: Native SQLite affinity '@', 'A'..'F')
-    uint8_t                 reserved[9]; // 9 Bytes (Offset 13..21: Reserved for ABI extensions)
+    bool                    is_borrowed; // 1 Byte  (Offset 13: Borrowed buffer flag, do not sqlite3_free)
+    uint8_t                 reserved[8]; // 8 Bytes (Offset 14..21: Reserved for ABI extensions)
     SqliteOwnedValueSubTag  subtag;      // 1 Byte  (Offset 22: Shared Sub-Tag: Subtype + Immutability)
     SqliteOwnedValueTag     tag;         // 1 Byte  (Offset 23: Bit-packed Control Tag Register)
 };
@@ -155,7 +156,7 @@ static_assert(sizeof(SqliteValueOwned) == 24, "SqliteValueOwned must be exactly 
 ### Memory Alignment & Padding Analysis
 
 1. **Zero Padding Holes**:
-   - `SqliteTypeRep`: $8\text{B} (\text{payload}) + 4\text{B} (\text{heap\_len}) + 1\text{B} (\text{affinity}) + 9\text{B} (\text{reserved}) + 1\text{B} (\text{subtag}) + 1\text{B} (\text{tag}) = \mathbf{24\text{ Bytes}}$.
+   - `SqliteTypeRep`: $8\text{B} (\text{payload}) + 4\text{B} (\text{heap\_len}) + 1\text{B} (\text{affinity}) + 1\text{B} (\text{is\_borrowed}) + 8\text{B} (\text{reserved}) + 1\text{B} (\text{subtag}) + 1\text{B} (\text{tag}) = \mathbf{24\text{ Bytes}}$.
    - `InlineBufferRep`: $22\text{B} (\text{buf}) + 1\text{B} (\text{subtag}) + 1\text{B} (\text{tag}) = \mathbf{24\text{ Bytes}}$.
    - `InlineUuidRep`: $16\text{B} (\text{bytes}) + 1\text{B} (\text{flags}) + 5\text{B} (\text{reserved}) + 1\text{B} (\text{subtag}) + 1\text{B} (\text{tag}) = \mathbf{24\text{ Bytes}}$.
 2. **Perfect Alignment with `uint64_t m_align`**:
@@ -170,6 +171,132 @@ inline uint8_t subtype() const noexcept {
     return m_sqlite.subtag.subtype();
 }
 ```
+
+### Zero-Copy Borrowed Buffers (`is_borrowed`) & Production Use Cases
+
+While the inline SBO buffer absorbs all strings $\le 21$ characters and blobs $\le 22$ bytes directly on the stack, applications often process larger text or binary buffers that **already exist in memory** owned by an external subsystem (an embedded scripting runtime, an OS memory-mapped file, or a static string literal).
+
+To eliminate redundant heap allocations for buffers exceeding inline SBO limits, `SqliteTypeRep` utilizes **Offset 13** as a 1-byte `bool is_borrowed` flag:
+
+```cpp
+struct SqliteTypeRep {
+    union {
+        sqlite3_int64  iValue;   // 8 Bytes (Offset 0..7)
+        double         dValue;   // 8 Bytes (Offset 0..7)
+        char*          pData;    // 8 Bytes (Offset 0..7: Points to heap OR borrowed buffer)
+        void*          ptrVal;   // 8 Bytes (Offset 0..7: Opaque client pointer)
+    } payload;
+    
+    int32_t                 heap_len;    // 4 Bytes (Offset 8..11: Buffer length)
+    char                    affinity;    // 1 Byte  (Offset 12: Native SQLite affinity)
+    bool                    is_borrowed; // 1 Byte  (Offset 13: Borrowed buffer flag)
+    uint8_t                 reserved[8]; // 8 Bytes (Offset 14..21: ABI reserved)
+    SqliteOwnedValueSubTag  subtag;      // 1 Byte  (Offset 22: Subtype + Immutability)
+    SqliteOwnedValueTag     tag;         // 1 Byte  (Offset 23: State / Length)
+};
+```
+
+#### Mechanical Operation & Lifecycle
+
+1. **Inline SBO Absorption First**: When calling `from_borrowed_text(text, len)` or `from_borrowed_blob(data, len)`, the factory method first tests whether the payload fits within the inline SBO limits ($\le 21\text{B}$ text or $\le 22\text{B}$ blob). If it fits, it is copied directly into `m_inline.buf`, guaranteeing maximum memory locality and zero pointer indirection.
+2. **Zero-Copy External Adoption**: If the payload exceeds the inline capacity, `SqliteValueOwned` does **not** call `sqlite3_malloc64()`. Instead, it stores `payload.pData = const_cast<char*>(text)`, sets `heap_len = len`, marks `tag.set(STATE_HEAP, true, 0)`, and sets `is_borrowed = true`.
+3. **Safe RAII Teardown**: When the `SqliteValueOwned` instance goes out of scope, its destructor invokes `free_heap()`. Because `is_borrowed == true`, `free_heap()` immediately returns without calling `sqlite3_free(payload.pData)`:
+   ```cpp
+   inline void free_heap() noexcept {
+       if (m_sqlite.is_borrowed) {
+           return; // Externally owned buffer; DO NOT sqlite3_free()!
+       }
+       if (m_sqlite.payload.pData != nullptr) {
+           sqlite3_free(m_sqlite.payload.pData);
+           m_sqlite.payload.pData = nullptr;
+       }
+   }
+   ```
+4. **Decoupled Deep Cloning (`.clone()`)**: If a borrowed value needs to escape its originating lifetime (e.g., to be cached across query cycles or stored in a persistent container), calling `.clone()` or `.try_clone()` automatically allocates a new heap buffer, copies the contents, and clears `is_borrowed = false`, promoting it to a fully owned, independent value.
+
+```
+┌─────────────────────────────────────────────────────────────────────────────────────────────────┐
+│                       BORROWED VALUE LIFECYCLE & PROMOTION PIPELINE                             │
+├─────────────────────────────────────────────────────────────────────────────────────────────────┤
+│                                                                                                 │
+│  External Buffer (e.g. Lua String, mmap file, .rodata)                                          │
+│  [ "SELECT * FROM large_distributed_dataset WHERE ... " (85 bytes) ]                             │
+│       ▲                                                                                         │
+│       │ payload.pData (Borrow reference, 0 mallocs)                                             │
+│  ┌────┴─────────────────────────────┬─────────────┬──────────────┬───────────────┐              │
+│  │ SqliteValueOwned (Borrowed)      │ heap_len=85 │ is_borrowed  │ tag=STATE_HEAP│              │
+│  └──────────────────────────────────┴─────────────┴──────┬───────┴───────────────┘              │
+│                                                          │                                      │
+│                                     .clone() called      ▼                                      │
+│                                    (Promote to Owned)                                           │
+│  ┌───────────────────────────────────────────────────────────────────────────────┐              │
+│  │ Fresh sqlite3_malloc64(86) Heap Allocation                                    │              │
+│  │ [ "SELECT * FROM large_distributed_dataset WHERE ... \0" ]                    │              │
+│  └────▲──────────────────────────────────────────────────────────────────────────┘              │
+│       │ payload.pData (Owned heap buffer)                                                       │
+│  ┌────┴─────────────────────────────┬─────────────┬──────────────┬───────────────┐              │
+│  │ SqliteValueOwned (Owned)         │ heap_len=85 │ !is_borrowed │ tag=STATE_HEAP│              │
+│  └──────────────────────────────────┴─────────────┴──────────────┴───────────────┘              │
+│                                                                                                 │
+└─────────────────────────────────────────────────────────────────────────────────────────────────┘
+```
+
+#### Core Production Use Cases
+
+##### 1. Embedded Language Runtimes (Lua, Python, QuickJS, WebAssembly)
+When an embedded language environment (such as Lua via `lua_tolstring()`, Python via `PyUnicode_AsUTF8AndSize()`, or QuickJS via `JS_ToCStringLen()`) passes string arguments into a SQLite C++ extension or User-Defined Function (UDF):
+- **Problem**: The scripting runtime already owns and manages the lifecycle of the string buffer. Copying strings into a newly allocated C++ heap buffer for query execution, aggregation, or filtering generates massive allocation overhead, memory fragmentation, and GC pressure.
+- **Zero-Copy Solution**:
+  ```cpp
+  size_t len = 0;
+  const char* lua_str = lua_tolstring(L, 1, &len);
+  // Zero allocations: borrows Lua's internal GC string buffer
+  auto val = SqliteValueOwned::from_borrowed_text(lua_str, static_cast<int>(len));
+  process_row(val); // Safe, stack-bound evaluation with zero free_heap() side-effects
+  ```
+
+##### 2. Memory-Mapped Files (`mmap`) & Columnar Formats (Arrow, Parquet)
+Processing multi-gigabyte files or columnar datasets (Apache Arrow record batches, Parquet string dictionaries, or FlatBuffers):
+- **Problem**: Ingesting string and binary columns through standard database wrappers causes gigabytes of memory copies as strings are duplicated into heap buffers row-by-row.
+- **Zero-Copy Solution**: Slices from `mmap()` virtual memory can be wrapped directly:
+  ```cpp
+  const char* mapped_slice = mmap_base + offset;
+  // Zero mallocs: wraps 64KB JSON payload or BLOB directly from mapped disk page
+  auto blob_val = SqliteValueOwned::from_borrowed_blob(mapped_slice, chunk_size, SQLITE_SUBTYPE_JSON);
+  ```
+
+##### 3. Static Constants, Compile-Time Schemas & String Literals
+Virtual tables and extension modules frequently emit static schema definitions, fixed error messages, or constant SQL templates exceeding 21 bytes:
+- **Problem**: Wrapping a static string literal like `static const char kSchema[] = "CREATE TABLE x(id INT, name TEXT, data BLOB);"` with standard `from_text()` incurs an unnecessary `sqlite3_malloc64` and `memcpy` on every connection or query initialization.
+- **Zero-Copy Solution**:
+  ```cpp
+  static constexpr char kTableSchema[] = "CREATE TABLE x(id INT PRIMARY KEY, payload TEXT, meta BLOB);";
+  // Zero malloc: wraps .rodata string without any heap allocation
+  auto schema_val = SqliteValueOwned::from_borrowed_text(kTableSchema, sizeof(kTableSchema) - 1);
+  ```
+
+##### 4. Zero-Copy Predicate Pipelines with Deferred Promotion
+High-throughput analytical pipelines often process candidate records where 99% of rows are filtered out by `WHERE` clauses:
+- **Problem**: Allocating heap memory for incoming row candidates that will be immediately discarded wastes CPU cycles and OS allocator lock bandwidth.
+- **Zero-Copy Solution**: Ingest records as borrowed values. Perform filtering, regex checks, and JSON path lookups directly on the borrowed pointer. Only if the record satisfies all predicates is `.clone()` called to promote the value into a long-lived result cache:
+  ```cpp
+  auto candidate = SqliteValueOwned::from_borrowed_text(raw_network_buffer, len);
+  if (matches_filter(candidate)) {
+      results_vector.push_back(candidate.clone()); // Promoted to heap only when retained
+  }
+  // If discarded, candidate destructs cleanly without calling sqlite3_free()
+  ```
+
+##### 5. Stack-Allocated Scratch Formatting & Serializers
+High-speed encoders (e.g., formatting UUIDs, compact decimal strings, or local JSON objects) often format data into stack-allocated scratch arrays (`char scratch[128]`):
+- **Problem**: Standard wrappers force heap allocation when the serialized payload exceeds the 21-byte inline limit, even when the data is consumed immediately by a downstream function in the same call frame.
+- **Zero-Copy Solution**:
+  ```cpp
+  char scratch[128];
+  int written = snprintf(scratch, sizeof(scratch), "metric_id:%s:v1", cluster_id);
+  auto metric_val = SqliteValueOwned::from_borrowed_text(scratch, written);
+  accumulator.step(metric_val); // Zero heap allocations
+  ```
 
 ---
 
