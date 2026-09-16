@@ -103,9 +103,58 @@ static void test_counter_func(sqlite3_context *ctx, int argc, sqlite3_value **ar
 }
 ```
 
-## Pluggable Lock Selection
+## Per-Connection State (`SqliteConnState`)
 
-Both Pure C and C++ state registries allow you to select the locking policy that best fits your workload:
+If your extension needs state that is strictly unique to each SQLite database connection (such as user session tokens, per-connection prepared caches, or query scratchpads) rather than shared across all connections, use `SqliteConnState`.
+
+Because SQLite connections are single-threaded, `SqliteConnState` operates **completely lock-free** with $\mathcal{O}(1)$ performance via DuoSTL pointer maps.
+
+### C++ Usage (`sqlite3_conn_state.hpp`)
+
+```cpp
+#include "sqlite3_conn_state.hpp"
+
+struct ConnContext {
+    int query_count = 0;
+    std::string session_id;
+};
+
+// 1. In your extension init function:
+void* raw_state = SqliteConnState<ConnContext>::init(db);
+sqlite3_create_function_v2(db, "my_func", 1, SQLITE_UTF8, raw_state, my_func_impl, NULL, NULL, SqliteConnState<ConnContext>::destructor);
+
+// 2. In your UDF / TVF callback:
+static void my_func_impl(sqlite3_context *ctx, int argc, sqlite3_value **argv) {
+    // Fast O(1) auxdata retrieval with zero lock contention!
+    ConnContext* state = SqliteConnState<ConnContext>::from_context(ctx);
+    if (!state) return;
+    state->query_count++;
+    
+    sqlite3_result_int(ctx, state->query_count);
+}
+```
+
+### Pure C Usage (`sqlite3_conn_state.h`)
+
+```c
+#include "sqlite3_conn_state.h"
+
+typedef struct {
+    int query_count;
+} ConnContext;
+
+SQLITE_CONNECTION_STATE(ConnContext, ConnContext)
+
+// In extension init:
+void* raw_state = ConnContext_init(db, NULL, NULL);
+sqlite3_create_function_v2(db, "my_func", 1, SQLITE_UTF8, raw_state, my_func_impl, NULL, NULL, ConnContext_destructor);
+```
+
+---
+
+## Pluggable Lock Selection (Shared State)
+
+Both Pure C and C++ shared state registries allow you to select the locking policy that best fits your workload:
 
 | Lock Policy | Pure C (`.h`) Macro | C++ (`.hpp`) Template | Optimal Workload |
 | :--- | :--- | :--- | :--- |
@@ -121,7 +170,9 @@ SQLITE_EXTENSION_STATE_DEFINE_WITH_LOCK(MemKVState, sqlite3_tiny_lock)
 ```
 
 ## Features
-- **Pluggable Synchronization**: Select between RW locks, 1-byte TinyLocks, or native SQLite mutexes.
+- **High-Performance DuoSTL Hash Maps**: $\mathcal{O}(1)$ open-addressing hash maps with 100% SQLite memory tracking (`duo_alloc.h` -> `sqlite3_malloc64`/`sqlite3_realloc64`/`sqlite3_free`).
+- **Per-Connection Isolation (`SqliteConnState`)**: Zero-lock per-connection state management.
+- **Pluggable Synchronization (`SqliteExtState`)**: Select between RW locks, 1-byte TinyLocks, or native SQLite mutexes for cross-connection shared state.
 - **Cross-Platform**: Uses native Read/Write locks on Windows (`SRWLOCK`), macOS/Linux (`pthread_rwlock_t`), and WebAssembly (futex/mutex).
 - **Lock-Free Ref Counting**: The registry's internal reference counter is entirely lock-free, managed via `sqlite3_atomic.h`.
 - **Zero-Overhead Hot Path**: Caches state lookups in SQLite's O(1) auxdata.

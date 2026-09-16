@@ -6,6 +6,8 @@
 // Core subsystem headers
 #include "sqlite3_allocator.hpp"
 #include "sqlite3_hash.hpp"
+#include "stl/duo_linear.hpp"
+#include "stl/duo_hash.hpp"
 #include "sqlite3_smart_ptr.hpp"
 #include "sqlite3_buffer.hpp"
 #include "sqlite3_db.hpp"
@@ -18,6 +20,7 @@
 #include "sqlite3_tvf_coro.hpp"
 #include "sqlite3_vtab.hpp"
 #include "sqlite3_ext_state.hpp"
+#include "sqlite3_conn_state.hpp"
 #include "sqlite3_statement.hpp"
 #include "sqlite3_transaction.hpp"
 #include "sqlite3_blob_stream.hpp"
@@ -31,6 +34,7 @@
  *        - Eponymous Table-Valued Functions (TVFs)
  *        - Full-featured C++ Virtual Tables (with transactions, savepoints, indexing)
  *        - Per-connection shared state management
+ *        - Per-connection unique state management
  */
 class SqliteExt {
 public:
@@ -40,7 +44,7 @@ public:
     template <typename T>
     using Allocator = SqliteAllocator<T>;
     // ========================================================================
-    // 1. Shared State Management
+    // 1. Shared & Connection State Management
     // ========================================================================
 
     /**
@@ -76,6 +80,75 @@ public:
     template <typename State>
     static inline State* get_state(SqliteDatabaseView db) {
         return SqliteExtState<State>::get(db);
+    }
+
+    /**
+     * @brief Initializes or retrieves a per-connection unique state struct bound to the connection handle.
+     * @tparam State The user-defined per-connection state struct type.
+     * @tparam InitFunc Callable with signature `void(State*)` or `void(State&)`.
+     * @param db The SQLite database connection handle.
+     * @param init_fn Initializer callback executed exactly once upon state allocation.
+     * @return Raw pointer to the per-connection State instance.
+     */
+    template <typename State, typename InitFunc>
+    static inline State* init_conn_state(SqliteDatabaseView db, InitFunc init_fn) {
+        return SqliteConnState<State>::get_or_create(db, init_fn);
+    }
+
+    /**
+     * @brief Initializes or retrieves a per-connection unique state struct bound to the connection handle.
+     * @tparam State The user-defined per-connection state struct type.
+     * @param db The SQLite database connection handle.
+     * @return Raw pointer to the per-connection State instance.
+     */
+    template <typename State>
+    static inline State* init_conn_state(SqliteDatabaseView db) {
+        return SqliteConnState<State>::get_or_create(db, nullptr);
+    }
+
+    /**
+     * @brief Retrieves the existing per-connection unique state struct bound to the connection handle.
+     * @tparam State The user-defined per-connection state struct type.
+     * @param db The SQLite database connection handle.
+     * @return Pointer to State if initialized, or nullptr if not registered.
+     */
+    template <typename State>
+    static inline State* get_conn_state(SqliteDatabaseView db) {
+        return SqliteConnState<State>::get(db);
+    }
+
+    /**
+     * @brief Initializes both shared per-database state and unique per-connection state,
+     * returning a unified holder pointer suitable for pApp in sqlite3_create_function_v2.
+     * @tparam ExtState The user-defined shared state type.
+     * @tparam ConnState The user-defined per-connection state type.
+     * @tparam LockPolicy Lock policy for the shared component (defaults to SqliteRwLock).
+     * @param db The SQLite database connection handle.
+     * @param init_ext Optional initialization callback for shared state.
+     * @param init_conn Optional initialization callback for per-connection state.
+     * @return Raw void* pointer to the unified Holder.
+     */
+    template <typename ExtState, typename ConnState, typename LockPolicy = SqliteRwLock>
+    static inline void* init_hybrid_state(
+        SqliteDatabaseView db,
+        void (*init_ext)(ExtState*) = nullptr,
+        void (*init_conn)(ConnState*) = nullptr
+    ) {
+        return SqliteHybridState<ExtState, ConnState, LockPolicy>::init(db.get(), init_ext, init_conn);
+    }
+
+    /**
+     * @brief Retrieves both shared and per-connection states directly from a database handle.
+     * @tparam ExtState The user-defined shared state type.
+     * @tparam ConnState The user-defined per-connection state type.
+     * @tparam LockPolicy Lock policy for the shared component (defaults to SqliteRwLock).
+     * @param db The SQLite database connection handle.
+     * @return State struct containing pointers to ext and conn.
+     */
+    template <typename ExtState, typename ConnState, typename LockPolicy = SqliteRwLock>
+    static inline typename SqliteHybridState<ExtState, ConnState, LockPolicy>::State
+    get_hybrid_state(SqliteDatabaseView db) {
+        return SqliteHybridState<ExtState, ConnState, LockPolicy>::from_db(db.get());
     }
 
     // ========================================================================

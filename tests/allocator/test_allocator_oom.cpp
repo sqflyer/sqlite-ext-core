@@ -569,7 +569,7 @@ void test_sqlite_buffer_and_string_try_methods_oom() {
     assert(stat_res.is_err());
     assert(stat_res.err_code() == SQLITE_NOMEM);
 
-    SqliteStatus stat_app = buf.try_append("Hello World", 11);
+    SqliteStatus stat_app = buf.try_append("This is a 64-byte long payload designed to exceed SBO capacity!", 64);
     assert(stat_app.is_err());
     assert(stat_app.err_code() == SQLITE_NOMEM);
 
@@ -577,8 +577,8 @@ void test_sqlite_buffer_and_string_try_methods_oom() {
     assert(uninit_res.is_err());
     assert(uninit_res.err_code() == SQLITE_NOMEM);
 
-    // 3. SqliteString try_create fails
-    auto str_res = SqliteString::try_create("This is a test string");
+    // 3. SqliteString try_create fails when exceeding SBO
+    auto str_res = SqliteString::try_create("This is a 64-byte long test string meant to exceed SBO capacity!");
     assert(str_res.is_err());
     assert(str_res.err_code() == SQLITE_NOMEM);
   }

@@ -385,6 +385,7 @@ public:
 #define SQLITE_EXT_STATE_FWD_DECLARED
 class SqliteRwLock;
 template <typename T, typename LockPolicy = SqliteRwLock> class SqliteExtState;
+template <typename T> class SqliteConnState;
 #endif
 
 /**
@@ -472,6 +473,17 @@ public:
     template <typename State>
     inline State* state() const {
         return SqliteExtState<State>::from_context(*this);
+    }
+
+    /**
+     * @brief Retrieves the strongly-typed per-connection unique extension state directly from this context.
+     * 
+     * @tparam State The user-defined per-connection state struct type.
+     * @return Strongly-typed State* pointer, or nullptr if no state is bound.
+     */
+    template <typename State>
+    inline State* conn_state() const {
+        return SqliteConnState<State>::from_context(*this);
     }
 
     // ========================================================================

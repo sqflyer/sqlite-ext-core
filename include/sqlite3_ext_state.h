@@ -35,6 +35,49 @@
 #include "sqlite3_rw_lock.h"
 #include "sqlite3_mutex_lock.h"
 
+#include "stl/duo_alloc.h"
+#include "stl/duo_hash.h"
+#include "stl/duo_linear.h"
+
+/**
+ * @brief Comparator trampoline for const duo_string_t* keys stored by pointer in duo_hashmap_t.
+ */
+static inline int __duo_string_ptr_compare(const void *a, const void *b, void *udata) {
+    (void)udata;
+    const duo_string_t *sa = *(const duo_string_t * const *)a;
+    const duo_string_t *sb = *(const duo_string_t * const *)b;
+    if (sa == sb) return 0;
+    if (!sa || !sb) return sa ? 1 : -1;
+    return duo_str_view_cmp(duo_string_as_view(sa), duo_string_as_view(sb));
+}
+
+/**
+ * @brief Hasher trampoline for const duo_string_t* keys stored by pointer in duo_hashmap_t.
+ */
+static inline uint64_t __duo_string_ptr_hash(const void *key, uint64_t seed0, uint64_t seed1) {
+    const duo_string_t *s = *(const duo_string_t * const *)key;
+    return s ? duo_str_view_hash_seed(duo_string_as_view(s), seed0, seed1) : 0;
+}
+
+/**
+ * @brief Backward-compatibility trampolines for value-based hashing.
+ */
+static inline int __duo_string_compare(const void *a, const void *b, void *udata) {
+    (void)udata;
+    const duo_string_t *sa = (const duo_string_t*)a;
+    const duo_string_t *sb = (const duo_string_t*)b;
+    return duo_str_view_cmp(duo_string_as_view(sa), duo_string_as_view(sb));
+}
+
+/**
+ * @brief Hasher trampoline for duo_string_t keys stored by value in duo_hashmap_t.
+ */
+static inline uint64_t __duo_string_hash(const void *key, uint64_t seed0, uint64_t seed1) {
+    const duo_string_t *s = (const duo_string_t*)key;
+    return duo_str_view_hash_seed(duo_string_as_view(s), seed0, seed1);
+}
+
+
 #ifndef SQLITE_EXT_STATE_AUXDATA_SLOT
 /* Use a high pseudo-random slot to avoid colliding with argument caching (slot 0..N) */
 #define SQLITE_EXT_STATE_AUXDATA_SLOT 0x45585400
@@ -73,9 +116,9 @@
  *    - Layer 1 (Hot Path):   SQLite's `auxdata` (O(1)). Checked first via `sqlite3_get_auxdata`.
  *                            If the query has run before, the state pointer is retrieved 
  *                            instantly without any locking or hash map lookups.
- *    - Layer 2 (Warm Path):  Registry Linked List (O(N)). If missed, we lock the global 
- *                            registry and search for the database path. If found, we retain 
- *                            it and cache it back into `auxdata`.
+ *    - Layer 2 (Warm Path):  DuoSTL String Hash Map (O(1)). If missed, we lock the global 
+ *                            registry and search for the database path via hash table.
+ *                            If found, we retain it and cache it back into `auxdata`.
  *    - Layer 3 (Cold Path):  Init. If not found in the registry, we run the user's `init_fn` 
  *                            and register the new state.
  * 
@@ -138,20 +181,20 @@
 
 #define SQLITE_EXTENSION_STATE_DECLARE_WITH_LOCK(StateType, LockType) \
     typedef struct StateType##_Entry { \
-        char *db_path; \
+        duo_string_t db_path; \
         int refcount; \
         LockType state_mutex; \
         void (*free_fn)(StateType*); \
-        struct StateType##_Entry *next; \
         StateType state; \
     } StateType##_Entry; \
     \
-    extern StateType##_Entry *StateType##_registry_head; \
+    extern duo_hashmap_t *StateType##_registry_map; \
     extern sqlite3_mutex *StateType##_registry_mutex; \
     \
     /* Function declarations for external visibility */ \
     static inline void* StateType##_init(sqlite3 *db, void (*init_fn)(StateType*), void (*free_fn)(StateType*)); \
     static inline StateType* StateType##_from_db(sqlite3_context *ctx, sqlite3 *db); \
+    static inline StateType* StateType##_from_db_handle(sqlite3 *db); \
     static inline StateType* StateType##_from_context(sqlite3_context *ctx); \
     static inline void StateType##_read_acquire(StateType *state); \
     static inline void StateType##_read_release(StateType *state); \
@@ -160,7 +203,7 @@
     static inline void StateType##_destructor(void *p);
 
 #define SQLITE_EXTENSION_STATE_DEFINE_WITH_LOCK(StateType, LockType) \
-    StateType##_Entry *StateType##_registry_head = NULL; \
+    duo_hashmap_t *StateType##_registry_map = NULL; \
     sqlite3_mutex *StateType##_registry_mutex = NULL; \
     \
     static inline const char* __##StateType##_get_db_path(sqlite3 *db, char *resolved_path_buf) { \
@@ -187,11 +230,11 @@
              * runtime and live for the entire process lifetime. \
              */ \
             sqlite3_mutex *master = sqlite3_mutex_alloc(SQLITE_MUTEX_STATIC_MASTER); \
-            sqlite3_mutex_enter(master); \
+            if (master) sqlite3_mutex_enter(master); \
             if (!StateType##_registry_mutex) { \
                 StateType##_registry_mutex = sqlite3_mutex_alloc(SQLITE_MUTEX_STATIC_APP1); \
             } \
-            sqlite3_mutex_leave(master); \
+            if (master) sqlite3_mutex_leave(master); \
         } \
     } \
     \
@@ -206,13 +249,13 @@
     \
     /* \
      * Internal helper: Destroys a state entry, frees all associated memory/mutexes, \
-     * and removes it from the global registry linked list. \
+     * and removes it from the global registry hash map. \
      */ \
     static inline void __##StateType##_entry_free(StateType##_Entry *entry) { \
         __##StateType##_ensure_mutex_init(); \
         \
         /* Step 1: Acquire registry lock to prevent new threads from finding the entry */ \
-        sqlite3_mutex_enter(StateType##_registry_mutex); \
+        if (StateType##_registry_mutex) sqlite3_mutex_enter(StateType##_registry_mutex); \
         \
         /* \
          * DOUBLE-CHECKED LOCKING (Crucial Race Condition Fix): \
@@ -221,31 +264,31 @@
          * registry, found this entry, and retained it! If so, we MUST abort the free. \
          */ \
         if (sqlite_atomic_load_32(&entry->refcount) > 0) { \
-            sqlite3_mutex_leave(StateType##_registry_mutex); \
+            if (StateType##_registry_mutex) sqlite3_mutex_leave(StateType##_registry_mutex); \
             return; \
         } \
         \
-        /* Step 2: Safe to remove the entry from the global linked list */ \
-        StateType##_Entry **curr = &StateType##_registry_head; \
-        while (*curr) { \
-            if (*curr == entry) { \
-                *curr = entry->next; \
-                break; \
+        /* Step 2: Safe to remove the entry from the global hash map */ \
+        if (StateType##_registry_map) { \
+            const duo_string_t *p_key = &entry->db_path; \
+            duo_hashmap_delete(StateType##_registry_map, &p_key); \
+            if (duo_hashmap_count(StateType##_registry_map) == 0) { \
+                duo_hashmap_free(StateType##_registry_map); \
+                StateType##_registry_map = NULL; \
             } \
-            curr = &(*curr)->next; \
         } \
-        sqlite3_mutex_leave(StateType##_registry_mutex); \
+        if (StateType##_registry_mutex) sqlite3_mutex_leave(StateType##_registry_mutex); \
         \
-        /* Step 2: Destroy the state lock */ \
+        /* Step 3: Destroy the state lock */ \
         LockType##_destroy(&entry->state_mutex); \
         \
-        /* Step 3: Run the user's custom cleanup routine, if any */ \
+        /* Step 4: Run the user's custom cleanup routine, if any */ \
         if (entry->free_fn) { \
             entry->free_fn(&entry->state); \
         } \
         \
-        /* Step 4: Free the deep-copied strings and internal SQLite mutexes */ \
-        if (entry->db_path) sqlite3_free(entry->db_path); \
+        /* Step 5: Free the SBO string and entry */ \
+        duo_string_destroy(&entry->db_path); \
         sqlite3_free(entry); \
     } \
     \
@@ -264,38 +307,34 @@
      * Internal helper: Allocates and initializes a new state entry along with its \
      * internal mutexes and locks. Does NOT lock the registry itself, \
      * but assumes the caller holds the registry lock as it links the new entry \
-     * directly into the global registry linked list. \
+     * directly into the global registry hash map. \
      */ \
     static inline StateType##_Entry* __##StateType##_entry_alloc(const char *db_path, void (*init_fn)(StateType*), void (*free_fn)(StateType*)) { \
         /* Step 1: Allocate the main entry struct */ \
         StateType##_Entry *entry = (StateType##_Entry*) sqlite3_malloc64(sizeof(StateType##_Entry)); \
         if (entry) { \
-            /* Step 2: Deep copy the database path to serve as the registry key */ \
-            size_t path_len = strlen(db_path); \
-            entry->db_path = (char*)sqlite3_malloc64(path_len + 1); \
-            if (entry->db_path) { \
-                memcpy(entry->db_path, db_path, path_len + 1); \
-            } else { \
-                sqlite3_free(entry); \
-                entry = NULL; \
-            } \
-        } \
-        if (entry) { \
-            /* Step 4: Initialize the state lock */ \
+            /* Step 2: Initialize the SBO string database path as the registry key */ \
+            duo_string_init_cstr(&entry->db_path, db_path); \
+            /* Step 3: Initialize the state lock */ \
             LockType##_init(&entry->state_mutex); \
             \
-            /* Step 5: Run the user's custom init routine, or zero-init */ \
+            /* Step 4: Run the user's custom init routine, or zero-init */ \
             if (init_fn) { \
                 init_fn(&entry->state); \
             } else { \
                 memset(&entry->state, 0, sizeof(StateType)); \
             } \
             \
-            /* Step 6: Set refcount to 1 and push to the front of the registry list */ \
+            /* Step 5: Set refcount to 1 and insert into hash map */ \
             entry->refcount = 1; \
             entry->free_fn = free_fn; \
-            entry->next = StateType##_registry_head; \
-            StateType##_registry_head = entry; \
+            if (!StateType##_registry_map) { \
+                StateType##_registry_map = duo_hashmap_new(sizeof(const duo_string_t*), sizeof(StateType##_Entry*), 16, 0, 0, __duo_string_ptr_hash, __duo_string_ptr_compare, NULL, NULL, NULL); \
+            } \
+            if (StateType##_registry_map) { \
+                const duo_string_t *p_key = &entry->db_path; \
+                duo_hashmap_set(StateType##_registry_map, &p_key, &entry); \
+            } \
         } \
         return entry; \
     } \
@@ -307,20 +346,20 @@
     } \
     \
     /* \
-     * Internal helper: Walks the global registry linked list and returns the \
-     * matching state entry if it exists. Assumes the caller holds the registry lock. \
+     * Internal helper: Looks up database path in DuoSTL hash map. \
+     * Assumes the caller holds the registry lock. \
      * Automatically increments the reference count if found. \
      */ \
     static inline StateType##_Entry* __##StateType##_entry_find_locked(const char *db_path) { \
-        StateType##_Entry *entry = NULL; \
-        StateType##_Entry *curr = StateType##_registry_head; \
-        while (curr) { \
-            if (strcmp(curr->db_path, db_path) == 0) { \
-                entry = curr; \
-                __##StateType##_entry_retain(entry); \
-                break; \
-            } \
-            curr = curr->next; \
+        if (!StateType##_registry_map || !db_path) return NULL; \
+        duo_string_t tmp_key; \
+        duo_string_init_cstr(&tmp_key, db_path); \
+        const duo_string_t *p_key = &tmp_key; \
+        StateType##_Entry **p_entry = (StateType##_Entry**)duo_hashmap_get(StateType##_registry_map, &p_key); \
+        duo_string_destroy(&tmp_key); \
+        StateType##_Entry *entry = p_entry ? *p_entry : NULL; \
+        if (entry) { \
+            __##StateType##_entry_retain(entry); \
         } \
         return entry; \
     } \
@@ -332,9 +371,9 @@
      */ \
     static inline StateType##_Entry* __##StateType##_entry_get(const char *db_path) { \
         __##StateType##_ensure_mutex_init(); \
-        sqlite3_mutex_enter(StateType##_registry_mutex); \
+        if (StateType##_registry_mutex) sqlite3_mutex_enter(StateType##_registry_mutex); \
         StateType##_Entry *entry = __##StateType##_entry_find_locked(db_path); \
-        sqlite3_mutex_leave(StateType##_registry_mutex); \
+        if (StateType##_registry_mutex) sqlite3_mutex_leave(StateType##_registry_mutex); \
         return entry; \
     } \
     \
@@ -344,12 +383,12 @@
      */ \
     static inline StateType##_Entry* __##StateType##_entry_get_or_create(const char *db_path, void (*init_fn)(StateType*), void (*free_fn)(StateType*)) { \
         __##StateType##_ensure_mutex_init(); \
-        sqlite3_mutex_enter(StateType##_registry_mutex); \
+        if (StateType##_registry_mutex) sqlite3_mutex_enter(StateType##_registry_mutex); \
         StateType##_Entry *entry = __##StateType##_entry_find_locked(db_path); \
         if (!entry) { \
             entry = __##StateType##_entry_alloc(db_path, init_fn, free_fn); \
         } \
-        sqlite3_mutex_leave(StateType##_registry_mutex); \
+        if (StateType##_registry_mutex) sqlite3_mutex_leave(StateType##_registry_mutex); \
         return entry; \
     } \
     \
@@ -381,7 +420,7 @@
             } \
         } \
         \
-        /* Layer 2 (Warm Path): Fallback to walking the global registry list */ \
+        /* Layer 2 (Warm Path): Fallback to searching the global registry hash map */ \
         char resolved_path[128]; \
         const char *db_path = __##StateType##_get_db_path(db, resolved_path); \
         entry = __##StateType##_entry_get(db_path); \
@@ -396,6 +435,10 @@
         } \
         \
         return entry ? &entry->state : NULL; \
+    } \
+    \
+    static inline StateType* StateType##_from_db_handle(sqlite3 *db) { \
+        return StateType##_from_db(NULL, db); \
     } \
     \
     /* \

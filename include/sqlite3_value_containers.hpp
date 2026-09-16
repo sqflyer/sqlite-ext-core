@@ -2787,8 +2787,8 @@ static_assert(sizeof(SqliteValueVec<8>) == 192,
  * Usage:
  * @code
  * withSqliteRowOwned(num_cols, [&](SqliteRowOwnedWrapper row) {
- *     row[0] = SqliteValueOwned(42);
- *     row[1] = SqliteValueOwned("sensor_alpha");
+ *     row[0] = 42;
+ *     row[1] = "sensor_alpha";
  *     insert_into_vtab(row);
  * });
  * @endcode
@@ -2801,48 +2801,64 @@ static_assert(sizeof(SqliteValueVec<8>) == 192,
 template <typename Callable>
 inline auto withSqliteRowOwned(int size, Callable &&fn)
     -> decltype(fn(SqliteRowOwnedWrapper())) {
-  switch (size) {
-  case 1: {
-    SqliteValueTuple<1> arr;
-    return fn(SqliteRowOwnedWrapper(arr.data(), 1));
-  }
-  case 2: {
-    SqliteValueTuple<2> arr;
-    return fn(SqliteRowOwnedWrapper(arr.data(), 2));
-  }
-  case 3: {
-    SqliteValueTuple<3> arr;
-    return fn(SqliteRowOwnedWrapper(arr.data(), 3));
-  }
-  case 4: {
-    SqliteValueTuple<4> arr;
-    return fn(SqliteRowOwnedWrapper(arr.data(), 4));
-  }
-  case 5: {
-    SqliteValueTuple<5> arr;
-    return fn(SqliteRowOwnedWrapper(arr.data(), 5));
-  }
-  case 6: {
-    SqliteValueTuple<6> arr;
-    return fn(SqliteRowOwnedWrapper(arr.data(), 6));
-  }
-  case 7: {
-    SqliteValueTuple<7> arr;
-    return fn(SqliteRowOwnedWrapper(arr.data(), 7));
-  }
-  case 8: {
-    SqliteValueTuple<8> arr;
-    return fn(SqliteRowOwnedWrapper(arr.data(), 8));
-  }
-  default: {
-    if (size <= 0) {
-      return fn(SqliteRowOwnedWrapper(nullptr, 0));
+    switch (size) {
+    case 1: {
+        SqliteValueOwned arr[1];
+        SqliteRowOwnedWrapper ownedWrapper = SqliteRowOwnedWrapper(arr, 1);
+        ownedWrapper.set_null_all();
+        return fn(ownedWrapper);
+      }
+    case 2: {
+        SqliteValueOwned arr[2];
+        SqliteRowOwnedWrapper ownedWrapper = SqliteRowOwnedWrapper(arr, 2);
+        ownedWrapper.set_null_all();
+        return fn(ownedWrapper);
+      }
+    case 3: {
+        SqliteValueOwned arr[3];
+        SqliteRowOwnedWrapper ownedWrapper = SqliteRowOwnedWrapper(arr, 3);
+        ownedWrapper.set_null_all();
+        return fn(ownedWrapper);
+      }
+    case 4: {
+        SqliteValueOwned arr[4];
+        SqliteRowOwnedWrapper ownedWrapper = SqliteRowOwnedWrapper(arr, 4);
+        ownedWrapper.set_null_all();
+        return fn(ownedWrapper);
+      }
+    case 5: {
+        SqliteValueOwned arr[5];
+        SqliteRowOwnedWrapper ownedWrapper = SqliteRowOwnedWrapper(arr, 5);
+        ownedWrapper.set_null_all();
+        return fn(ownedWrapper);
     }
-    // For sizes > 8, use SqliteValueTuple<> (N = 0) which compiles to the direct heap
-    // tuple template specialization, allocating the dynamic buffer via sqlite3_malloc64.
-    SqliteValueTuple<> arr(size);
-    return fn(SqliteRowOwnedWrapper(arr.data(), size));
-  }
+    case 6: {
+        SqliteValueOwned arr[6];
+        SqliteRowOwnedWrapper ownedWrapper = SqliteRowOwnedWrapper(arr, 6);
+        ownedWrapper.set_null_all();
+        return fn(ownedWrapper);
+    }
+    case 7: {
+        SqliteValueOwned arr[7];
+        SqliteRowOwnedWrapper ownedWrapper = SqliteRowOwnedWrapper(arr, 7);
+        ownedWrapper.set_null_all();
+        return fn(ownedWrapper);
+    }
+    case 8: {
+        SqliteValueOwned arr[8];
+        SqliteRowOwnedWrapper ownedWrapper = SqliteRowOwnedWrapper(arr, 8);
+        ownedWrapper.set_null_all();
+        return fn(ownedWrapper);
+    }
+    default: {
+        if (size <= 0) {
+          return fn(SqliteRowOwnedWrapper(nullptr, 0));
+        }
+        // For sizes > 8, use SqliteValueTuple<> (N = 0) which compiles to the direct heap
+        // tuple template specialization, allocating the dynamic buffer via sqlite3_malloc64.
+        SqliteValueTuple<> arr(size);
+        return fn(SqliteRowOwnedWrapper(arr.data(), size));
+    }
   }
 }
 

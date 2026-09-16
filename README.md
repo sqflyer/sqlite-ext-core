@@ -427,8 +427,19 @@ Master umbrella headers providing full subsystem access:
   - **Aggregates**: `SqliteExt::define_aggregate`, `SqliteExt::define_aggregate_with_state`
   - **Table-Valued Functions**: `SqliteExt::define_tvf`, `SqliteExt::define_tvf_with_state`, `SqliteExt::define_tvf_coro`, `SqliteExt::define_tvf_coro_with_state`
   - **Virtual Tables**: `SqliteExt::define_vtab`, `SqliteExt::define_vtab_with_state`
-  - **Shared State**: `SqliteExt::init_state`, `SqliteExt::get_state`
-  - **Interactive SQL Runner**: `SqliteSqlRunner::run_string`, `SqliteSqlRunner::run_file`
+### 24. Zero-Dependency Dual-ABI Embedded Containers (`stl/`)
+A freestanding, dual-ABI container and algorithms library designed specifically for SQLite extensions and systems programming. Provides standard library container replacements (`duo::HashMap`, `duo::HashSet`, `duo::Vector`, `duo::String`, `duo::Span`, `duo::StringView`, `duo::BitVector`) that operate under `-nostdlib++`, `-fno-exceptions`, and `-fno-rtti` while routing 100% of allocations through SQLite's memory arena.
+
+#### Key Features:
+- **Dual-ABI Standard Layout**: Every C++ container wraps a standard-layout C mirror struct (`m_inner`) for bit-for-bit equivalence and zero-cost FFI with Pure C code.
+- **Robin Hood Hash Table (`duo::HashMap` / `duo_hashmap_t`)**: Open addressing with Distance-to-Initial-Bucket (DIB) variance reduction and tombstone-free backward-shift deletion.
+- **Small Buffer Optimization (`duo::String`)**: Stores up to 22 characters inline in a 24-byte footprint with zero heap allocations, seamlessly promoting to dynamic heap storage when exceeded.
+- **100% SQLite Memory Tracking**: All memory allocations route directly through `sqlite3_malloc64`, `sqlite3_realloc64`, and `sqlite3_free` via `duo_alloc.h`.
+
+#### Documentation:
+- [DuoSTL Upstream Repository (GitHub)](https://github.com/sqflyer/duostl)
+- [DuoSTL User Guide](docs/DUO_STL_README.md)
+- [DuoSTL Technical Architecture](docs/DUO_STL_ARCHITECTURE.md)
 
 ## Building and Testing
 
@@ -468,6 +479,7 @@ make test-cpp-vtab
 make test-cpp-sql-runner
 make test-cpp-extension
 make test-ext-state
+make test-cpp-duo
 
 # Run turnkey extension demos
 make example          # C++ extension demo (alias for example-cpp)
@@ -510,6 +522,7 @@ make.bat test-cpp-vtab
 make.bat test-cpp-sql-runner
 make.bat test-cpp-extension
 make.bat test-ext-state
+make.bat test-cpp-duo
 
 :: Run turnkey extension demos
 make.bat example          :: C++ extension demo (alias for example-cpp)

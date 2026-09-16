@@ -20,6 +20,7 @@ if "%TARGET%"=="test-time" ( call :test_time & goto end )
 if "%TARGET%"=="test-oom" ( call :test_oom & goto end )
 if "%TARGET%"=="test-multi-tu" ( call :test_multi_tu & goto end )
 if "%TARGET%"=="test-ext-state" ( call :test_ext_state & goto end )
+if "%TARGET%"=="test-cpp-duo" ( call :test_cpp_duo & goto end )
 if "%TARGET%"=="test-cpp-value" ( call :test_cpp_value & goto end )
 if "%TARGET%"=="test-cpp-row" ( call :test_cpp_row & goto end )
 if "%TARGET%"=="test-cpp-value-containers" ( call :test_cpp_value_containers & goto end )
@@ -50,6 +51,8 @@ exit /b 1
 
 :test
 call :test_ext_state
+if %ERRORLEVEL% neq 0 exit /b %ERRORLEVEL%
+call :test_cpp_duo
 if %ERRORLEVEL% neq 0 exit /b %ERRORLEVEL%
 call :test_cpp_value
 if %ERRORLEVEL% neq 0 exit /b %ERRORLEVEL%
@@ -133,6 +136,11 @@ goto :eof
 :test_ext_state
 echo [Running test-ext-state]
 cd tests\ext_state && call make.bat && cd ..\..
+goto :eof
+
+:test_cpp_duo
+echo [Running test-cpp-duo]
+cd tests\cpp_duo && call make.bat && cd ..\..
 goto :eof
 
 :test_cpp_value
@@ -262,6 +270,7 @@ goto :eof
 :clean
 echo [Cleaning build artifacts]
 cd tests\ext_state && call make.bat clean && cd ..\..
+cd tests\cpp_duo && call make.bat clean && cd ..\..
 cd tests\cpp_value && call make.bat clean && cd ..\..
 cd tests\cpp_row && call make.bat clean && cd ..\..
 cd tests\locks && call make.bat clean && cd ..\..

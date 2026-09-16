@@ -35,6 +35,8 @@
 #define SQLITE3_EXT_STATE_HPP
 
 #include "sqlite3_ext_state.h" // Required for SQLITE_EXT_STATE_AUXDATA_SLOT
+#include "stl/duo_linear.hpp"
+#include "stl/duo_hash.hpp"
 #include "sqlite3_allocator.hpp"
 #include "sqlite3_rw_lock.hpp"
 #include "sqlite3_tiny_lock.hpp"
@@ -50,24 +52,34 @@ class SqliteExtState;
  * @brief Zero-dependency C++ template for per-database shared extension state.
  * 
  * Replaces the SQLITE_EXTENSION_STATE(T) macro by using C++ template mechanics
- * to isolate static state registries perfectly per-type.
+ * to isolate static state registries perfectly per-type, backed by DuoSTL Robin Hood hash maps.
  */
 template <typename T, typename LockPolicy>
 class SqliteExtState {
 private:
     struct Entry {
-        char *db_path = nullptr;
+        duo::String db_path;
         int refcount = 0;
         LockPolicy state_mutex;
-        Entry *next = nullptr;
         T state;
-        
-        ~Entry() {
-            if (db_path) sqlite3_free(db_path);
+    };
+
+    struct StringPtrHash {
+        inline uint64_t operator()(const duo::String *s, uint64_t s0 = 0, uint64_t s1 = 0) const noexcept {
+            return s ? s->hash(s0, s1) : 0;
         }
     };
 
-    static Entry* registry_head;
+    struct StringPtrEqual {
+        inline bool operator()(const duo::String *a, const duo::String *b) const noexcept {
+            if (a == b) return true;
+            if (!a || !b) return false;
+            return *a == *b;
+        }
+    };
+
+    using MapType = duo::HashMap<const duo::String*, Entry*, StringPtrHash, StringPtrEqual>;
+    static MapType registry_map;
     static sqlite3_mutex* registry_mutex;
 
     /**
@@ -110,7 +122,7 @@ private:
     /**
      * @brief Safely destroys a state entry.
      * Handles double-checked locking to prevent race conditions during deletion,
-     * removes the entry from the global linked list, and safely deletes the entry
+     * removes the entry from the global hash map, and safely deletes the entry
      * via sqlite_delete, automatically invoking all C++ destructors.
      */
     static void entry_free(Entry *entry) {
@@ -122,14 +134,7 @@ private:
             return;
         }
         
-        Entry **curr = &registry_head;
-        while (*curr) {
-            if (*curr == entry) {
-                *curr = entry->next;
-                break;
-            }
-            curr = &(*curr)->next;
-        }
+        registry_map.erase(&entry->db_path);
         if (registry_mutex) sqlite3_mutex_leave(registry_mutex);
         
         sqlite_delete(entry);
@@ -148,47 +153,34 @@ private:
 
     /**
      * @brief Allocates and initializes a new state entry.
-     * Deep-copies the database path and uses `sqlite_new` to properly 
+     * Uses `duo::String` for zero-allocation SBO path storage and `sqlite_new` to properly 
      * construct the embedded C++ state object and locks.
-     * Assumes the caller holds the registry lock, as it injects itself into the linked list.
+     * Assumes the caller holds the registry lock, as it injects itself into the hash map.
      */
     static Entry* entry_alloc(const char *db_path, void (*init_fn)(T*)) {
         Entry *entry = sqlite_new<Entry>();
         if (entry) {
-            size_t path_len = strlen(db_path);
-            entry->db_path = (char*)sqlite3_malloc64(path_len + 1);
-            if (entry->db_path) {
-                memcpy(entry->db_path, db_path, path_len + 1);
-            } else {
-                sqlite_delete(entry);
-                return nullptr;
-            }
-            
+            entry->db_path = db_path;
             if (init_fn) {
                 init_fn(&entry->state);
             }
-            
             entry->refcount = 1;
-            entry->next = registry_head;
-            registry_head = entry;
+            registry_map.insert_or_assign(&entry->db_path, entry);
         }
         return entry;
     }
 
     /**
-     * @brief Scans the global registry linked list for an existing state entry.
+     * @brief Looks up existing state entry in the DuoSTL Robin Hood hash map.
      * Assumes the caller holds the registry lock. Automatically retains the entry if found.
      */
     static Entry* entry_find_locked(const char *db_path) {
-        Entry *entry = nullptr;
-        Entry *curr = registry_head;
-        while (curr) {
-            if (strcmp(curr->db_path, db_path) == 0) {
-                entry = curr;
-                entry_retain(entry);
-                break;
-            }
-            curr = curr->next;
+        duo::String key(db_path);
+        const duo::String *p_key = &key;
+        Entry **p_entry = registry_map.get(p_key);
+        Entry *entry = p_entry ? *p_entry : nullptr;
+        if (entry) {
+            entry_retain(entry);
         }
         return entry;
     }
@@ -391,6 +383,7 @@ public:
     public:
         explicit ReadGuard(T* s) : state(s) { read_acquire(state); }
         ~ReadGuard() { read_release(state); }
+        T* get() noexcept { return state; }
         T* operator->() { return state; }
         T& operator*() { return *state; }
     };
@@ -404,13 +397,14 @@ public:
     public:
         explicit WriteGuard(T* s) : state(s) { write_acquire(state); }
         ~WriteGuard() { write_release(state); }
+        T* get() noexcept { return state; }
         T* operator->() { return state; }
         T& operator*() { return *state; }
     };
 };
 
 template <typename T, typename LockPolicy>
-typename SqliteExtState<T, LockPolicy>::Entry* SqliteExtState<T, LockPolicy>::registry_head = nullptr;
+typename SqliteExtState<T, LockPolicy>::MapType SqliteExtState<T, LockPolicy>::registry_map;
 
 template <typename T, typename LockPolicy>
 sqlite3_mutex* SqliteExtState<T, LockPolicy>::registry_mutex = nullptr;

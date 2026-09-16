@@ -23,9 +23,9 @@ endif
 
 export PATH UNAME_S CXX CC SAN_FLAGS
 
-.PHONY: test test-asan test-macos test-ext-state test-cpp-value test-cpp-row test-cpp-value-containers test-locks test-cpp-allocator test-cpp-smart-ptr test-cpp-udf test-cpp-aggregate test-cpp-statement test-cpp-tvf test-cpp-transaction test-cpp-db test-cpp-buffer test-cpp-blob-stream test-cpp-backup test-cpp-vtab test-cpp-sql-runner test-cpp-extension test-threads test-time test-oom test-multi-tu example-cpp example-c example-coro-c example-coro-cpp leak-check-integration clean
+.PHONY: test test-asan test-macos test-ext-state test-cpp-duo test-cpp-value test-cpp-row test-cpp-value-containers test-locks test-cpp-allocator test-cpp-smart-ptr test-cpp-udf test-cpp-aggregate test-cpp-statement test-cpp-tvf test-cpp-transaction test-cpp-db test-cpp-buffer test-cpp-blob-stream test-cpp-backup test-cpp-vtab test-cpp-sql-runner test-cpp-extension test-threads test-time test-oom test-multi-tu example-cpp example-c example-coro-c example-coro-cpp leak-check-integration clean
 
-test: test-ext-state test-cpp-value test-cpp-row test-cpp-value-containers test-locks test-time test-oom test-multi-tu test-cpp-allocator test-cpp-smart-ptr test-cpp-udf test-cpp-aggregate test-cpp-statement test-cpp-tvf test-cpp-transaction test-cpp-db test-cpp-buffer test-cpp-blob-stream test-cpp-backup test-cpp-vtab test-cpp-sql-runner test-cpp-extension test-threads
+test: test-ext-state test-cpp-duo test-cpp-value test-cpp-row test-cpp-value-containers test-locks test-time test-oom test-multi-tu test-cpp-allocator test-cpp-smart-ptr test-cpp-udf test-cpp-aggregate test-cpp-statement test-cpp-tvf test-cpp-transaction test-cpp-db test-cpp-buffer test-cpp-blob-stream test-cpp-backup test-cpp-vtab test-cpp-sql-runner test-cpp-extension test-threads
 
 test-asan:
 	@echo "=== Running AddressSanitizer (ASan) Memory Verification ==="
@@ -43,6 +43,9 @@ test-time:
 
 test-ext-state:
 	$(MAKE) -C tests/ext_state test-c test-cpp
+
+test-cpp-duo:
+	$(MAKE) -C tests/cpp_duo test
 
 test-cpp-value:
 	$(MAKE) -C tests/cpp_value test
@@ -123,6 +126,7 @@ leak-check-integration:
 clean:
 	rm -rf bin
 	$(MAKE) -C tests/ext_state clean
+	$(MAKE) -C tests/cpp_duo clean
 	$(MAKE) -C tests/cpp_value clean
 	$(MAKE) -C tests/cpp_row clean
 	$(MAKE) -C tests/cpp_value_containers clean
