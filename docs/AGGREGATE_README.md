@@ -284,14 +284,13 @@ When executing under `-fno-exceptions`, aggregate steps or finalizers encounteri
 
 ```cpp
 struct FallibleConcat : public SqliteAggregateBase<void> {
-    SqliteString str;
+    duo::String str;
 
     void step(SqliteContext ctx, SqliteUdfArgs args) {
         if (args.size() < 1) return;
         SqliteStringView text = args[0].as_text();
-        SqliteStatus stat = str.try_append(text.data(), text.length());
-        if (stat.is_err()) {
-            stat.set_sqlite_err(ctx.get());
+        if (!str.append(text.data(), text.length())) {
+            ctx.result_error_nomem();
         }
     }
 

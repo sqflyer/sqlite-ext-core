@@ -1,7 +1,6 @@
 #include <sqlite3.h>
 #define SQLITE_CORE
 #include "../../include/sqlite3_value.hpp"
-#include "../../include/sqlite3_buffer.hpp"
 #include "../../include/sqlite3_statement.hpp"
 #include <assert.h>
 #include <stdio.h>
@@ -83,40 +82,27 @@ void test_sqlite_value_owned_null_safety() {
     printf("   [PASS] SqliteValueOwned null safety verified.\n");
 }
 
-void test_sqlite_buffer_null_safety() {
-    printf("4. Testing SqliteBuffer & SqliteString null & OOM safety...\n");
+void test_duo_bytes_and_string_null_safety() {
+    printf("4. Testing duo::Bytes & duo::String null & empty safety...\n");
     
-    SqliteBuffer buf;
-    assert(buf.is_valid());
-    assert((bool)buf);
-    assert(buf.bytes() == 0);
-    assert(buf.capacity() == 22);
-    assert(buf.data() != nullptr);
-    assert(buf.c_str() != nullptr);
-    assert(buf.c_str()[0] == '\0');
+    duo::Bytes buf;
+    assert(buf.size() == 0);
     assert(buf.is_sbo());
-    assert(buf.is_stack());
-    assert(!buf.is_heap());
-    assert(buf.hash() == SqliteHashUtil::hash(nullptr, 0));
+    assert(buf.data() != nullptr);
 
     // Append 0 bytes or nullptr is safe
     assert(buf.append(nullptr, 0));
-    assert(buf.append(nullptr, -5));
-    assert(buf.append_uninitialized(0) == nullptr);
-    assert(buf.append_uninitialized(-1) == nullptr);
 
-    SqliteString str;
-    assert(str.is_valid());
-    assert((bool)str);
+    duo::String str;
     assert(str.length() == 0);
     assert(str.c_str() != nullptr);
     assert(str.c_str()[0] == '\0');
     assert(str == "");
 
-    assert(str.append(nullptr));
+    assert(str.append(nullptr, 0));
     assert(str.length() == 0);
 
-    printf("   [PASS] SqliteBuffer & SqliteString null safety verified.\n");
+    printf("   [PASS] duo::Bytes & duo::String null safety verified.\n");
 }
 
 void test_sqlite_statement_null_safety() {
@@ -136,15 +122,17 @@ void test_sqlite_statement_null_safety() {
     assert(stmt.column_double(0) == 0.0);
     assert(stmt.column_text(0) == nullptr);
     assert(stmt.column_blob(0) == nullptr);
-    assert(stmt.column_string_view(0).length() == 0);
-    assert(stmt.column_blob_view(0).size() == 0);
+    assert(stmt.column_bytes(0) == 0);
+    assert(stmt.column_type(0) == SQLITE_NULL);
 
     SqliteCachedStatement cached_stmt;
     assert(!cached_stmt.is_valid());
     assert(!(bool)cached_stmt);
     assert(cached_stmt.get() == nullptr);
+    assert(cached_stmt.step() == SQLITE_MISUSE);
+    assert(cached_stmt.reset() == SQLITE_MISUSE);
 
-    printf("   [PASS] SqliteStatement null safety verified.\n");
+    printf("   [PASS] SqliteStatement & SqliteCachedStatement null safety verified.\n");
 }
 
 int main() {
@@ -159,7 +147,7 @@ int main() {
     test_sqlite_string_owned_null_safety();
     test_sqlite_blob_owned_null_safety();
     test_sqlite_value_owned_null_safety();
-    test_sqlite_buffer_null_safety();
+    test_duo_bytes_and_string_null_safety();
     test_sqlite_statement_null_safety();
 
     printf("\nAll 5 OOM & Null-Safety Test Suites Passed Successfully!\n");

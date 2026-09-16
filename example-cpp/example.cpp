@@ -58,7 +58,7 @@ static void analytics_ping(SqliteContext ctx, SqliteUdfArgs args) {
     ctx.result_int(count);
 }
 
-// Fallible Scalar: text_repeat(str, count) -> repeats string using SqliteResult<SqliteString>
+// Fallible Scalar: text_repeat(str, count) -> repeats string using duo::String
 static void text_repeat(SqliteContext ctx, SqliteUdfArgs args) {
     if (args.size() < 2) {
         ctx.result_error("text_repeat requires (text, count)");
@@ -68,22 +68,15 @@ static void text_repeat(SqliteContext ctx, SqliteUdfArgs args) {
     int count = static_cast<int>(args[1].as_int64());
     if (count < 0) count = 0;
 
-    // Fallible buffer allocation returning SqliteResult<SqliteString>
-    auto res_buf = SqliteString::try_create();
-    if (res_buf.is_err()) {
-        res_buf.set_sqlite_err(ctx.get());
-        return;
-    }
-    SqliteString str = res_buf.take_value();
-    SqliteStatus reserve_stat = str.try_reserve(text.length() * count + 1);
-    if (reserve_stat.is_err()) {
-        reserve_stat.set_sqlite_err(ctx.get());
+    // Fallible buffer allocation returning bool via duo::String
+    duo::String str;
+    if (!str.reserve(static_cast<size_t>(text.length() * count + 1))) {
+        ctx.result_error_nomem();
         return;
     }
     for (int i = 0; i < count; ++i) {
-        SqliteStatus stat = str.try_append(text.data(), text.length());
-        if (stat.is_err()) {
-            stat.set_sqlite_err(ctx.get());
+        if (!str.append(text.data(), text.length())) {
+            ctx.result_error_nomem();
             return;
         }
     }

@@ -33,7 +33,6 @@ if "%TARGET%"=="test-cpp-statement" ( call :test_cpp_statement & goto end )
 if "%TARGET%"=="test-cpp-tvf" ( call :test_cpp_tvf & goto end )
 if "%TARGET%"=="test-cpp-transaction" ( call :test_cpp_transaction & goto end )
 if "%TARGET%"=="test-cpp-db" ( call :test_cpp_db & goto end )
-if "%TARGET%"=="test-cpp-buffer" ( call :test_cpp_buffer & goto end )
 if "%TARGET%"=="test-cpp-blob-stream" ( call :test_cpp_blob_stream & goto end )
 if "%TARGET%"=="test-cpp-backup" ( call :test_cpp_backup & goto end )
 if "%TARGET%"=="test-cpp-vtab" ( call :test_cpp_vtab & goto end )
@@ -83,8 +82,6 @@ if %ERRORLEVEL% neq 0 exit /b %ERRORLEVEL%
 call :test_cpp_transaction
 if %ERRORLEVEL% neq 0 exit /b %ERRORLEVEL%
 call :test_cpp_db
-if %ERRORLEVEL% neq 0 exit /b %ERRORLEVEL%
-call :test_cpp_buffer
 if %ERRORLEVEL% neq 0 exit /b %ERRORLEVEL%
 call :test_cpp_blob_stream
 if %ERRORLEVEL% neq 0 exit /b %ERRORLEVEL%
@@ -204,11 +201,6 @@ echo [Running test-cpp-db]
 cd tests\cpp_db && call make.bat && cd ..\..
 goto :eof
 
-:test_cpp_buffer
-echo [Running test-cpp-buffer]
-cd tests\cpp_buffer && call make.bat && cd ..\..
-goto :eof
-
 :test_cpp_blob_stream
 echo [Running test-cpp-blob-stream]
 cd tests\cpp_blob_stream && call make.bat && cd ..\..
@@ -283,7 +275,6 @@ cd tests\cpp_statement && call make.bat clean && cd ..\..
 cd tests\cpp_tvf && call make.bat clean && cd ..\..
 cd tests\cpp_transaction && call make.bat clean && cd ..\..
 cd tests\cpp_db && call make.bat clean && cd ..\..
-cd tests\cpp_buffer && call make.bat clean && cd ..\..
 cd tests\cpp_blob_stream && call make.bat clean && cd ..\..
 cd tests\cpp_backup && call make.bat clean && cd ..\..
 cd tests\cpp_vtab && call make.bat clean && cd ..\..

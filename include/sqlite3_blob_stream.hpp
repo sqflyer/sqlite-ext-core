@@ -3,7 +3,7 @@
 
 #include "sqlite3ext.h"
 #include "sqlite3_db.hpp"
-#include "sqlite3_buffer.hpp"
+#include "stl/duo_linear.hpp"
 
 /**
  * @brief Zero-cost RAII wrapper for SQLite Incremental BLOB I/O.
@@ -107,48 +107,47 @@ public:
     }
 
     /**
-     * @brief Reads data from the BLOB directly into an auto-expanding SqliteBuffer.
+     * @brief Reads data from the BLOB directly into an auto-expanding duo::Bytes.
      * 
      * @param buffer The dynamic buffer to append the data into.
      * @param n The number of bytes to read.
      * @param offset The zero-based offset into the BLOB to start reading.
      * @return SQLITE_OK on success.
      */
-    inline int read(SqliteBuffer& buffer, int n, int offset) const {
+    inline int read(duo::Bytes& buffer, int n, int offset) const {
         if (!m_blob) return SQLITE_MISUSE;
         if (n <= 0) return SQLITE_OK;
         
-        sqlite3_int64 original_size = buffer.bytes();
-        void* dest = buffer.append_uninitialized(n);
-        if (!dest) return SQLITE_NOMEM;
+        size_t original_size = buffer.size();
+        if (!buffer.resize(original_size + static_cast<size_t>(n))) return SQLITE_NOMEM;
         
-        int rc = sqlite3_blob_read(m_blob, dest, n, offset);
+        int rc = sqlite3_blob_read(m_blob, buffer.data() + original_size, n, offset);
         if (rc != SQLITE_OK) {
-            buffer.truncate(original_size); // Rollback on failure
+            (void)buffer.resize(original_size); // Rollback on failure
         }
         return rc;
     }
 
     /**
-     * @brief Writes data directly from a SqliteBuffer into the BLOB.
-     * 
-     * @param buffer The dynamic buffer to read from.
-     * @param offset The zero-based offset into the BLOB to start writing.
-     * @return SQLITE_OK on success.
-     */
-    inline int write(const SqliteBuffer& buffer, int offset) {
-        return write(buffer.data(), static_cast<int>(buffer.bytes()), offset);
-    }
-
-    /**
-     * @brief Writes data directly from a SqliteBufferSlice into the BLOB.
+     * @brief Writes data directly from a duo::SpanView<uint8_t> into the BLOB.
      * 
      * @param slice The non-owning memory slice to read from.
      * @param offset The zero-based offset into the BLOB to start writing.
      * @return SQLITE_OK on success.
      */
-    inline int write(const SqliteBufferSlice& slice, int offset) {
-        return write(slice.data(), static_cast<int>(slice.bytes()), offset);
+    inline int write(duo::SpanView<uint8_t> slice, int offset) {
+        return write(slice.data(), static_cast<int>(slice.size()), offset);
+    }
+
+    /**
+     * @brief Writes data directly from a duo::Bytes into the BLOB.
+     * 
+     * @param buffer The dynamic buffer to read from.
+     * @param offset The zero-based offset into the BLOB to start writing.
+     * @return SQLITE_OK on success.
+     */
+    inline int write(const duo::Bytes& buffer, int offset) {
+        return write(buffer.data(), static_cast<int>(buffer.size()), offset);
     }
 
     /**

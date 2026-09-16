@@ -166,14 +166,11 @@ static void udf_transform(SqliteContext ctx, SqliteUdfArgs args) {
         return;
     }
 
-    SqliteResult<SqliteString> res = SqliteString::try_create(256);
-    if (res.is_err()) {
-        res.set_sqlite_err(ctx.get());
+    duo::String str;
+    if (!str.append("processed: ") || !str.append(args[0].as_text().data(), args[0].as_text().length())) {
+        ctx.result_error_nomem();
         return;
     }
-    SqliteString str = res.take_value();
-    str.append("processed: ");
-    str.append(args[0].as_text().data(), args[0].as_text().length());
     ctx.result_text(str.c_str(), str.length());
 }
 ```

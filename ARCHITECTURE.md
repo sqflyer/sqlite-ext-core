@@ -83,7 +83,7 @@ For a deeper dive into the specific mechanics and C++ paradigms used in individu
 - [**Value System (`SqliteValue`)**](docs/VALUE_ARCHITECTURE.md): The core zero-cost `Owned`/`View` wrappers over `sqlite3_value`, 24-byte Small Buffer Optimization, in-situ 16-byte raw binary UUID storage, orthogonal format flags, zero-copy cross-format comparisons, heterogeneous lookups, and SQLite subtype representations.
 - [**Value Containers & Matrix Dispatch (`sqlite3_value_containers.hpp`)**](docs/VALUE_CONTAINERS_ARCHITECTURE.md): Zero-dependency value containers (`SqliteValueTuple<N>`, `SqliteValueVec<N>`), scope-guarded stack allocator (`withSqliteRowOwned`), and generic compile-time 2D matrix dispatchers.
 - [**Row System (`SqliteRow`)**](docs/ROW_ARCHITECTURE.md): Universal `SqliteRowView` (16B) and `SqliteRowOwnedView` (16B) multiplexing prepared statement step rows, UDF argument vectors, and in-memory view arrays with zero heap allocation.
-- [**Dynamic Buffers (`SqliteBuffer`)**](docs/BUFFER_ARCHITECTURE.md): `-nostdlib++` replacements for `std::string` and `std::vector` using `sqlite3_realloc64` that natively hook into the Value System's FNV-1a hashing engine.
+- [**DuoSTL Linear Containers (`duo::Bytes`, `duo::String`)**](include/stl/duo_linear.hpp): High-performance 24-byte SBO linear containers and 16-byte zero-copy views (`duo::BytesView`, `duo::StringView`) providing exception-free OOM safety and native xxHash3 hashing.
 - [**Blob Streams (`SqliteBlobStream`)**](docs/BLOB_STREAM_ARCHITECTURE.md): Zero-copy stream interfaces for handling large SQLite blobs without loading them entirely into memory.
 - [**Online Backup (`SqliteBackup`)**](docs/BACKUP_ARCHITECTURE.md): RAII wrappers for the SQLite Online Backup API to ensure safe resource disposal during long-running background tasks.
 - [**Virtual Tables (`SqliteVTable`)**](docs/VTAB_ARCHITECTURE.md): An object-oriented routing framework that maps SQLite's raw C module function pointers to safe polymorphic C++ method invocations.
@@ -151,13 +151,13 @@ Because all code compiles with `-fno-exceptions` (`/EHs-c-`), allocation failure
   - Zero-boilerplate error setting on SQLite function execution contexts via `.set_sqlite_err(ctx.get())`, automatically mapping `SQLITE_NOMEM` to `sqlite3_result_error_nomem(ctx)`, `SQLITE_TOOBIG` to `sqlite3_result_error_toobig(ctx)`, and custom codes to `sqlite3_result_error` + `sqlite3_result_error_code`.
 - **Fallible Allocations (`sqlite_try_new`, `sqlite_try_new_array`)**:
   - `sqlite_try_new<T>(args...)` constructs objects via `sqlite3_malloc64` and in-place placement-new, returning `SqliteResult<T*>`.
-  - `sqlite_try_new_array<T>(count)` allocates uninitialized array buffers, returning `SqliteResult<SqliteBufferView<T>>`.
+  - `sqlite_try_new_array<T>(count)` allocates uninitialized array buffers, returning `SqliteResult<T*>`.
 - **Portable Early-Return Macro (`SQLITE_TRY_ASSIGN`)**:
   - Replaces tedious if-check error propagation with a portable 1-line macro:
     ```cpp
     SQLITE_TRY_ASSIGN(MyObj* obj, sqlite_try_new<MyObj>(args...));
     ```
-- **Non-Throwing Valid States**: `SqliteValueOwned`, `SqliteStringOwned`, `SqliteBlobOwned`, `SqliteBuffer`, `SqliteString`, and `SqliteStatement` guarantee non-null / valid checking via `.is_valid()` and `explicit operator bool()`.
+- **Non-Throwing Valid States**: `SqliteValueOwned`, `SqliteStringOwned`, `SqliteBlobOwned`, and `SqliteStatement` guarantee non-null / valid checking via `.is_valid()` and `explicit operator bool()`.
 - **Safe Degradation**: Operations on empty or unallocated objects return deterministic error codes (`SQLITE_NOMEM`, `SQLITE_MISUSE`) or safe default representations without dereferencing null pointers.
 
 ### Multi-Translation-Unit & ODR Safety

@@ -293,15 +293,12 @@ static void udf_parse_and_scale(SqliteContext ctx, SqliteUdfArgs args) {
         return;
     }
 
-    // Fallible buffer creation
-    auto res_buf = SqliteString::try_create(128);
-    if (res_buf.is_err()) {
-        res_buf.set_sqlite_err(ctx.get());
+    // Fallible buffer creation via duo::String
+    duo::String str;
+    if (!str.append("processed: ") || !str.append(args[0].as_text().data(), args[0].as_text().length())) {
+        ctx.result_error_nomem();
         return;
     }
-    SqliteString str = res_buf.take_value();
-    str.append("processed: ");
-    str.append(args[0].as_text().data(), args[0].as_text().length());
     ctx.result_text(str.c_str(), str.length());
 }
 ```

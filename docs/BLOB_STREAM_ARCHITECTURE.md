@@ -25,4 +25,4 @@ When designing systems using `SqliteBlobStream` (such as inverted indexes or vec
 
 - **Preallocation**: You cannot expand the size of a BLOB using this API. The row must be pre-allocated using the `zeroblob(N)` SQL function.
 - **Reopening**: Moving the `SqliteBlobStream` handle from row 1 to row 2 using `.reopen(2)` is significantly faster than destroying the stream and constructing a new one, as it bypasses the internal SQLite B-Tree traversal required to find the column offset.
-- **Integration with SqliteBuffer**: `SqliteBlobStream` accepts and reads `SqliteBuffer` and `SqliteBufferSlice` directly, avoiding double-buffering during data extraction or persistence.
+- **Integration with DuoSTL**: `SqliteBlobStream` accepts and reads `duo::Bytes` and `duo::BytesView` directly, avoiding double-buffering during data extraction or persistence.

@@ -550,54 +550,66 @@ void test_sqlite_value_owned_try_methods_oom() {
 }
 
 // ============================================================================
-// 9. SQLITE_BUFFER & SQLITE_STRING TRY_ METHODS UNDER OOM
+// 9. DUO::BYTES & DUO::STRING OOM SAFETY UNDER MEMORY LIMITS
 // ============================================================================
 
-void test_sqlite_buffer_and_string_try_methods_oom() {
+void test_duo_bytes_and_string_oom() {
   printf(
-      "9. Testing SqliteBuffer and SqliteString try_ methods under OOM...\n");
+      "9. Testing duo::Bytes and duo::String boolean OOM safety under memory limits...\n");
   sqlite3_initialize();
   sqlite3_int64 mem_baseline = sqlite3_memory_used();
 
   // 1. Constrain limit
   sqlite3_hard_heap_limit64(mem_baseline + 1);
 
-  // 2. SqliteBuffer try_reserve and try_append fail with nomem
+  // 2. duo::Bytes reserve, resize, and append fail gracefully with false on OOM
   {
-    SqliteBuffer buf;
-    SqliteStatus stat_res = buf.try_reserve(128);
-    assert(stat_res.is_err());
-    assert(stat_res.err_code() == SQLITE_NOMEM);
+    duo::Bytes buf;
+    assert(buf.is_sbo());
+    assert(!buf.reserve(128));
 
-    SqliteStatus stat_app = buf.try_append("This is a 64-byte long payload designed to exceed SBO capacity!", 64);
-    assert(stat_app.is_err());
-    assert(stat_app.err_code() == SQLITE_NOMEM);
+    bool app_res = buf.append("This is a 64-byte long payload designed to exceed SBO capacity!", 64);
+    assert(!app_res);
+    assert(buf.size() == 0);
+    assert(buf.is_sbo());
 
-    auto uninit_res = buf.try_append_uninitialized(64);
-    assert(uninit_res.is_err());
-    assert(uninit_res.err_code() == SQLITE_NOMEM);
+    assert(!buf.resize(64));
 
-    // 3. SqliteString try_create fails when exceeding SBO
-    auto str_res = SqliteString::try_create("This is a 64-byte long test string meant to exceed SBO capacity!");
+    // 3. duo::String reserve and append fail gracefully with false on OOM
+    duo::String str;
+    assert(str.is_sbo());
+    assert(!str.reserve(128));
+    bool str_app = str.append("This is a 64-byte long test string meant to exceed SBO capacity!");
+    assert(!str_app);
+    assert(str.length() == 0);
+    assert(str.is_sbo());
+
+    // 4. SqliteStringOwned try_create fails under constrained limit
+    auto str_res = SqliteStringOwned::try_create("This is a 64-byte long test string meant to exceed heap!");
     assert(str_res.is_err());
     assert(str_res.err_code() == SQLITE_NOMEM);
   }
 
-  // 4. Remove limit and verify success
+  // 5. Remove limit and verify success
   sqlite3_hard_heap_limit64(0);
 
   {
-    SqliteBuffer buf;
-    assert(buf.try_append("Hello World", 11).is_ok());
-    assert(buf.bytes() == 11);
+    duo::Bytes buf;
+    assert(buf.append("Hello World", 11));
+    assert(buf.size() == 11);
 
-    auto ok_str = SqliteString::try_create("Hello String");
+    duo::String str;
+    assert(str.append("Hello String"));
+    assert(str == "Hello String");
+    assert(str.length() == 12);
+
+    auto ok_str = SqliteStringOwned::try_create("Hello SqliteStringOwned");
     assert(ok_str.is_ok());
-    assert(ok_str.unwrap() == "Hello String");
+    assert(strcmp(ok_str.unwrap().value(), "Hello SqliteStringOwned") == 0);
   }
 
   assert(sqlite3_memory_used() == mem_baseline);
-  printf("   [PASS] SqliteBuffer and SqliteString try_ methods under OOM "
+  printf("   [PASS] duo::Bytes and duo::String boolean OOM safety under memory limits "
          "verified.\n");
 }
 
@@ -779,7 +791,7 @@ int main() {
   test_try_new_under_oom();
   test_sqlite_value_vec_try_methods_oom();
   test_sqlite_value_owned_try_methods_oom();
-  test_sqlite_buffer_and_string_try_methods_oom();
+  test_duo_bytes_and_string_oom();
   test_smart_ptr_try_methods_and_c_leak_fix_oom();
   test_ext_state_try_methods_oom();
 

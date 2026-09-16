@@ -58,19 +58,20 @@ stream.reopen(2);
 // ... write to row 2 ...
 ```
 
-### 4. Zero-Copy Integration with SqliteBuffer
-If you are dynamically accumulating data into a `SqliteBuffer` in RAM, you can stream it directly into a blob, or use `append_uninitialized` to read directly from a blob into the buffer without extra memory copies!
+### 4. Zero-Copy Integration with duo::Bytes and duo::BytesView
+If you are dynamically accumulating data into a `duo::Bytes` in RAM, you can stream it directly into a blob, or use `duo::BytesView` to write slices directly into the stream without extra memory copies!
 
 ```cpp
-SqliteBlobStream stream(db, "main", "files", "data", 1, false);
+SqliteBlobStream stream(db, "main", "files", "data", 1, true);
 
-SqliteBuffer buffer;
+duo::Bytes buffer;
 int total_size = stream.bytes();
 
-// Reserve raw capacity and pull data directly from the BLOB into the buffer
-void* raw_dest = buffer.append_uninitialized(total_size);
-stream.read(raw_dest, total_size, 0);
+// Resize buffer and pull data directly from the BLOB into the buffer
+buffer.resize(total_size);
+stream.read(buffer.data(), total_size, 0);
 
-// You can also write a Slice directly back into the stream!
-stream.write(buffer.bufferSlice(0, 100), 0);
+// You can also write a duo::BytesView directly back into the stream!
+duo::BytesView slice(buffer.data(), 100);
+stream.write(slice, 0);
 ```

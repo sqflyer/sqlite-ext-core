@@ -4,7 +4,6 @@
 #include <sqlite3.h>
 #include "sqlite3_value.hpp"
 #include "sqlite3_row.hpp"
-#include "sqlite3_buffer.hpp"
 
 /**
  * @brief Zero-dependency C++ RAII wrapper over SQLite prepared statements (`sqlite3_stmt*`).
@@ -346,36 +345,36 @@ public:
     }
 
     /**
-     * @brief Binds a dynamic SqliteBuffer (as BLOB) to a 1-based parameter index.
+     * @brief Binds a dynamic duo::String (as TEXT) to a 1-based parameter index.
      * @param col 1-based parameter index.
-     * @param buf SqliteBuffer instance.
+     * @param str duo::String instance.
      * @param dtor Memory disposal strategy callback (default SQLITE_TRANSIENT).
      * @return SQLITE_OK on success, or error code.
      */
-    inline int bind(int col, const SqliteBuffer& buf, void (*dtor)(void*) = SQLITE_TRANSIENT) {
-        return m_stmt ? buf.bind(m_stmt, col, dtor) : SQLITE_MISUSE;
+    inline int bind(int col, const duo::String& str, void (*dtor)(void*) = SQLITE_TRANSIENT) {
+        return m_stmt ? sqlite3_bind_text(m_stmt, col, str.data(), static_cast<int>(str.size()), dtor) : SQLITE_MISUSE;
     }
 
     /**
-     * @brief Binds a dynamic SqliteString (as TEXT) to a 1-based parameter index.
+     * @brief Binds a dynamic duo::Bytes (as BLOB) to a 1-based parameter index.
      * @param col 1-based parameter index.
-     * @param str SqliteString instance.
+     * @param bytes duo::Bytes instance.
      * @param dtor Memory disposal strategy callback (default SQLITE_TRANSIENT).
      * @return SQLITE_OK on success, or error code.
      */
-    inline int bind(int col, const SqliteString& str, void (*dtor)(void*) = SQLITE_TRANSIENT) {
-        return m_stmt ? str.bind(m_stmt, col, dtor) : SQLITE_MISUSE;
+    inline int bind(int col, const duo::Bytes& bytes, void (*dtor)(void*) = SQLITE_TRANSIENT) {
+        return m_stmt ? sqlite3_bind_blob(m_stmt, col, bytes.data(), static_cast<int>(bytes.size()), dtor) : SQLITE_MISUSE;
     }
 
     /**
-     * @brief Binds a non-owning SqliteBufferSlice (as BLOB) to a 1-based parameter index.
+     * @brief Binds a non-owning duo::SpanView<uint8_t> (as BLOB) to a 1-based parameter index.
      * @param col 1-based parameter index.
-     * @param slice SqliteBufferSlice instance.
+     * @param slice duo::SpanView<uint8_t> instance.
      * @param dtor Memory disposal strategy callback (default SQLITE_TRANSIENT).
      * @return SQLITE_OK on success, or error code.
      */
-    inline int bind(int col, const SqliteBufferSlice& slice, void (*dtor)(void*) = SQLITE_TRANSIENT) {
-        return m_stmt ? slice.bind(m_stmt, col, dtor) : SQLITE_MISUSE;
+    inline int bind(int col, duo::SpanView<uint8_t> slice, void (*dtor)(void*) = SQLITE_TRANSIENT) {
+        return m_stmt ? sqlite3_bind_blob(m_stmt, col, slice.data(), static_cast<int>(slice.size()), dtor) : SQLITE_MISUSE;
     }
 
     /**

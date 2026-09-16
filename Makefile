@@ -23,9 +23,9 @@ endif
 
 export PATH UNAME_S CXX CC SAN_FLAGS
 
-.PHONY: test test-asan test-macos test-ext-state test-cpp-duo test-cpp-value test-cpp-row test-cpp-value-containers test-locks test-cpp-allocator test-cpp-smart-ptr test-cpp-udf test-cpp-aggregate test-cpp-statement test-cpp-tvf test-cpp-transaction test-cpp-db test-cpp-buffer test-cpp-blob-stream test-cpp-backup test-cpp-vtab test-cpp-sql-runner test-cpp-extension test-threads test-time test-oom test-multi-tu example-cpp example-c example-coro-c example-coro-cpp leak-check-integration clean
+.PHONY: test test-asan test-macos test-ext-state test-cpp-duo test-cpp-value test-cpp-row test-cpp-value-containers test-locks test-cpp-allocator test-cpp-smart-ptr test-cpp-udf test-cpp-aggregate test-cpp-statement test-cpp-tvf test-cpp-transaction test-cpp-db test-cpp-blob-stream test-cpp-backup test-cpp-vtab test-cpp-sql-runner test-cpp-extension test-threads test-time test-oom test-multi-tu example-cpp example-c example-coro-c example-coro-cpp leak-check-integration clean
 
-test: test-ext-state test-cpp-duo test-cpp-value test-cpp-row test-cpp-value-containers test-locks test-time test-oom test-multi-tu test-cpp-allocator test-cpp-smart-ptr test-cpp-udf test-cpp-aggregate test-cpp-statement test-cpp-tvf test-cpp-transaction test-cpp-db test-cpp-buffer test-cpp-blob-stream test-cpp-backup test-cpp-vtab test-cpp-sql-runner test-cpp-extension test-threads
+test: test-ext-state test-cpp-duo test-cpp-value test-cpp-row test-cpp-value-containers test-locks test-time test-oom test-multi-tu test-cpp-allocator test-cpp-smart-ptr test-cpp-udf test-cpp-aggregate test-cpp-statement test-cpp-tvf test-cpp-transaction test-cpp-db test-cpp-blob-stream test-cpp-backup test-cpp-vtab test-cpp-sql-runner test-cpp-extension test-threads
 
 test-asan:
 	@echo "=== Running AddressSanitizer (ASan) Memory Verification ==="
@@ -80,9 +80,6 @@ test-cpp-transaction:
 test-cpp-db:
 	$(MAKE) -C tests/cpp_db test
 
-test-cpp-buffer:
-	$(MAKE) -C tests/cpp_buffer test
-
 test-cpp-blob-stream:
 	@$(MAKE) -C tests/cpp_blob_stream test
 
@@ -136,7 +133,6 @@ clean:
 	$(MAKE) -C tests/cpp_tvf clean
 	$(MAKE) -C tests/cpp_transaction clean
 	$(MAKE) -C tests/cpp_db clean
-	$(MAKE) -C tests/cpp_buffer clean
 	$(MAKE) -C tests/cpp_blob_stream clean
 	$(MAKE) -C tests/cpp_backup clean
 	$(MAKE) -C tests/oom_safety clean

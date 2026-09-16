@@ -129,7 +129,7 @@ When the connection closes (`sqlite3_close(db)`), SQLite invokes the `xDestroy` 
 
 ## 6. C++ Memory Lifecycle (`sqlite3_conn_state.hpp`)
 
-`SqliteConnState<T>` ensures that complex C++ objects (such as `std::string`, `SqliteBuffer`, or custom RAII containers) embedded in the connection state are properly constructed and destructed without pulling in `<new>`:
+`SqliteConnState<T>` ensures that complex C++ objects (such as `duo::String`, `duo::Bytes`, or custom RAII containers) embedded in the connection state are properly constructed and destructed without pulling in `<new>`:
 
 1. **`sqlite_new<Entry>()`**: Executes in-place construction (`sqlite_construct_at`) for the embedded state `T`.
 2. **`sqlite_delete(entry)`**: Calls explicit destructors (`sqlite_destroy_at`) before releasing memory back to SQLite's heap.

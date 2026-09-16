@@ -3,12 +3,13 @@
 
 #include <stdint.h>
 #include <stddef.h>
+#include "stl/duo_alloc.h"
 
 /**
  * @file sqlite3_hash.hpp
- * @brief Zero-dependency, freestanding 64-bit MurmurHash2 implementation for SQLite extension core.
+ * @brief Zero-dependency, freestanding 64-bit hashing implementation using xxHash3.
  *
- * Provides high-performance 64-bit MurmurHash2 (MurmurHash64A) hashing, high-entropy composite
+ * Provides high-performance 64-bit xxHash3 hashing via DuoSTL, high-entropy composite
  * combining, and Kirsch-Mitzenmacher double hashing for Bloom filters. Completely freestanding
  * (-nostdlib++ compatible) and unaligned-memory safe across all CPU architectures.
  */
@@ -16,23 +17,17 @@
 namespace SqliteHashUtil {
 
     /** 
-     * @brief Canonical 64-bit seed constant for MurmurHash2.
-     * 
-     * Initial state constant chosen for optimal pseudo-random dispersion across 64-bit hash spaces.
+     * @brief Canonical 64-bit seed constant for xxHash3 hashing.
      */
-    static constexpr uint64_t DEFAULT_SEED = 0xc6a4a7935bd1e995ULL;
+    static constexpr uint64_t DEFAULT_SEED = 0ULL;
 
     /** 
-     * @brief Multiplier constant (M) for 64-bit MurmurHash2.
-     * 
-     * 64-bit prime multiplier (0xc6a4a7935bd1e995) creating an irreversible mixing permutation over Z/2^64Z.
+     * @brief Multiplier constant (M) for 64-bit MurmurHash2 backward compatibility.
      */
     static constexpr uint64_t MURMUR2_64_M = 0xc6a4a7935bd1e995ULL;
 
     /** 
-     * @brief Bitwise shift/rotation constant (R) for 64-bit MurmurHash2.
-     * 
-     * Shift amount (47) that maximizes bit diffusion between upper and lower bit lanes during XOR-shifts.
+     * @brief Bitwise shift/rotation constant (R) for 64-bit MurmurHash2 backward compatibility.
      */
     static constexpr int MURMUR2_64_R = 47;
 
@@ -45,16 +40,9 @@ namespace SqliteHashUtil {
 
     /**
      * @brief 64-bit MurmurHash2 (MurmurHash64A) for arbitrary binary payloads.
-     *
-     * Processes 8 bytes per iteration using unaligned-safe byte reconstruction, absorbs trailing
-     * 1..7 bytes via a fallthrough Duff-style switch, and applies a triple-stage avalanche finalizer.
-     *
-     * @param key Pointer to the data buffer (can be unaligned, NULL-safe).
-     * @param len Number of bytes to hash (if <= 0, returns seed digest).
-     * @param seed 64-bit initialization seed (defaults to DEFAULT_SEED).
-     * @return 64-bit unsigned hash digest.
+     * Preserved for legacy reference.
      */
-    inline uint64_t murmur_hash2_64(const void* key, int len, uint64_t seed = DEFAULT_SEED) noexcept {
+    inline uint64_t murmur_hash2_64(const void* key, int len, uint64_t seed = 0xc6a4a7935bd1e995ULL) noexcept {
         uint64_t h = seed ^ (static_cast<uint64_t>(len >= 0 ? len : 0) * MURMUR2_64_M);
 
         if (!key || len <= 0) {
@@ -107,59 +95,68 @@ namespace SqliteHashUtil {
     }
 
     /**
-     * @brief Hashes a contiguous buffer of bytes using 64-bit MurmurHash2.
+     * @brief Hashes a contiguous buffer of bytes using 64-bit xxHash3.
      * 
-     * @param ptr Pointer to the data buffer.
+     * Leverages DuoSTL's high-performance, unaligned-safe xxHash3 implementation (`duo_hash_xxhash3`).
+     * Handles null pointers or non-positive lengths by computing the xxHash3 digest of an empty string
+     * with the given seed.
+     * 
+     * @param ptr Pointer to the data buffer (can be nullptr if len <= 0).
      * @param len Number of bytes to hash.
-     * @param seed 64-bit initialization seed.
-     * @return 64-bit hash digest.
+     * @param seed 64-bit initialization seed (defaults to DEFAULT_SEED = 0ULL).
+     * @return 64-bit xxHash3 digest.
      */
     inline uint64_t hash(const void* ptr, int len, uint64_t seed = DEFAULT_SEED) noexcept {
-        return murmur_hash2_64(ptr, len, seed);
+        if (!ptr || len <= 0) return duo_xxh3_impl("", 0, seed);
+        return duo_hash_xxhash3(ptr, static_cast<size_t>(len), seed, 0);
     }
 
     /**
-     * @brief Mixes/combines a buffer into an accumulator seed using MurmurHash2.
+     * @brief Mixes/hashes an additional buffer into an accumulator seed using 64-bit xxHash3.
+     * 
+     * If ptr is nullptr or len <= 0, returns the current accumulator seed unchanged.
      * 
      * @param seed Current accumulator state seed.
      * @param ptr Pointer to the additional buffer.
      * @param len Byte length of additional buffer.
-     * @return 64-bit mixed hash digest.
+     * @return 64-bit mixed xxHash3 digest.
      */
     inline uint64_t mix(uint64_t seed, const void* ptr, int len) noexcept {
-        return murmur_hash2_64(ptr, len, seed);
+        if (!ptr || len <= 0) return seed;
+        return duo_hash_xxhash3(ptr, static_cast<size_t>(len), seed, 0);
     }
 
     /**
-     * @brief Hashes a 64-bit signed integer with MurmurHash2 avalanche mixing.
+     * @brief Hashes a 64-bit signed integer with 64-bit xxHash3.
      * 
      * @param val 64-bit integer value.
-     * @param seed 64-bit initialization seed.
-     * @return 64-bit hash digest.
+     * @param seed 64-bit initialization seed (defaults to DEFAULT_SEED = 0ULL).
+     * @return 64-bit xxHash3 digest.
      */
     inline uint64_t hash_int64(int64_t val, uint64_t seed = DEFAULT_SEED) noexcept {
-        return murmur_hash2_64(&val, sizeof(val), seed);
+        return duo_hash_xxhash3(&val, sizeof(val), seed, 0);
     }
 
     /**
-     * @brief Hashes a double-precision float with normalized zero (+0.0 vs -0.0).
+     * @brief Hashes a double-precision float with normalized zero (+0.0 vs -0.0) using 64-bit xxHash3.
      * 
-     * Normalizes negative zero (-0.0) to positive zero (+0.0) to preserve SQL equality invariants.
+     * Normalizes negative zero (-0.0) to positive zero (+0.0) to preserve SQL equality invariants
+     * (-0.0 == +0.0 in IEEE 754 and SQLite).
      * 
      * @param val Double-precision floating point number.
-     * @param seed 64-bit initialization seed.
-     * @return 64-bit hash digest.
+     * @param seed 64-bit initialization seed (defaults to DEFAULT_SEED = 0ULL).
+     * @return 64-bit xxHash3 digest.
      */
     inline uint64_t hash_double(double val, uint64_t seed = DEFAULT_SEED) noexcept {
         double d = (val == 0.0) ? 0.0 : val;
-        return murmur_hash2_64(&d, sizeof(d), seed);
+        return duo_hash_xxhash3(&d, sizeof(d), seed, 0);
     }
 
     /**
      * @brief Combines two 64-bit hash values with high entropy dispersal.
      * 
      * Uses non-commutative asymmetric bit-shifts and an irrational golden ratio constant
-     * to eliminate bit-cancellation in symmetric/repeated composite columns.
+     * (COMBINE_MAGIC) to eliminate bit-cancellation in symmetric or repeated composite columns.
      * 
      * @param seed Primary accumulator seed.
      * @param val Secondary hash value to combine.
@@ -172,12 +169,13 @@ namespace SqliteHashUtil {
     /**
      * @brief Generates the i-th Bloom filter bit index using Kirsch-Mitzenmacher double hashing.
      * 
-     * Simulates k independent hash functions from a single 64-bit MurmurHash2 digest by splitting
-     * into lower 32-bit (h1) and upper 32-bit (h2) halves without asymptotic loss in false positive rates:
+     * Simulates k independent hash functions from a single 64-bit hash digest (such as xxHash3)
+     * by splitting into lower 32-bit (h1) and upper 32-bit (h2) halves without asymptotic loss in
+     * false positive rates:
      * 
      * Computes: g_i(x) = (h1 + i * h2) % num_bits
      * 
-     * @param hash64 The single precomputed 64-bit MurmurHash2.
+     * @param hash64 The single precomputed 64-bit hash digest.
      * @param i The probe index (0 .. k-1).
      * @param num_bits Total bit array capacity.
      * @return Bit index in range [0, num_bits - 1] (returns 0 if num_bits == 0).

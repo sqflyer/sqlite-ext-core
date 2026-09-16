@@ -628,8 +628,7 @@ public:
  * C-strings (`const char*`).
  *
  * Explicitly constructs a lightweight non-allocating `SqliteStringView(val)` to
- * prevent compiler overload resolution ambiguity between `SqliteStringView` and
- * `SqliteString` (from `sqlite3_buffer.hpp`).
+ * prevent compiler overload resolution ambiguity.
  */
 #ifndef SQLITE_DERIVE_CSTR_RELATIONAL_OPS
 #define SQLITE_DERIVE_CSTR_RELATIONAL_OPS                                      \

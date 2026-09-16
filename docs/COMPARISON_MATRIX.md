@@ -65,13 +65,14 @@ This matrix details which macro synthesizers are implemented by each class:
 
 ---
 
-## 5. Buffers, Strings & Streams Matrix (`sqlite3_buffer.hpp`, `sqlite3_blob_stream.hpp`)
+## 5. DuoSTL Linear Containers & Streams Matrix (`stl/duo_linear.hpp`, `sqlite3_blob_stream.hpp`)
 
 | Type | Ownership / Allocation | In-Place Expansion | Exception Safety | Zero-Copy Output | Interop with SQLite / Primary Role |
 | :--- | :--- | :---: | :---: | :---: | :--- |
-| **`SqliteBufferSlice`** | **Non-Owning (16B)** (Pointer + `int64` bytes) | N/A (Span view) | `-fno-exceptions` safe | Direct pointer inspection | Freestanding replacement for `std::span<const uint8_t>` and `std::string_view`. |
-| **`SqliteBuffer`** | `sqlite3_malloc64` / `sqlite3_realloc64` | Yes (2x growth) | `-fno-exceptions` safe | Pointer transfer (`release()`) | Direct binding to SQLite blobs; replaces `std::vector<uint8_t>`. |
-| **`SqliteString`** | `sqlite3_malloc64` / `sqlite3_realloc64` | Yes (2x growth) | `-fno-exceptions` safe | Null-terminated `c_str()` | Direct binding to SQLite text; replaces `std::string`. |
+| **`duo::BytesView`** | **Non-Owning (16B)** (`const uint8_t*` + `size_t`) | N/A (Span view) | `-fno-exceptions` safe | Direct pointer inspection | Semantic alias for `duo::SpanView<uint8_t>`; direct SQLite blob binding. |
+| **`duo::StringView`** | **Non-Owning (16B)** (`const char*` + `size_t`) | N/A (String slice) | `-fno-exceptions` safe | Direct pointer inspection | Fast string view; direct SQLite text binding & comparisons. |
+| **`duo::Bytes`** | **Owning (24B SBO)** (Inline $\le 23\text{B}$ / heap) | Yes (Adaptive geometric growth) | `-fno-exceptions` safe (`bool` returns) | Direct buffer borrow (`as_view()`) | Drop-in linear byte container; direct SQLite blob parameter binding. |
+| **`duo::String`** | **Owning (24B SBO)** (Inline $\le 23\text{B}$ / heap) | Yes (Adaptive geometric growth) | `-fno-exceptions` safe (`bool` returns) | Null-terminated `c_str()` | Drop-in null-terminated string; direct SQLite text binding. |
 | **`SqliteBlobStream`** | SQLite Incremental Blob (`sqlite3_blob*`) | Chunk-based streaming | `SQLITE_BUSY` safe | Zero-allocation read/write | Direct row/column streaming with incremental chunk offsets. |
 
 ---

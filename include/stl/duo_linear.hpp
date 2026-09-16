@@ -845,6 +845,9 @@ static_assert(is_standard_layout<SpanView<int>>::value, "SpanView<T> must be sta
 static_assert(is_trivially_copyable<Span<int>>::value, "Span<T> must be trivially copyable!");
 static_assert(is_trivially_copyable<SpanView<int>>::value, "SpanView<T> must be trivially copyable!");
 
+/** @brief Semantic alias for non-owning immutable view over contiguous bytes. */
+using BytesView = SpanView<uint8_t>;
+
 /**
  * @def DUO_CXX_SPAN_BORROW_OPS(Type, DataExpr, SizeExpr)
  * @brief Injects non-owning Span/SpanView borrowing, slicing, and conversion operators
@@ -2079,6 +2082,11 @@ public:
         duo_bytes_clear(&m_inner);
     }
 
+    /** @brief Resizes container to @p new_size bytes. Newly added bytes are zeroed. Truncation is O(1). */
+    inline bool resize(size_t new_size) noexcept {
+        return duo_bytes_resize(&m_inner, new_size);
+    }
+
     /** @brief Frees any allocated heap buffer and resets container to empty inline SBO state. */
     inline void reset() noexcept {
         duo_bytes_destroy(&m_inner);
@@ -2505,8 +2513,13 @@ public:
      * @tparam N Size of the character array including null terminator.
      */
     template <size_t N>
-    constexpr inline StringView(const char (&arr)[N]) noexcept
-        : m_inner{arr, (N > 0 && arr[N - 1] == '\0') ? N - 1 : N} {}
+    constexpr inline StringView(const char (&arr)[N]) noexcept : m_inner{arr, 0} {
+        size_t len = 0;
+        while (len < N && arr[len] != '\0') {
+            ++len;
+        }
+        m_inner.size = len;
+    }
 
     /** @brief Constructs a string view directly from its pure C mirror struct duo_str_view_t. */
     constexpr inline StringView(duo_str_view_t inner) noexcept : m_inner(inner) {}
@@ -2646,6 +2659,26 @@ inline bool operator>(const char* a, StringView b) noexcept {
 }
 inline bool operator>=(const char* a, StringView b) noexcept {
     return StringView(a) >= b;
+}
+
+// Comparison operators between StringView and const char*
+inline bool operator==(StringView a, const char* b) noexcept {
+    return a == StringView(b);
+}
+inline bool operator!=(StringView a, const char* b) noexcept {
+    return a != StringView(b);
+}
+inline bool operator<(StringView a, const char* b) noexcept {
+    return a < StringView(b);
+}
+inline bool operator<=(StringView a, const char* b) noexcept {
+    return a <= StringView(b);
+}
+inline bool operator>(StringView a, const char* b) noexcept {
+    return a > StringView(b);
+}
+inline bool operator>=(StringView a, const char* b) noexcept {
+    return a >= StringView(b);
 }
 
 // Static ABI assertions for StringView

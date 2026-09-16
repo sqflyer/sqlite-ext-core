@@ -1552,6 +1552,34 @@ static inline bool duo_bytes_erase(duo_bytes_t* b, size_t idx, size_t len) {
 }
 
 /**
+ * @brief Resizes @p b to @p new_size bytes. Newly added bytes are zeroed.
+ * Truncation is O(1) without memory reallocation.
+ * Returns true on success, or false on allocation failure.
+ */
+static inline bool duo_bytes_resize(duo_bytes_t* b, size_t new_size) {
+    size_t cur_sz = duo_bytes_size(b);
+    if (new_size <= cur_sz) {
+        if (duo_bytes_is_sbo(b)) {
+            b->m_sbo.tag.length = (uint8_t)new_size;
+        } else {
+            b->m_heap.m_size = new_size;
+        }
+        return true;
+    }
+    if (!duo_bytes_reserve(b, new_size)) {
+        return false;
+    }
+    if (duo_bytes_is_sbo(b)) {
+        DUO_MEMSET(&b->m_sbo.m_sbo[cur_sz], 0, new_size - cur_sz);
+        b->m_sbo.tag.length = (uint8_t)new_size;
+    } else {
+        DUO_MEMSET(b->m_heap.m_data + cur_sz, 0, new_size - cur_sz);
+        b->m_heap.m_size = new_size;
+    }
+    return true;
+}
+
+/**
  * @brief Initializes @p b and copies @p len bytes from @p data.
  * Returns true on success, or false on allocation failure.
  * @param b Pointer to uninitialized bytes container.

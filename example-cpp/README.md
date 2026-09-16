@@ -110,7 +110,7 @@ static void math_hypot(SqliteContext ctx, SqliteUdfArgs args) {
 
 ### 3.3 Fallible String UDF (`text_repeat`)
 
-Demonstrates fallible memory allocation and dynamic string buffer manipulation with Rust-style `SqliteResult<SqliteString>` and `SqliteStatus`:
+Demonstrates fallible memory allocation and dynamic string buffer manipulation with `duo::String`:
 
 ```cpp
 static void text_repeat(SqliteContext ctx, SqliteUdfArgs args) {
@@ -122,22 +122,15 @@ static void text_repeat(SqliteContext ctx, SqliteUdfArgs args) {
     int count = static_cast<int>(args[1].as_int64());
     if (count < 0) count = 0;
 
-    // Fallible buffer allocation returning SqliteResult<SqliteString>
-    auto res_buf = SqliteString::try_create();
-    if (res_buf.is_err()) {
-        res_buf.set_sqlite_err(ctx.get());
-        return;
-    }
-    SqliteString str = res_buf.take_value();
-    SqliteStatus reserve_stat = str.try_reserve(text.length() * count + 1);
-    if (reserve_stat.is_err()) {
-        reserve_stat.set_sqlite_err(ctx.get());
+    // Fallible buffer allocation returning bool via duo::String
+    duo::String str;
+    if (!str.reserve(static_cast<size_t>(text.length() * count + 1))) {
+        ctx.result_error_nomem();
         return;
     }
     for (int i = 0; i < count; ++i) {
-        SqliteStatus stat = str.try_append(text.data(), text.length());
-        if (stat.is_err()) {
-            stat.set_sqlite_err(ctx.get());
+        if (!str.append(text.data(), text.length())) {
+            ctx.result_error_nomem();
             return;
         }
     }
@@ -145,8 +138,8 @@ static void text_repeat(SqliteContext ctx, SqliteUdfArgs args) {
 }
 ```
 
-- `SqliteString::try_create()` and `try_reserve()` gracefully propagate out-of-memory errors via `res.set_sqlite_err(ctx.get())`.
-- `SqliteString::try_append()` dynamically expands the buffer without throwing exceptions or risking null-pointer dereferences.
+- `duo::String::reserve()` and `append()` return `bool` (`false` on OOM) without throwing exceptions or risking null-pointer dereferences.
+- Propagates out-of-memory errors cleanly via `ctx.result_error_nomem()`.
 
 ---
 

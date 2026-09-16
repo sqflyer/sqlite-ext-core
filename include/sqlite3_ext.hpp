@@ -9,7 +9,6 @@
 #include "stl/duo_linear.hpp"
 #include "stl/duo_hash.hpp"
 #include "sqlite3_smart_ptr.hpp"
-#include "sqlite3_buffer.hpp"
 #include "sqlite3_db.hpp"
 #include "sqlite3_value.hpp"
 #include "sqlite3_row.hpp"

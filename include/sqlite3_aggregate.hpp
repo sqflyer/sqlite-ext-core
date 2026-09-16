@@ -7,7 +7,6 @@
 #include "sqlite3_allocator.hpp"
 #include "sqlite3_ext_state.hpp"
 #include "sqlite3_conn_state.hpp"
-#include "sqlite3_buffer.hpp"
 
 
 /**
@@ -151,9 +150,18 @@ namespace SqliteAggregateDetail {
     inline void set_sqlite_result(sqlite3_context* ctx, const SqliteBlobOwned& val) { val.result(ctx); }
     inline void set_sqlite_result(sqlite3_context* ctx, const SqliteValueView& val) { val.result(ctx); }
     inline void set_sqlite_result(sqlite3_context* ctx, const SqliteValueOwned& val) { val.result(ctx); }
-    inline void set_sqlite_result(sqlite3_context* ctx, const SqliteBuffer& val) { val.result(ctx); }
-    inline void set_sqlite_result(sqlite3_context* ctx, const SqliteString& val) { val.result(ctx); }
-    inline void set_sqlite_result(sqlite3_context* ctx, const SqliteBufferSlice& val) { val.result(ctx); }
+    inline void set_sqlite_result(sqlite3_context* ctx, duo::StringView val) {
+        sqlite3_result_text(ctx, val.data(), static_cast<int>(val.length()), SQLITE_TRANSIENT);
+    }
+    inline void set_sqlite_result(sqlite3_context* ctx, const duo::String& val) {
+        sqlite3_result_text(ctx, val.data(), static_cast<int>(val.length()), SQLITE_TRANSIENT);
+    }
+    inline void set_sqlite_result(sqlite3_context* ctx, duo::BytesView val) {
+        sqlite3_result_blob(ctx, val.data(), static_cast<int>(val.size()), SQLITE_TRANSIENT);
+    }
+    inline void set_sqlite_result(sqlite3_context* ctx, const duo::Bytes& val) {
+        sqlite3_result_blob(ctx, val.data(), static_cast<int>(val.size()), SQLITE_TRANSIENT);
+    }
 
     /**
      * @brief Tag dispatch priority hierarchy for unambiguous SFINAE method resolution.

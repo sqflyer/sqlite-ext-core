@@ -58,10 +58,10 @@ void test_transparent_hashing(sqlite3* db) {
     assert(eq(v_alice, str_alice));
     assert(eq(v_alice, "alice"));
 
-    // Verify SqliteString, SqliteBuffer, and SqliteBufferSlice hashing and equality
-    SqliteString s_alice("alice");
-    SqliteBuffer b_alice("alice", 5);
-    SqliteBufferSlice sl_alice("alice", 5);
+    // Verify duo::String, duo::Bytes, and duo::BytesView hashing and equality
+    duo::String s_alice("alice");
+    duo::Bytes b_alice("alice", 5);
+    duo::BytesView sl_alice(reinterpret_cast<const uint8_t*>("alice"), 5);
 
     assert(hasher(o_alice) == hasher(s_alice));
     assert(hasher(o_alice) == hasher(b_alice));
