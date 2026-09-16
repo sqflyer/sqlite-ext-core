@@ -20,10 +20,16 @@ if %ERRORLEVEL% neq 0 exit /b %ERRORLEVEL%
 cl /nologo /O2 /W4 /Zi /fsanitize=address /MD /I"../../include" /I"%SQLITE_INC%" /std:c++17 /Fe:bin\test_udf_state.exe test_udf_state.cpp "%SQLITE_LIB%"
 if %ERRORLEVEL% neq 0 exit /b %ERRORLEVEL%
 
+cl /nologo /O2 /W4 /Zi /fsanitize=address /MD /I"../../include" /I"%SQLITE_INC%" /std:c++17 /Fe:bin\test_direct_dispatch.exe test_direct_dispatch.cpp "%SQLITE_LIB%"
+if %ERRORLEVEL% neq 0 exit /b %ERRORLEVEL%
+
 bin\test_udf.exe
 if %ERRORLEVEL% neq 0 exit /b %ERRORLEVEL%
 
 bin\test_udf_state.exe
+if %ERRORLEVEL% neq 0 exit /b %ERRORLEVEL%
+
+bin\test_direct_dispatch.exe
 if %ERRORLEVEL% neq 0 exit /b %ERRORLEVEL%
 
 goto end

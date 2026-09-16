@@ -458,6 +458,67 @@ A freestanding, dual-ABI container and algorithms library designed specifically 
 - [DuoSTL User Guide](docs/DUO_STL_README.md)
 - [DuoSTL Technical Architecture](docs/DUO_STL_ARCHITECTURE.md)
 
+### 25. Direct Dispatch Framework (`include/direct_dispatch_context.hpp`, `include/direct_dispatch_hub.hpp`)
+Zero-overhead, in-process C++ function execution and registry layer decoupled from SQLite's VDBE (Virtual Database Engine) bytecode virtual machine, providing direct C++ function pointer execution and zero-heap stack-allocated argument dispatch.
+
+```
+Standard SQLite UDF Flow (~120–180 ns):
+[SQL Query] -> [Parser] -> [Bytecode Gen] -> [VDBE Loop] -> [Register Unpack] -> [C Callback] -> [VDBE Register]
+
+Direct Dispatch Flow (~8–15 ns):
+[C++ / Script] -> [DirectDispatchHub (O(1) Hash)] -> [Stack Arg Fill] -> [Raw Function Pointer Call] -> [In-Situ Result]
+```
+
+#### Key Features:
+- **VDBE Virtual Machine Bypass**: Executes registered C++ handlers directly as raw function pointers, completely eliminating bytecode opcode instruction interpretation and VDBE evaluation register overhead.
+- **CPU Stack Argument Allocation**: Leverages `withSqliteRowOwned` to allocate 1 to 16 arguments directly on the CPU stack frame (zero heap allocations), seamlessly falling back to dynamic allocation for $>16$ arguments.
+- **1:1 `SqliteContext` Parity**: `DirectDispatchContext` matches `SqliteContext` API identically (`result_int`, `result_int64`, `result_double`, `result_text`, `result_blob`, `result_null`, `result_pointer`, `result_error`, `db()`, `state<T>()`, `conn_state<T>()`).
+- **Dual-Execution Compatibility**: Author a single templated UDF (`template <typename Context, typename Args> void my_udf(Context& ctx, Args args)`) that compiles and runs identically in standard SQLite SQL queries via `SqliteUdf::define` and direct C++ via `DirectDispatchHub`.
+- **In-Situ Value Result Storage**: Results are written directly into an embedded 24-byte `SqliteValueOwned` member by value, avoiding pointer chasing or heap wrappers.
+- **Zero-Copy Borrowed Buffers**: `result_text` and `result_blob` support `SQLITE_STATIC` with an embedded `is_borrowed` flag to borrow string and binary buffers without heap allocation.
+- **Stateless DuoSTL Robin Hood Registry**: Backed by `duo::HashMap<duo::String, DirectDispatchHandler>` with xxHash3 $\mathcal{O}(1)$ lookups and zero-tombstone backward-shift deletion, shared cleanly across multiple database connections.
+- **Overwrite Protection**: `register_function` and `register_udf` reject duplicate function names, returning `false` if an existing registration would be overwritten.
+- **Uniform Overloaded APIs**: `register_function`, `register_udf`, `find`, `contains`, `erase`, `dispatch`, and `invoke` support `const char*`, `duo::String`, and `duo::StringView`.
+- **High-Performance Lua Scripting Bridge**: Serves as a zero-overhead execution bridge for embedded Lua/LuaJIT runtimes, borrowing Lua stack strings directly without dynamic allocations via `SqliteValueOwned::borrow_text(lua_tolstring(L, idx, &len))`.
+
+#### Quick Example:
+```cpp
+#include "direct_dispatch_hub.hpp"
+#include "direct_dispatch_context.hpp"
+#include "sqlite3_udf.hpp"
+
+// 1. Author a dual-execution UDF (single codebase for SQL and Direct Dispatch)
+template <typename Context, typename Args>
+void udf_add(Context& ctx, Args args) {
+    if (args.count() < 2) {
+        ctx.result_error("Need 2 arguments");
+        return;
+    }
+    ctx.result_int64(args[0].as_int64() + args[1].as_int64());
+}
+
+// 2. Register once into SQLite UDF engine AND DirectDispatchHub
+SqliteUdf::define<udf_add<SqliteContext, SqliteRowView>>(db, "add");
+
+DirectDispatchHub hub;
+hub.register_udf<udf_add<DirectDispatchContext, SqliteRowOwnedWrapper>>("add");
+
+// 3. Direct invocation bypassing VDBE (zero heap allocations for <=16 args)
+DirectDispatchContext ctx(db);
+bool ok = hub.dispatch("add", 2, [](SqliteRowOwnedWrapper& args) {
+    args[0] = 40;
+    args[1] = 2;
+}, &ctx);
+
+if (ok && !ctx.has_error()) {
+    sqlite3_int64 sum = ctx.result().as_int64(); // 42
+}
+```
+
+#### Documentation:
+- [Direct Dispatch Quickstart](docs/DIRECT_DISPATCH_README.md)
+- [Direct Dispatch Architecture](docs/DIRECT_DISPATCH_ARCHITECTURE.md)
+
 ## Building and Testing
 
 `sqlite-ext-core` features dual cross-platform build systems supporting both Clang / GCC (`Makefile`) and Microsoft Visual C++ (`make.bat`), enforcing a **C++17 standard baseline** (`-std=c++17` on GCC/Clang, `/std:c++17` on MSVC) with strict `-nostdlib++` verification across all compilers.
@@ -468,7 +529,7 @@ A freestanding, dual-ABI container and algorithms library designed specifically 
 Uses `clang` / `clang++` (or `gcc` on Linux) with `-std=c++17 -nostdlib++ -fno-exceptions -fno-rtti -fsanitize=address`:
 
 ```bash
-# Clean and run all 20 subsystem integration tests
+# Clean and run all 24 subsystem integration tests
 make clean
 make test
 

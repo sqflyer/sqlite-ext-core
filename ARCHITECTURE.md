@@ -59,7 +59,23 @@ Instead of forcing developers to write C-style `xConnect` / `xBestIndex` callbac
 - **Generic 8x8 Compile-Time Matrix Dispatch & Triangular Pruning**: `SQLITE_DISPATCH_1D_8`, `SQLITE_DISPATCH_2D_8X8`, `SQLITE_DISPATCH_ROW_KEY_COLS_8X8` (turnkey dispatcher auto-routing 0-PK tables via `SQLITE_DISPATCH_1D_8` with `KeyN = 0` and composite PK tables via lower-triangular bound pruning $1 \le KeyN \le ColsN$ eliminating 36 impossible pairs for a 44.4% code reduction), `SQLITE_DISPATCH_VALID_2D`, `SQLITE_WITH_ROW_OWNED_1D`, and `SQLITE_WITH_KEY_VAL_OWNED_8X8` expand runtime column/key configurations into compile-time `constexpr` specializations for any storage template or stack span in 1 line.
 - **Auto-Routing Arguments**: Hidden columns in virtual tables are safely packaged into bounds-checked objects like `SqliteUdfArgs` (`SqliteRowView`) and injected seamlessly into your C++ methods.
 
-## 5. Subsystem Architecture Guides
+## 5. In-Process Direct Dispatch & VDBE Bypass Architecture
+
+Invoking custom logic through SQLite User-Defined Functions traditionally incurs multi-layer VDBE (Virtual Database Engine) bytecode interpretation overhead:
+$$\text{SQL Parser} \longrightarrow \text{Bytecode Generator} \longrightarrow \text{VDBE Loop} \longrightarrow \text{Register Unpack} \longrightarrow \text{C Trampoline} \longrightarrow \text{Context Result Pack}$$
+
+While essential for arbitrary SQL expressions inside queries, this pipeline introduces 120–180 ns of register and opcode interpretation latency per function invocation. For high-frequency in-memory filters, tight analytical loops, or embedded scripting runtimes (such as Lua/LuaJIT), this overhead dominates processing time.
+
+The **Direct Dispatch Framework** (`include/direct_dispatch_context.hpp`, `include/direct_dispatch_hub.hpp`) completely decouples execution from the SQLite VDBE engine:
+- **Direct Function Pointer Call**: Handlers execute directly as raw C++ function pointers via `DirectDispatchHandler` (`void (*)(DirectDispatchContext&, SqliteRowOwnedWrapper)`), reducing invocation latency to ~8–15 ns.
+- **Dual-Execution UDF Parity**: Write a single templated UDF (`template <typename Context, typename Args> void my_fn(Context& ctx, Args args)`) that compiles bit-identically for both SQLite SQL queries via `SqliteUdf::define` and direct C++ callers via `DirectDispatchHub::register_udf`.
+- **Zero-Allocation Stack Frame**: Arguments are staged into CPU stack memory using `withSqliteRowOwned` (up to 16 arguments in a single stack frame with 0 heap allocations) and accessed via a uniform 16-byte span (`SqliteRowOwnedWrapper`).
+- **In-Situ Result Storage**: Results are written directly into an embedded 24-byte `SqliteValueOwned` within `DirectDispatchContext` (total context size: 56 bytes), supporting non-owning borrowed string/blob buffers via `SQLITE_STATIC`.
+- **Stateless, Multi-DB Decoupled Registry**: `DirectDispatchHub` contains no database handle (`sqlite3*`) and maintains a stateless `duo::HashMap<duo::String, DirectDispatchHandler>` with xxHash3 lookups, safe to share across multiple database connections and threads.
+- **Overwrite Protection**: `register_function` and `register_udf` verify existing registrations and return `false` on collisions to prevent accidental handler clobbering.
+- **Embedded Scripting Runtime Bridge**: Provides a zero-overhead bridge for embedded runtimes like Lua, borrowing string pointers from the Lua stack zero-copy via `SqliteValueOwned::borrow_text(lua_tolstring(...))`.
+
+## 6. Subsystem Architecture Guides
 
 For a deeper dive into the specific mechanics and C++ paradigms used in individual components, refer to their dedicated architecture guides:
 
@@ -102,6 +118,7 @@ For a deeper dive into the specific mechanics and C++ paradigms used in individu
 - [**Coroutine Table-Valued Functions (TVF)**](docs/TVF_CORO_ARCHITECTURE.md): Zero-boilerplate single generator functions using Stackful Fibers or Stackless C++20 `co_yield` with automatic column multiplexing.
 - [**Virtual Tables (VTAB)**](docs/VTAB_ARCHITECTURE.md): Polymorphic standard-layout routing, transactions, savepoints, and direct context state injection.
 - [**Virtual Table Argument Parser & DDL Synthesizer (`sqlite3_vtab_arg.hpp`)**](docs/VTAB_ARG_ARCHITECTURE.md): Zero-allocation argument classification (`SqliteVTabArg`), 5 official SQLite type affinities, column constraint flags, composite PK aggregators, rowid alias detection, and clean DDL synthesis for `sqlite3_declare_vtab()`.
+- [**Direct Dispatch Framework (`direct_dispatch_context.hpp`, `direct_dispatch_hub.hpp`)**](docs/DIRECT_DISPATCH_ARCHITECTURE.md): Zero-overhead in-process function dispatcher bypassing SQLite's VDBE virtual machine, in-situ 24-byte `SqliteValueOwned` result storage, CPU stack argument allocation via `withSqliteRowOwned`, dual-execution UDF parity, and embedded scripting bridge.
 - [**Unified Extensibility (`SqliteExt` / `sqlite3_ext.h`)**](include/sqlite3_ext.hpp): Symmetrical registration facade combining UDFs, Aggregates, TVFs, and Virtual Tables.
 - [**C++ Extension Tutorial**](example-cpp/README.md): Turnkey C++ example showcasing compilation, testing, and multi-language loading.
 - [**Pure C Extension Tutorial**](example-c/README.md): Turnkey Pure C (C99/C11) example demonstrating state management and UDF registration.
@@ -112,7 +129,7 @@ For a deeper dive into the specific mechanics and C++ paradigms used in individu
 - [**Unified Macro Architecture (`docs/MACROS.md`)**](docs/MACROS.md): 5-tier macro synthesizer suite for standard container alignment, array accessors & iterators, vector/tuple modifiers, composite hashing, scalar & container relational operators, and C++20 transparent functors.
 - [**C++ Type & Container Comparison Matrix (`docs/COMPARISON_MATRIX.md`)**](docs/COMPARISON_MATRIX.md): Comprehensive comparative reference across all value types, containers, row views, macros, and transparent STL functors.
 
-## 6. Dual Build System & Compiler Parity
+## 7. Dual Build System & Compiler Parity
 
 The repository maintains strict parity across two native build pipelines:
 - **POSIX / MSYS2 (`Makefile`)**: Drives `gcc` and `clang` compilers with `-nostdlib++` flags.
@@ -123,7 +140,7 @@ The repository maintains strict parity across two native build pipelines:
 2. **Link-Time Standard Library Prohibition**: Passing `/link /NODEFAULTLIB:msvcprt.lib /NODEFAULTLIB:libcpmt.lib` ensures the Microsoft Linker immediately rejects any code paths attempting to introduce standard C++ runtime symbols.
 3. **Deterministic DLL Discovery**: Windows `.bat` test scripts co-locate required SQLite runtime DLLs directly into local `bin/` execution folders to guarantee isolated, collision-free runtime execution across concurrent test runs.
 
-## 7. OOM Resilience & Multi-Translation-Unit (Multi-TU) Safety
+## 8. OOM Resilience & Multi-Translation-Unit (Multi-TU) Safety
 
 ### Exception-Free OOM Hardening & Pure Rust-Style Error Model
 Because all code compiles with `-fno-exceptions` (`/EHs-c-`), allocation failures never throw `std::bad_alloc`. We implement a comprehensive, pure Rust-style error handling model:
@@ -146,7 +163,7 @@ Because all code compiles with `-fno-exceptions` (`/EHs-c-`), allocation failure
 ### Multi-Translation-Unit & ODR Safety
 Large SQLite extensions often span multiple `.cpp` files. `sqlite3_ext_state.hpp` leverages C++11 template static member guarantees so that multiple translation units in the same extension shared library automatically link to a single unified state registry without duplicate symbol collisions or disjoint static instances.
 
-## 8. Unified Macro Synthesizers & Transparent Functors
+## 9. Unified Macro Synthesizers & Transparent Functors
 
 To enforce complete standard library independence while providing modern C++ ergonomics, `sqlite-ext-core` employs a unified macro synthesizer architecture:
 - **Single-Burst SIMD Initialization (`SqliteValueOwned::static_null_array()`)**: Container constructors leverage a pre-populated static 192-byte array of 8 canonical `SQLITE_NULL` instances (`tag.raw = 0xA0`), lowered by Clang/GCC/MSVC directly into vector register operations (`vmovups`) executing in 1–2 CPU clock cycles (~0.3–0.6 ns).
@@ -155,9 +172,10 @@ To enforce complete standard library independence while providing modern C++ erg
 - **Relational Operators (`SQLITE_DERIVE_CONTAINER_RELATIONAL_OPS`, `SQLITE_DERIVE_ALL_SCALAR_RELATIONAL_OPS`)**: Full operator suites (`==`, `!=`, `<`, `<=`, `>`, `>=`) supporting multi-column lexicographical ordering and scalar comparisons honoring SQLite's type collation (`NULL < NUMERIC < TEXT < BLOB`).
 - **C++20 Transparent Functors (`SQLITE_DERIVE_TRANSPARENT_EQUAL`, `SQLITE_DERIVE_TRANSPARENT_LESS`)**: Synthesizes `using is_transparent = void;` functors enabling zero-allocation lookups in `std::unordered_map` (Swiss Tables) and `std::map` (B-Trees).
 
-## 9. Modular Test Suite Organization
+## 10. Modular Test Suite Organization
 
 The test framework is strictly modularized by domain and isolation level:
+- **`tests/cpp_udf/`**: User-defined scalar functions (`test_udf.cpp`), multi-connection shared extension state (`test_udf_state.cpp`), and direct in-process UDF execution bypassing VDBE (`test_direct_dispatch.cpp`).
 - **`tests/cpp_vtab/`**: Virtual table routing (`test_vtab.cpp`), multi-connection state isolation (`test_vtab_state.cpp`), and zero-allocation argument parsing, schema validation, and multi-PK aggregation (`test_vtab_arg.cpp`).
 - **`tests/cpp_value/`**: Scalar and polymorphic value types (`SqliteValueOwned`, `SqliteValueView`, `SqliteStringView`, `SqliteBlobView`), SBO heap transitions, subtype tagging, and scalar operator overloads.
 - **`tests/cpp_row/`**: Universal row wrappers (`SqliteRowView`, `SqliteRowOwnedWrapper`), multi-column row relational comparisons, and scope-guarded stack execution (`withSqliteRowOwned`).

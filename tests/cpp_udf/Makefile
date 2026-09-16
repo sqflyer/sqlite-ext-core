@@ -24,7 +24,7 @@ endif
 CXXFLAGS := -std=c++17 -Wall -Wextra -I../../include -fno-exceptions -fno-rtti $(SAN_FLAGS)
 LIBS := -lsqlite3 $(SAN_FLAGS)
 
-TARGETS = bin/test_udf bin/test_udf_state
+TARGETS = bin/test_udf bin/test_udf_state bin/test_direct_dispatch
 
 .PHONY: all test clean
 
@@ -33,12 +33,17 @@ all: test
 test: $(TARGETS)
 	./bin/test_udf
 	./bin/test_udf_state
+	./bin/test_direct_dispatch
 
 bin/test_udf: test_udf.cpp
 	mkdir -p bin
 	$(CXX) $(CXXFLAGS) -o $@ $< $(LIBS)
 
 bin/test_udf_state: test_udf_state.cpp
+	mkdir -p bin
+	$(CXX) $(CXXFLAGS) -o $@ $< $(LIBS)
+
+bin/test_direct_dispatch: test_direct_dispatch.cpp
 	mkdir -p bin
 	$(CXX) $(CXXFLAGS) -o $@ $< $(LIBS)
 
