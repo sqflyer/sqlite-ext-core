@@ -736,21 +736,27 @@ void test_ext_state_try_methods_oom() {
   // 1. Set limit
   sqlite3_hard_heap_limit64(mem_baseline + 1);
 
-  auto res = SqliteExtState<StatePayload>::try_get_or_create(db);
-  assert(res.is_err());
-  assert(res.err_code() == SQLITE_NOMEM);
-
   auto init_res = SqliteExtState<StatePayload>::try_init(db);
   assert(init_res.is_err());
   assert(init_res.err_code() == SQLITE_NOMEM);
 
+  auto get_res = SqliteExtState<StatePayload>::try_get(db);
+  assert(get_res.is_err());
+  assert(get_res.err_code() == SQLITE_NOTFOUND);
+
   // 2. Remove limit and verify success
   sqlite3_hard_heap_limit64(0);
 
-  auto ok_res = SqliteExtState<StatePayload>::try_get_or_create(db);
+  auto ok_init = SqliteExtState<StatePayload>::try_init(db);
+  assert(ok_init.is_ok());
+  assert(ok_init.unwrap() != nullptr);
+
+  auto ok_res = SqliteExtState<StatePayload>::try_get(db);
   assert(ok_res.is_ok());
   assert(ok_res.unwrap() != nullptr);
   ok_res.unwrap()->counter = 42;
+
+  SqliteExtState<StatePayload>::destructor(ok_init.unwrap());
 
   sqlite3_close(db);
   printf("   [PASS] SqliteExtState try_ methods under OOM verified.\n");

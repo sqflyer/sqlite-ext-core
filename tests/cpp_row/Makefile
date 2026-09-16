@@ -21,7 +21,7 @@ else
     SAN_FLAGS := -fsanitize=address
 endif
 
-CXXFLAGS := -std=c++11 -Wall -Wextra -I../../include -fno-exceptions -fno-rtti $(SAN_FLAGS)
+CXXFLAGS := -std=c++17 -Wall -Wextra -I../../include -fno-exceptions -fno-rtti $(SAN_FLAGS)
 LIBS := -lsqlite3 $(SAN_FLAGS)
 
 .PHONY: all test clean

@@ -380,14 +380,18 @@ SqliteVTab::define<MySeriesTable, VTabOptions::Eponymous>(db, "generate_series")
 
 ---
 
-## Stateful Virtual Tables (`SqliteVTab::define_with_state`)
+## Stateful Virtual Tables (`define_with_state`, `define_with_conn_state`, `define_with_hybrid_state`)
 
-Virtual tables can participate in shared, per-connection application state alongside Scalar UDFs and Aggregates:
+Virtual tables can participate in shared per-database state, private per-connection state, or combined hybrid state alongside Scalar UDFs, Aggregates, and TVFs:
 
 ```cpp
 struct AppCacheState {
     int cache_hits;
     int active_sessions;
+};
+
+struct ConnSessionState {
+    int local_reads;
 };
 
 class StatefulTable : public SqliteVTable {
@@ -397,15 +401,19 @@ public:
     static int connect(SqliteConnectArgs& args) {
         int rc = sqlite3_declare_vtab(args.db(), "CREATE TABLE x(id INT, val INT)");
         if (rc == SQLITE_OK) {
-            // Access shared connection state during connect/create:
-            AppCacheState* state = args.state<AppCacheState>();
+            // Access state during connect/create:
+            AppCacheState* ext_state = args.state<AppCacheState>();
+            // Or connection state:
+            // ConnSessionState* conn_state = args.conn_state<ConnSessionState>();
+            // Or hybrid state:
+            // auto [ext, conn] = args.hybrid_state<AppCacheState, ConnSessionState>();
             args.set_instance(sqlite_new<StatefulTable>(args.db()));
         }
         return rc;
     }
 
     int column(SqliteContext& ctx, int N) override {
-        // Access shared state in 1 CPU instruction during column extraction:
+        // Access state in 1 CPU instruction during column extraction:
         AppCacheState* state = ctx.state<AppCacheState>();
         state->cache_hits++;
         ctx.result_int(state->cache_hits);
@@ -413,8 +421,14 @@ public:
     }
 };
 
-// Registration:
+// 1. Shared per-database state:
 SqliteVTab::define_with_state<AppCacheState, StatefulTable>(db, "my_cache_tbl");
+
+// 2. Private lock-free per-connection state:
+SqliteVTab::define_with_conn_state<ConnSessionState, StatefulTable>(db, "my_conn_tbl");
+
+// 3. Combined hybrid state (C++17 structured bindings):
+SqliteVTab::define_with_hybrid_state<AppCacheState, ConnSessionState, StatefulTable>(db, "my_hybrid_tbl");
 ```
 
 ---

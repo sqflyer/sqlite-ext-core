@@ -5,6 +5,7 @@
 #include "sqlite3_db.hpp"
 #include "sqlite3_value.hpp"
 #include "sqlite3_ext_state.hpp"
+#include "sqlite3_conn_state.hpp"
 
 /**
  * @brief Lightweight registry for mapping C++ stateless functions/lambdas, stateful extension functions, and aggregates to SQLite UDFs.
@@ -234,6 +235,146 @@ public:
             nullptr,
             nullptr,
             SqliteExtState<State>::destructor
+        );
+    }
+
+    // ========================================================================
+    // PER-CONNECTION STATEFUL UDF REGISTRATION (SqliteConnState Integration)
+    // ========================================================================
+
+    template <typename State, void (*Func)(SqliteContext, SqliteUdfArgs)>
+    static int define_with_conn_state(
+        SqliteDatabaseView db,
+        const char* name,
+        int num_args = -1,
+        bool deterministic = false
+    ) {
+        void* raw_state = SqliteConnState<State>::init(db.get());
+        int flags = SQLITE_UTF8 | SQLITE_SUBTYPE | (deterministic ? SQLITE_DETERMINISTIC : 0);
+        return sqlite3_create_function_v2(
+            db.get(),
+            name,
+            num_args,
+            flags,
+            raw_state,
+            &SqliteUdf::template_proxy_context<Func>,
+            nullptr,
+            nullptr,
+            SqliteConnState<State>::destructor
+        );
+    }
+
+    template <typename State, void (*Func)(SqliteContext&, SqliteUdfArgs)>
+    static int define_with_conn_state(
+        SqliteDatabaseView db,
+        const char* name,
+        int num_args = -1,
+        bool deterministic = false
+    ) {
+        void* raw_state = SqliteConnState<State>::init(db.get());
+        int flags = SQLITE_UTF8 | SQLITE_SUBTYPE | (deterministic ? SQLITE_DETERMINISTIC : 0);
+        return sqlite3_create_function_v2(
+            db.get(),
+            name,
+            num_args,
+            flags,
+            raw_state,
+            &SqliteUdf::template_proxy_context_ref<Func>,
+            nullptr,
+            nullptr,
+            SqliteConnState<State>::destructor
+        );
+    }
+
+    template <typename State, void (*Func)(sqlite3_context*, SqliteUdfArgs)>
+    static int define_with_conn_state(
+        SqliteDatabaseView db,
+        const char* name,
+        int num_args = -1,
+        bool deterministic = false
+    ) {
+        void* raw_state = SqliteConnState<State>::init(db.get());
+        int flags = SQLITE_UTF8 | SQLITE_SUBTYPE | (deterministic ? SQLITE_DETERMINISTIC : 0);
+        return sqlite3_create_function_v2(
+            db.get(),
+            name,
+            num_args,
+            flags,
+            raw_state,
+            &SqliteUdf::template_proxy_raw<Func>,
+            nullptr,
+            nullptr,
+            SqliteConnState<State>::destructor
+        );
+    }
+
+    // ========================================================================
+    // HYBRID STATEFUL UDF REGISTRATION (SqliteHybridState Integration)
+    // ========================================================================
+
+    template <typename ExtState, typename ConnState, void (*Func)(SqliteContext, SqliteUdfArgs), typename LockPolicy = SqliteRwLock>
+    static int define_with_hybrid_state(
+        SqliteDatabaseView db,
+        const char* name,
+        int num_args = -1,
+        bool deterministic = false
+    ) {
+        void* raw_holder = SqliteHybridState<ExtState, ConnState, LockPolicy>::init(db.get());
+        int flags = SQLITE_UTF8 | SQLITE_SUBTYPE | (deterministic ? SQLITE_DETERMINISTIC : 0);
+        return sqlite3_create_function_v2(
+            db.get(),
+            name,
+            num_args,
+            flags,
+            raw_holder,
+            &SqliteUdf::template_proxy_context<Func>,
+            nullptr,
+            nullptr,
+            SqliteHybridState<ExtState, ConnState, LockPolicy>::destructor
+        );
+    }
+
+    template <typename ExtState, typename ConnState, void (*Func)(SqliteContext&, SqliteUdfArgs), typename LockPolicy = SqliteRwLock>
+    static int define_with_hybrid_state(
+        SqliteDatabaseView db,
+        const char* name,
+        int num_args = -1,
+        bool deterministic = false
+    ) {
+        void* raw_holder = SqliteHybridState<ExtState, ConnState, LockPolicy>::init(db.get());
+        int flags = SQLITE_UTF8 | SQLITE_SUBTYPE | (deterministic ? SQLITE_DETERMINISTIC : 0);
+        return sqlite3_create_function_v2(
+            db.get(),
+            name,
+            num_args,
+            flags,
+            raw_holder,
+            &SqliteUdf::template_proxy_context_ref<Func>,
+            nullptr,
+            nullptr,
+            SqliteHybridState<ExtState, ConnState, LockPolicy>::destructor
+        );
+    }
+
+    template <typename ExtState, typename ConnState, void (*Func)(sqlite3_context*, SqliteUdfArgs), typename LockPolicy = SqliteRwLock>
+    static int define_with_hybrid_state(
+        SqliteDatabaseView db,
+        const char* name,
+        int num_args = -1,
+        bool deterministic = false
+    ) {
+        void* raw_holder = SqliteHybridState<ExtState, ConnState, LockPolicy>::init(db.get());
+        int flags = SQLITE_UTF8 | SQLITE_SUBTYPE | (deterministic ? SQLITE_DETERMINISTIC : 0);
+        return sqlite3_create_function_v2(
+            db.get(),
+            name,
+            num_args,
+            flags,
+            raw_holder,
+            &SqliteUdf::template_proxy_raw<Func>,
+            nullptr,
+            nullptr,
+            SqliteHybridState<ExtState, ConnState, LockPolicy>::destructor
         );
     }
 

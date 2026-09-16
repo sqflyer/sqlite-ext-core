@@ -160,11 +160,12 @@ void test_high_concurrency_conn_state() {
         assert(rc == SQLITE_OK);
 
         // Initialize unique state for each connection
-        SessionState* state = SqliteConnState<SessionState>::get_or_create(conns[i], [](SessionState* s) {
+        SqliteConnState<SessionState>::init(conns[i], [](SessionState* s) {
             s->session_id = 0;
             s->query_count = 0;
             s->user_tag[0] = '\0';
         });
+        SessionState* state = SqliteConnState<SessionState>::get(conns[i]);
         assert(state != nullptr);
         state->session_id = (i + 1) * 1000;
         state->query_count = (i + 1);

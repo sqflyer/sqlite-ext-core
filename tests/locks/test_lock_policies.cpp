@@ -24,9 +24,11 @@ int main() {
     assert(sqlite3_open(":memory:", &db2) == SQLITE_OK);
 
     // Test 1: SqliteExtState with SqliteRwLock (Default)
+    void *p1 = StateRW::init(db1, [](CounterState *c) { c->counter = 100; });
     {
-        CounterState *s = StateRW::get_or_create(db1, [](CounterState *c) { c->counter = 100; });
+        CounterState *s = StateRW::from_ptr(p1);
         assert(s != nullptr);
+        assert(StateRW::get(db1) == s);
         {
             StateRW::WriteGuard w(s);
             w->counter += 50;
@@ -38,9 +40,11 @@ int main() {
     }
 
     // Test 2: SqliteExtState with SqliteTinyLock (1-byte Spinlock)
+    void *p2 = StateTiny::init(db1, [](CounterState *c) { c->counter = 200; });
     {
-        CounterState *s = StateTiny::get_or_create(db1, [](CounterState *c) { c->counter = 200; });
+        CounterState *s = StateTiny::from_ptr(p2);
         assert(s != nullptr);
+        assert(StateTiny::get(db1) == s);
         {
             StateTiny::WriteGuard w(s);
             w->counter += 25;
@@ -52,9 +56,11 @@ int main() {
     }
 
     // Test 3: SqliteExtState with SqliteMutex (SQLite Native Mutex)
+    void *p3 = StateMutex::init(db1, [](CounterState *c) { c->counter = 300; });
     {
-        CounterState *s = StateMutex::get_or_create(db1, [](CounterState *c) { c->counter = 300; });
+        CounterState *s = StateMutex::from_ptr(p3);
         assert(s != nullptr);
+        assert(StateMutex::get(db1) == s);
         {
             StateMutex::WriteGuard w(s);
             w->counter += 10;
@@ -66,15 +72,25 @@ int main() {
     }
 
     // Test 4: Verify type aliases
+    void *p_rw = SqliteExtStateRw<CounterState>::init(db2, [](CounterState *c) { c->counter = 1; });
+    void *p_tiny = SqliteExtStateTiny<CounterState>::init(db2, [](CounterState *c) { c->counter = 2; });
+    void *p_mutex = SqliteExtStateMutex<CounterState>::init(db2, [](CounterState *c) { c->counter = 3; });
     {
-        CounterState *s_rw = SqliteExtStateRw<CounterState>::get_or_create(db2, [](CounterState *c) { c->counter = 1; });
-        CounterState *s_tiny = SqliteExtStateTiny<CounterState>::get_or_create(db2, [](CounterState *c) { c->counter = 2; });
-        CounterState *s_mutex = SqliteExtStateMutex<CounterState>::get_or_create(db2, [](CounterState *c) { c->counter = 3; });
+        CounterState *s_rw = SqliteExtStateRw<CounterState>::from_ptr(p_rw);
+        CounterState *s_tiny = SqliteExtStateTiny<CounterState>::from_ptr(p_tiny);
+        CounterState *s_mutex = SqliteExtStateMutex<CounterState>::from_ptr(p_mutex);
 
         assert(s_rw->counter == 1);
         assert(s_tiny->counter == 2);
         assert(s_mutex->counter == 3);
     }
+
+    StateRW::destructor(p1);
+    StateTiny::destructor(p2);
+    StateMutex::destructor(p3);
+    SqliteExtStateRw<CounterState>::destructor(p_rw);
+    SqliteExtStateTiny<CounterState>::destructor(p_tiny);
+    SqliteExtStateMutex<CounterState>::destructor(p_mutex);
 
     sqlite3_close(db1);
     sqlite3_close(db2);

@@ -1069,7 +1069,7 @@ public:
         return *this;
     }
 
-    /** @brief Duplicates transient view into an owned 16-byte value with inline SBO optimization. */
+    /** @brief Duplicates transient view into an owned 24-byte value with inline SBO optimization. */
     inline SqliteValueOwned to_owned() const;
 
     /** @brief Returns the underlying `sqlite3_value` pointer. */
@@ -1871,7 +1871,7 @@ private:
 
     /** 
      * @brief Internal helper to deep-copy another SqliteValueOwned instance.
-     * Performs a 16-byte burst copy followed by conditional heap payload duplication.
+     * Performs a 24-byte burst copy followed by conditional heap payload duplication.
      */
     inline void copy_from(const SqliteValueOwned& other) {
         memcpy(static_cast<void*>(this), &other, sizeof(SqliteValueOwned));
@@ -1891,7 +1891,7 @@ private:
 
     /** 
      * @brief Internal helper to move another SqliteValueOwned instance.
-     * Takes ownership of the 16-byte state and resets the source to SQLITE_NULL.
+     * Takes ownership of the 24-byte state and resets the source to SQLITE_NULL.
      * If the source instance is marked immutable, deep-copies instead to prevent mutating it.
      */
     inline void move_from(SqliteValueOwned&& other) noexcept {
@@ -2030,7 +2030,7 @@ public:
     }
 
     /**
-     * @brief Constructs an owned 16-byte value by copying/inlining from an existing `sqlite3_value`.
+     * @brief Constructs an owned 24-byte value by copying/inlining from an existing `sqlite3_value`.
      */
     explicit SqliteValueOwned(const sqlite3_value* val, bool is_immutable = false) {
         if (!val) {
@@ -2528,15 +2528,15 @@ public:
     }
 
     /**
-     * @brief Returns a canonical static SQLITE_NULL instance (16 bytes, tag = 0xA0).
+     * @brief Returns a canonical static SQLITE_NULL instance (24 bytes, tag = 0xA0).
      * 
-     * ### 16-Byte Canonical SQL NULL Layout:
+     * ### 24-Byte Canonical SQL NULL Layout:
      * - Offset 0..7:   `pData = nullptr` (64-bit zeroed pointer)
      * - Offset 8..11:  `heap_len = 0` (32-bit zeroed length)
      * - Offset 12:     `affinity = SQLITE_AFF_NONE`
-     * - Offset 13:     `reserved = 0`
-     * - Offset 14:     `subtype = SQLITE_SUBTYPE_NONE` (0x00)
-     * - Offset 15:     `tag = 0xA0` (type = SQLITE_NULL = 5, heap = false, len = 0)
+     * - Offset 13..21: `reserved[9] = {0}`
+     * - Offset 22:     `subtag = 0x00` (SQLITE_SUBTYPE_NONE, mutable)
+     * - Offset 23:     `tag = 0xA0` (type = SQLITE_NULL = 5, heap = false, len = 0)
      * 
      * Because `tag.raw == 0xA0 >= 0x20`, this instance is recognized as an active SQLite value
      * (`is_active() == true` and `is_null() == true`), distinguishing it from empty/uninitialized
@@ -2550,7 +2550,7 @@ public:
     }
 
     /**
-     * @brief Returns a pointer to a canonical static array of 8 SQLITE_NULL instances (128 bytes).
+     * @brief Returns a pointer to a canonical static array of 8 SQLITE_NULL instances (192 bytes).
      * 
      * ### SIMD Vectorized Initialization (`null_array`):
      * Container initializers and constructors use `static_null_array()` as a pre-populated template

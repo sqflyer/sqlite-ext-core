@@ -21,7 +21,7 @@ else
     SAN_FLAGS := -fsanitize=address
 endif
 
-CXXFLAGS := -std=c++11 -Wall -Wextra -I../../include -fno-exceptions -fno-rtti $(SAN_FLAGS)
+CXXFLAGS := -std=c++17 -Wall -Wextra -I../../include -fno-exceptions -fno-rtti $(SAN_FLAGS)
 LDFLAGS := -lsqlite3 $(SAN_FLAGS)
 BIN_DIR = bin
 
@@ -37,7 +37,7 @@ $(BIN_DIR)/test_tvf_state: test_tvf_state.cpp | $(BIN_DIR)
 	$(CXX) $(CXXFLAGS) -o $@ $< $(LDFLAGS)
 
 $(BIN_DIR)/test_tvf_coro: test_tvf_coro.cpp | $(BIN_DIR)
-	$(CXX) -std=c++11 -Wall -Wextra -I../../include -fno-exceptions -fno-rtti -o $@ $< -lsqlite3
+	$(CXX) -std=c++17 -Wall -Wextra -I../../include -fno-exceptions -fno-rtti -o $@ $< -lsqlite3
 
 test: all
 	./$(BIN_DIR)/test_tvf

@@ -211,8 +211,15 @@ void run_stateful_vtab_tests() {
     sqlite3* db1 = nullptr;
     assert(sqlite3_open(":memory:", &db1) == SQLITE_OK);
 
-    printf("1. Initializing shared state on db1...\n");
-    SqliteExtState<VTabSharedState>::get_or_create(db1, [](VTabSharedState* s) {
+    printf("1. Registering stateful virtual table and companion UDFs on db1 (defaults init)...\n");
+    assert((SqliteVTab::define_with_state<VTabSharedState, StateCacheTable, VTabOptions::Writable>(db1, "state_cache")) == SQLITE_OK);
+    assert((SqliteUdf::define_with_state<VTabSharedState, udf_vtab_get_stats>(db1, "vtab_stats", 0)) == SQLITE_OK);
+    assert((SqliteUdf::define_with_state<VTabSharedState, udf_vtab_set_tag>(db1, "vtab_set_tag", 1)) == SQLITE_OK);
+
+    printf("2. Initializing shared state on db1 via get()...\n");
+    {
+        VTabSharedState* s = SqliteExtState<VTabSharedState>::get(db1);
+        assert(s != nullptr);
         s->total_rows_read = 0;
         s->total_rows_inserted = 0;
         s->query_count = 0;
@@ -223,12 +230,7 @@ void run_stateful_vtab_tests() {
         s->cache[2] = 300;
         s->cache[3] = 400;
         s->cache[4] = 500;
-    });
-
-    printf("2. Registering stateful virtual table and companion UDFs on db1...\n");
-    assert((SqliteVTab::define_with_state<VTabSharedState, StateCacheTable, VTabOptions::Writable>(db1, "state_cache")) == SQLITE_OK);
-    assert((SqliteUdf::define_with_state<VTabSharedState, udf_vtab_get_stats>(db1, "vtab_stats", 0)) == SQLITE_OK);
-    assert((SqliteUdf::define_with_state<VTabSharedState, udf_vtab_set_tag>(db1, "vtab_set_tag", 1)) == SQLITE_OK);
+    }
 
     assert(sqlite3_exec(db1, "CREATE VIRTUAL TABLE my_cache USING state_cache();", nullptr, nullptr, nullptr) == SQLITE_OK);
 
@@ -296,17 +298,19 @@ void run_stateful_vtab_tests() {
     sqlite3* db2 = nullptr;
     assert(sqlite3_open(":memory:", &db2) == SQLITE_OK);
 
-    SqliteExtState<VTabSharedState>::get_or_create(db2, [](VTabSharedState* s) {
+    assert((SqliteVTab::define_with_state<VTabSharedState, StateCacheTable, VTabOptions::Writable>(db2, "state_cache")) == SQLITE_OK);
+    assert((SqliteUdf::define_with_state<VTabSharedState, udf_vtab_get_stats>(db2, "vtab_stats", 0)) == SQLITE_OK);
+
+    {
+        VTabSharedState* s = SqliteExtState<VTabSharedState>::get(db2);
+        assert(s != nullptr);
         s->total_rows_read = 0;
         s->total_rows_inserted = 0;
         s->query_count = 0;
         const char* db2_tag = "NODE_BACKUP";
         memcpy(s->session_tag, db2_tag, strlen(db2_tag) + 1);
         for (int i = 0; i < 5; ++i) s->cache[i] = (i + 1) * 10;
-    });
-
-    assert((SqliteVTab::define_with_state<VTabSharedState, StateCacheTable, VTabOptions::Writable>(db2, "state_cache")) == SQLITE_OK);
-    assert((SqliteUdf::define_with_state<VTabSharedState, udf_vtab_get_stats>(db2, "vtab_stats", 0)) == SQLITE_OK);
+    }
     assert(sqlite3_exec(db2, "CREATE VIRTUAL TABLE db2_cache USING state_cache();", nullptr, nullptr, nullptr) == SQLITE_OK);
 
     // Verify db2 initial stats

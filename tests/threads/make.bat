@@ -31,19 +31,19 @@ if %ERRORLEVEL% neq 0 exit /b %ERRORLEVEL%
 cl /nologo /O2 /W4 /Zi %SAN_FLAGS% /MD /I"../../include" /I"../../include/async" /I"%SQLITE_INC%" /std:c11 /Fe:bin\test_coro_ext_pool_c.exe test_coro_ext_pool_c.c "%SQLITE_LIB%"
 if %ERRORLEVEL% neq 0 exit /b %ERRORLEVEL%
 
-cl /nologo /O2 /W4 /Zi %SAN_FLAGS% /MD /I"../../include" /I"../../include/async" /I"%SQLITE_INC%" /std:c++14 /Fe:bin\test_thread.exe test_thread.cpp "%SQLITE_LIB%"
+cl /nologo /O2 /W4 /Zi %SAN_FLAGS% /MD /I"../../include" /I"../../include/async" /I"%SQLITE_INC%" /std:c++17 /Fe:bin\test_thread.exe test_thread.cpp "%SQLITE_LIB%"
 if %ERRORLEVEL% neq 0 exit /b %ERRORLEVEL%
 
-cl /nologo /O2 /W4 /Zi %SAN_FLAGS% /MD /I"../../include" /I"../../include/async" /I"%SQLITE_INC%" /std:c++14 /Fe:bin\test_cond.exe test_cond.cpp "%SQLITE_LIB%"
+cl /nologo /O2 /W4 /Zi %SAN_FLAGS% /MD /I"../../include" /I"../../include/async" /I"%SQLITE_INC%" /std:c++17 /Fe:bin\test_cond.exe test_cond.cpp "%SQLITE_LIB%"
 if %ERRORLEVEL% neq 0 exit /b %ERRORLEVEL%
 
-cl /nologo /O2 /W4 /Zi %SAN_FLAGS% /MD /I"../../include" /I"../../include/async" /I"%SQLITE_INC%" /std:c++14 /Fe:bin\test_coro.exe test_coro.cpp "%SQLITE_LIB%"
+cl /nologo /O2 /W4 /Zi %SAN_FLAGS% /MD /I"../../include" /I"../../include/async" /I"%SQLITE_INC%" /std:c++17 /Fe:bin\test_coro.exe test_coro.cpp "%SQLITE_LIB%"
 if %ERRORLEVEL% neq 0 exit /b %ERRORLEVEL%
 
-cl /nologo /O2 /W4 /Zi %SAN_FLAGS% /MD /I"../../include" /I"../../include/async" /I"%SQLITE_INC%" /std:c++14 /Fe:bin\test_coro_sched.exe test_coro_sched.cpp "%SQLITE_LIB%"
+cl /nologo /O2 /W4 /Zi %SAN_FLAGS% /MD /I"../../include" /I"../../include/async" /I"%SQLITE_INC%" /std:c++17 /Fe:bin\test_coro_sched.exe test_coro_sched.cpp "%SQLITE_LIB%"
 if %ERRORLEVEL% neq 0 exit /b %ERRORLEVEL%
 
-cl /nologo /O2 /W4 /Zi %SAN_FLAGS% /MD /I"../../include" /I"../../include/async" /I"%SQLITE_INC%" /std:c++14 /Fe:bin\test_coro_ext_pool.exe test_coro_ext_pool.cpp "%SQLITE_LIB%"
+cl /nologo /O2 /W4 /Zi %SAN_FLAGS% /MD /I"../../include" /I"../../include/async" /I"%SQLITE_INC%" /std:c++17 /Fe:bin\test_coro_ext_pool.exe test_coro_ext_pool.cpp "%SQLITE_LIB%"
 if %ERRORLEVEL% neq 0 exit /b %ERRORLEVEL%
 
 call .\bin\test_thread_c.exe

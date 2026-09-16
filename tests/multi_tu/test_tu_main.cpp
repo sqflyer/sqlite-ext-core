@@ -14,15 +14,15 @@ int main() {
     assert(sqlite3_open(":memory:", &raw_db) == SQLITE_OK);
     SqliteDatabaseView db(raw_db);
 
-    printf("1. Initializing shared state in main...\n");
-    void* state_token = SqliteExt::init_state<TuAppState>(db);
-    assert(state_token != nullptr);
-
-    printf("2. Registering functions from Translation Unit A (tu_inc, tu_set_tag)...\n");
+    printf("1. Registering functions from Translation Unit A (tu_inc, tu_set_tag) (defaults init)...\n");
     register_tu_a_functions(db);
 
-    printf("3. Registering functions from Translation Unit B (tu_get_stats)...\n");
+    printf("2. Registering functions from Translation Unit B (tu_get_stats)...\n");
     register_tu_b_functions(db);
+
+    printf("3. Verifying shared state initialized in db via get_state...\n");
+    TuAppState* state_ptr = SqliteExt::get_state<TuAppState>(db);
+    assert(state_ptr != nullptr);
 
     printf("4. Executing queries mutating state in TU-A and reading in TU-B...\n");
     sqlite3_stmt* stmt = nullptr;

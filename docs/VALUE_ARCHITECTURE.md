@@ -386,7 +386,7 @@ union {
 } payload;
 ```
 - **Heap Independence**: Opaque client pointers are stored in `payload.ptrVal`. Client pointers are completely decoupled from `payload.pData`, guaranteeing that `free_heap()` will never attempt to free a client-managed object.
-- **Zero Allocations**: `is_heap_allocated()` evaluates to `false` for pointer values; pointer storage requires exactly 0 heap allocations and fits entirely in the 16-byte dual representation.
+- **Zero Allocations**: `is_heap_allocated()` evaluates to `false` for pointer values; pointer storage requires exactly 0 heap allocations and fits entirely in the 24-byte representation.
 
 ### 10.3 Compile-Time Trait Registration (`SqlitePointerTraits<T>`)
 Rather than requiring error-prone manual tag string parameters on every call, `sqlite3_value.hpp` provides a static traits system:

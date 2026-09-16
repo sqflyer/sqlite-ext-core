@@ -81,7 +81,7 @@ make test-cpp-extension
 
 To compile and run any custom test under AddressSanitizer:
 ```bash
-clang++ -std=c++11 -O1 -g -fsanitize=address -Iinclude tests/oom_safety/test_oom.cpp -lsqlite3 -o bin/test_asan.exe
+clang++ -std=c++17 -O1 -g -fsanitize=address -Iinclude tests/oom_safety/test_oom.cpp -lsqlite3 -o bin/test_asan.exe
 ./bin/test_asan.exe
 ```
 
@@ -185,7 +185,7 @@ make test-locks
 valgrind --leak-check=full --show-leak-kinds=all ./tests/oom_safety/bin/test_oom
 
 # 2. Using AddressSanitizer & LeakSanitizer (ASan/LSan)
-g++ -std=c++11 -O1 -g -fsanitize=address,leak -Iinclude tests/oom_safety/test_oom.cpp -lsqlite3 -o bin/test_asan
+g++ -std=c++17 -O1 -g -fsanitize=address,leak -Iinclude tests/oom_safety/test_oom.cpp -lsqlite3 -o bin/test_asan
 ./bin/test_asan
 ```
 
@@ -229,7 +229,7 @@ make example-c
 ### Step 4: Memory Leak Detection on macOS
 ```bash
 # 1. Using AddressSanitizer (ASan)
-clang++ -std=c++11 -O1 -g -fsanitize=address -Iinclude tests/oom_safety/test_oom.cpp -lsqlite3 -o bin/test_asan
+clang++ -std=c++17 -O1 -g -fsanitize=address -Iinclude tests/oom_safety/test_oom.cpp -lsqlite3 -o bin/test_asan
 ./bin/test_asan
 
 # 2. Using macOS Native leaks tool

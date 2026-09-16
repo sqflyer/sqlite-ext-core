@@ -14,13 +14,16 @@ if exist "%~dp0..\..\deps\sqlite3\lib" set "PATH=%~dp0..\..\deps\sqlite3\lib;%PA
 if not exist bin mkdir bin
 if exist "%~dp0..\..\deps\sqlite3\lib\*.dll" copy "%~dp0..\..\deps\sqlite3\lib\*.dll" bin\ >nul
 
-cl /nologo /O2 /W4 /Zi /fsanitize=address /MD /I"../../include" /I"%SQLITE_INC%" /std:c++14 /Fe:bin\test_vtab.exe test_vtab.cpp "%SQLITE_LIB%"
+cl /nologo /O2 /W4 /Zi /fsanitize=address /MD /I"../../include" /I"%SQLITE_INC%" /std:c++17 /Fe:bin\test_vtab.exe test_vtab.cpp "%SQLITE_LIB%"
 if %ERRORLEVEL% neq 0 exit /b %ERRORLEVEL%
 
-cl /nologo /O2 /W4 /Zi /fsanitize=address /MD /I"../../include" /I"%SQLITE_INC%" /std:c++14 /Fe:bin\test_vtab_state.exe test_vtab_state.cpp "%SQLITE_LIB%"
+cl /nologo /O2 /W4 /Zi /fsanitize=address /MD /I"../../include" /I"%SQLITE_INC%" /std:c++17 /Fe:bin\test_vtab_state.exe test_vtab_state.cpp "%SQLITE_LIB%"
 if %ERRORLEVEL% neq 0 exit /b %ERRORLEVEL%
 
-cl /nologo /O2 /W4 /Zi /fsanitize=address /MD /I"../../include" /I"%SQLITE_INC%" /std:c++14 /Fe:bin\test_vtab_arg.exe test_vtab_arg.cpp "%SQLITE_LIB%"
+cl /nologo /O2 /W4 /Zi /fsanitize=address /MD /I"../../include" /I"%SQLITE_INC%" /std:c++17 /Fe:bin\test_vtab_arg.exe test_vtab_arg.cpp "%SQLITE_LIB%"
+if %ERRORLEVEL% neq 0 exit /b %ERRORLEVEL%
+
+cl /nologo /O2 /W4 /Zi /fsanitize=address /MD /I"../../include" /I"%SQLITE_INC%" /std:c++17 /Fe:bin\test_vtab_conn_hybrid.exe test_vtab_conn_hybrid.cpp "%SQLITE_LIB%"
 if %ERRORLEVEL% neq 0 exit /b %ERRORLEVEL%
 
 bin\test_vtab.exe
@@ -30,6 +33,9 @@ bin\test_vtab_state.exe
 if %ERRORLEVEL% neq 0 exit /b %ERRORLEVEL%
 
 bin\test_vtab_arg.exe
+if %ERRORLEVEL% neq 0 exit /b %ERRORLEVEL%
+
+bin\test_vtab_conn_hybrid.exe
 if %ERRORLEVEL% neq 0 exit /b %ERRORLEVEL%
 
 goto end

@@ -4,7 +4,7 @@ In SQLite extensions and embedded database servers, extensions often need to mai
 
 This document outlines the architecture, data structures, and lifecycle mechanics implemented by:
 - **`sqlite3_conn_state.h`**: Pure C single-header connection registry macro.
-- **`sqlite3_conn_state.hpp`**: C++11 header-only connection state template (`SqliteConnState<T>`).
+- **`sqlite3_conn_state.hpp`**: C++17 header-only connection state template (`SqliteConnState<T>`).
 
 ---
 
@@ -116,12 +116,14 @@ sqlite3_create_function_v2(db, "fn_b", 2, SQLITE_UTF8, state, fn_b, NULL, NULL,
 ### The Teardown Challenge
 When the connection closes (`sqlite3_close(db)`), SQLite invokes the `xDestroy` callback for **each registered function independently**.
 
-### The Ref-Count Solution
-1. Every call to `SqliteConnState<T>::init(db)` or `entry_retain(entry)` increments `refcount`.
-2. When SQLite calls `destructor` for `fn_a`, `refcount` decrements ($2 \rightarrow 1$).
-3. When SQLite calls `destructor` for `fn_b`, `refcount` hits $0$.
-4. At $0$, the destructor unlinks `db` from the DuoSTL pointer map and invokes `sqlite_delete(entry)` / `sqlite3_free`.
-5. This prevents premature destruction, dangling pointers, and double-free errors.
+### The Registration-Owned Ref-Count Solution
+1. Registration routines (`init(db, init_fn)`, `try_init(db, init_fn)`, `define_with_conn_state`, `define_with_hybrid_state`) initialize or retain the connection entry and increment `refcount` once per registered SQLite hook.
+2. Query execution routines (`from_context(ctx)`, `get(db)`, `try_get(db)`) access the state pointer **without modifying refcounts**, completely eliminating reference leak hazards.
+3. The legacy `get_or_create` API was explicitly eliminated: invoking `get_or_create` prior to registration caused untracked refcount inflation without corresponding SQLite `xDestroy` bindings, leaking heap entries under AddressSanitizer/LeakSanitizer.
+4. When SQLite calls `destructor` for `fn_a`, `refcount` decrements ($2 \rightarrow 1$).
+5. When SQLite calls `destructor` for `fn_b`, `refcount` hits $0$.
+6. At $0$, the destructor unlinks `db` from the DuoSTL pointer map and invokes `sqlite_delete(entry)` / `sqlite3_free`.
+7. This guarantees a mathematically balanced lifecycle: every retained reference maps 1:1 to an SQLite `xDestroy` callback.
 
 ---
 
@@ -138,8 +140,8 @@ When the connection closes (`sqlite3_close(db)`), SQLite invokes the `xDestroy` 
 
 For environments with hard heap limits (`sqlite3_hard_heap_limit64`) and strict no-throw policies:
 
-- **`SqliteConnState<T>::try_get_or_create(db, ctx)`**: Returns `SqliteResult<T*>`. Returns `SQLITE_NOMEM` on allocation failure.
-- **`SqliteConnState<T>::try_init(db, ctx)`**: Returns `SqliteStatus` for upfront initialization during extension loading.
+- **`SqliteConnState<T>::try_get(db)`**: Returns `SqliteResult<T*>`. Returns `SQLITE_NOTFOUND` if not registered.
+- **`SqliteConnState<T>::try_init(db, init_fn)`**: Returns `SqliteResult<void*>` for upfront initialization during extension loading.
 
 ---
 

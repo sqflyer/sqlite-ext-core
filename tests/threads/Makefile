@@ -29,7 +29,7 @@ endif
 export PATH UNAME_S CXX CC SAN_FLAGS
 
 CFLAGS := -std=c99 $(POSIX_FLAGS) -Wall -Wextra -O2 -I../../include -I../../include/async $(SAN_FLAGS)
-CXXFLAGS := -std=c++11 $(POSIX_FLAGS) -Wall -Wextra -O2 -I../../include -I../../include/async -fno-exceptions -fno-rtti $(SAN_FLAGS)
+CXXFLAGS := -std=c++17 $(POSIX_FLAGS) -Wall -Wextra -O2 -I../../include -I../../include/async -fno-exceptions -fno-rtti $(SAN_FLAGS)
 
 BIN_DIR = bin
 

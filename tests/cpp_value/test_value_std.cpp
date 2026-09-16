@@ -177,12 +177,12 @@ void test_unordered_map_heterogeneous(sqlite3* db) {
     umap[SqliteValueOwned(100LL)]                  = 1;
     umap[SqliteValueOwned::from_text("hello")]      = 2;
     umap[SqliteValueOwned(3.14)]                   = 3;
-    umap[SqliteValueOwned::from_text("a long string beyond 13 chars")] = 4;
+    umap[SqliteValueOwned::from_text("a long string beyond 21 chars")] = 4;
 
     // Look up by SqliteValueView (zero-copy)
     sqlite3_stmt* stmt = nullptr;
     assert(sqlite3_prepare_v2(db,
-        "SELECT 100, 'hello', 3.14, 'a long string beyond 13 chars';",
+        "SELECT 100, 'hello', 3.14, 'a long string beyond 21 chars';",
         -1, &stmt, nullptr) == SQLITE_OK);
     assert(sqlite3_step(stmt) == SQLITE_ROW);
 

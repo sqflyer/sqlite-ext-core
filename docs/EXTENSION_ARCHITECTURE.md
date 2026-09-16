@@ -206,7 +206,8 @@ Stateful extensions require per-database isolation and thread-safe mutation. `Sq
 ```
 
 ### Reference Counting & Garbage Collection:
-- **`SqliteExtState<T>::get_or_create(db, init_fn)`**: Retrieves or creates the state without unnecessary reference count inflation.
+- **`SqliteExtState<T>::init(db, init_fn)`**: Defaults state initialization during registration and increments reference count tied to SQLite's `xDestroy`.
+- **`SqliteExtState<T>::get(db)`**: Non-mutating lookup retrieving active state pointer with zero refcount inflation.
 - **`SqliteExtState<T>::from_context(ctx)`**: Automatically performs the 2-tier resolution (direct `user_data` $\to$ cached auxdata/database lookup).
 - **`SqliteExtState<T>::destructor`**: Automatically invoked by SQLite when queries finalize or connections close, safely releasing mutexes and running C++ destructors via `sqlite_delete`.
 
@@ -216,10 +217,10 @@ Stateful extensions require per-database isolation and thread-safe mutation. `Sq
 
 | Platform / Toolchain | Visibility Attribute / Flag | Export Decorator | C++ Standard |
 | :--- | :--- | :--- | :--- |
-| **Linux (GCC / Clang)** | `-fvisibility=hidden` | `__attribute__((visibility("default")))` | C++11, C++14, C++17, C++20 |
-| **Windows (MinGW GCC)** | Default | `__declspec(dllexport)` | C++11, C++14, C++17, C++20 |
-| **Windows (MSVC)** | Default | `__declspec(dllexport)` | `/std:c++14`, `/std:c++17`, `/std:c++20` |
-| **macOS (Apple Clang)** | Default | `__attribute__((visibility("default")))` | C++11, C++14, C++17, C++20 |
+| **Linux (GCC / Clang)** | `-fvisibility=hidden` | `__attribute__((visibility("default")))` | **C++17 Baseline** (`-std=c++17`, `-std=c++20`) |
+| **Windows (MinGW GCC)** | Default | `__declspec(dllexport)` | **C++17 Baseline** (`-std=c++17`, `-std=c++20`) |
+| **Windows (MSVC)** | Default | `__declspec(dllexport)` | **C++17 Baseline** (`/std:c++17`, `/std:c++20`) |
+| **macOS (Apple Clang)** | Default | `__attribute__((visibility("default")))` | **C++17 Baseline** (`-std=c++17`, `-std=c++20`) |
 
 ---
 

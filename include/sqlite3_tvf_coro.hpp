@@ -27,6 +27,7 @@
 #include "sqlite3_allocator.hpp"
 #include "sqlite3_row.hpp"
 #include "sqlite3_ext_state.hpp"
+#include "sqlite3_conn_state.hpp"
 #include "async/sqlite3_coro.hpp"
 
 // ============================================================================
@@ -420,6 +421,46 @@ struct SqliteTvfCoroModule {
             SqliteExtState<State>::destructor
         );
     }
+
+    /**
+     * @brief Registers the coroutine TVF module with connection-unique state.
+     * @tparam State User state class managed by SqliteConnState.
+     * @param db Database connection view.
+     * @param name SQL function name.
+     * @return SQLITE_OK on success, or an SQLite error code.
+     */
+    template <typename State>
+    static inline int define_with_conn_state(SqliteDatabaseView db, const char* name) {
+        void* raw_state = SqliteConnState<State>::init(db.get());
+        return sqlite3_create_module_v2(
+            db.get(),
+            name,
+            &module_def,
+            raw_state,
+            SqliteConnState<State>::destructor
+        );
+    }
+
+    /**
+     * @brief Registers the coroutine TVF module with hybrid state.
+     * @tparam ExtState Shared extension state type.
+     * @tparam ConnState Connection-unique state type.
+     * @tparam LockPolicy Synchronization policy (defaults to SqliteRwLock).
+     * @param db Database connection view.
+     * @param name SQL function name.
+     * @return SQLITE_OK on success, or an SQLite error code.
+     */
+    template <typename ExtState, typename ConnState, typename LockPolicy = SqliteRwLock>
+    static inline int define_with_hybrid_state(SqliteDatabaseView db, const char* name) {
+        void* raw_holder = SqliteHybridState<ExtState, ConnState, LockPolicy>::init(db.get());
+        return sqlite3_create_module_v2(
+            db.get(),
+            name,
+            &module_def,
+            raw_holder,
+            SqliteHybridState<ExtState, ConnState, LockPolicy>::destructor
+        );
+    }
 };
 
 template <typename T>
@@ -483,6 +524,22 @@ public:
     template <typename StateType, typename T>
     static inline int define_with_state(SqliteDatabaseView db, const char* name) {
         return SqliteTvfCoroModule<T>::template define_with_state<StateType>(db, name);
+    }
+
+    /**
+     * @brief Registers a coroutine generator with connection-unique database state injection.
+     */
+    template <typename StateType, typename T>
+    static inline int define_with_conn_state(SqliteDatabaseView db, const char* name) {
+        return SqliteTvfCoroModule<T>::template define_with_conn_state<StateType>(db, name);
+    }
+
+    /**
+     * @brief Registers a coroutine generator with hybrid database state injection.
+     */
+    template <typename ExtState, typename ConnState, typename T, typename LockPolicy = SqliteRwLock>
+    static inline int define_with_hybrid_state(SqliteDatabaseView db, const char* name) {
+        return SqliteTvfCoroModule<T>::template define_with_hybrid_state<ExtState, ConnState, LockPolicy>(db, name);
     }
 };
 

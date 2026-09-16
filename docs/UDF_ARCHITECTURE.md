@@ -42,14 +42,18 @@ Passing C++ member functions or higher-level signatures directly is prevented by
 
 ---
 
-## 3. Stateful Function Architecture: Shared State Across Multiple UDFs
+## 3. Stateful Function Architecture: Shared, Connection & Hybrid States
 
-When multiple functions need to share and mutate the same state struct (e.g. `AppState`), `SqliteUdf` combines **`SqliteExtState<T>`** with **Compile-Time Template Proxies**:
+When multiple functions need to share and mutate state, `SqliteUdf` provides seamless, zero-allocation integration under a **Registration-Owned Reference Counting Model** in C++17:
+
+1. **Per-Database Shared State (`define_with_state`)**: Backed by `SqliteExtState<T>`, shared across all connections to the same database file, synchronized via RWLock/TinyLock.
+2. **Per-Connection Private State (`define_with_conn_state`)**: Backed by `SqliteConnState<T>`, strictly isolated to a single `sqlite3*` handle, operating **100% lock-free**.
+3. **Dual Hybrid State (`define_with_hybrid_state`)**: Backed by `SqliteHybridState<ExtT, ConnT>`, packing shared and connection states into a single unified context holder (`auto [ext, conn] = ...`).
 
 ```
                           +-------------------------------------------------------------+
                           | Extension Entrypoint / Database Init:                       |
-                          | SqliteExtState<AppState>::get_or_create(db, init_fn)        |
+                          | SqliteExtState<AppState>::init(db, init_fn) (or defaulted)  |
                           +------------------------------+------------------------------+
                                                          | (Allocates single shared Entry)
                                                          v
@@ -86,10 +90,12 @@ When multiple functions need to share and mutate the same state struct (e.g. `Ap
 ### Key Architectural Advantages:
 1. **Zero-Overhead $O(1)$ Direct State Access**:
    Inside each function, `SqliteExtState<AppState>::from_context(ctx)` or `ctx.state<AppState>()` directly reads `sqlite3_user_data(ctx)` in **1 CPU instruction**. No hash table lookups, no string path searches, and zero heap allocations.
-2. **Automated SQLite Garbage Collection on Database Close**:
-   Each `define_with_state` passes `SqliteExtState<State>::destructor` as SQLite's `xDestroy` callback. When the database connection is closed (`sqlite3_close` / `sqlite3_close_v2`), SQLite automatically invokes `xDestroy`, decrementing the reference count and safely freeing the state memory when `ref_count == 0`.
+2. **Automated Registration-Owned Lifecycle**:
+   Each `define_with_state` passes `SqliteExtState<State>::destructor` as SQLite's `xDestroy` callback. When the database connection is closed (`sqlite3_close` / `sqlite3_close_v2`), SQLite automatically invokes `xDestroy`, decrementing the reference count and safely freeing the state memory when `ref_count == 0`. Query-time lookups via `SqliteExtState<State>::get(db)` never modify refcounts.
 3. **Cross-Function Thread Safety**:
    State access is coordinated using `SqliteExtState<State>::ReadGuard` (shared read lock) and `SqliteExtState<State>::WriteGuard` (exclusive write lock), backed by platform-native fast locks (Windows SRWLock, POSIX `pthread_rwlock_t`).
+4. **C++17 Baseline**:
+   Compiled with standard `-std=c++17` (`/std:c++17` on MSVC) without standard runtime dependencies (`-nostdlib++`, `-fno-exceptions`, `-fno-rtti`).
 
 ---
 

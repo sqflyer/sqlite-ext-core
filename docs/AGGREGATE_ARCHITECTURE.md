@@ -172,15 +172,19 @@ When using typed returns (`Priority 0` or `Priority 2`), `set_sqlite_result` aut
 
 ---
 
-## 5. Stateful Aggregates Architecture (`define_with_state`)
+## 5. Stateful Aggregates Architecture (`define_with_state`, `define_with_conn_state`, `define_with_hybrid_state`)
 
-When an aggregate is registered via `SqliteAggregate::define_with_state<State, MyAgg>(db, "my_agg")`:
+In C++17, Aggregate functions seamlessly interface with shared, connection, or hybrid states under the **Registration-Owned Reference Counting Model**:
+1. **`define_with_state<State, MyAgg>`**: Shared per-database state (`SqliteExtState`).
+2. **`define_with_conn_state<State, MyAgg>`**: Lock-free per-connection state (`SqliteConnState`).
+3. **`define_with_hybrid_state<ExtT, ConnT, MyAgg>`**: Unified dual state (`SqliteHybridState`).
 
 ```
 +========================================================================================================+
 | 1. REGISTRATION PHASE (sqlite3_create_function_v2)                                                     |
 +========================================================================================================+
 | SqliteAggregate::define_with_state<AppState, MyAgg>(db, "my_agg", 1)                                   |
+|   | (or define_with_conn_state / define_with_hybrid_state)                                             |
 |   |                                                                                                    |
 |   |---> raw_state = SqliteExtState<AppState>::init(db)  (Allocates shared Entry struct)                |
 |   |---> sqlite3_create_function_v2(db, "my_agg", 1, SQLITE_UTF8, raw_state,                            |
@@ -194,8 +198,8 @@ When an aggregate is registered via `SqliteAggregate::define_with_state<State, M
 +========================================================================================================+
 | void step(SqliteContext ctx, SqliteUdfArgs args) override {                                            |
 |     AppState* state = ctx.state<AppState>();                                                           |
-|     //                ^                                                                                |
-|     //                +--- Direct O(1) fetch from sqlite3_user_data(ctx.get())                         |
+|     // ConnState* conn = ctx.conn_state<ConnState>();                                                  |
+|     // auto [ext, conn] = ctx.hybrid_state<ExtT, ConnT>();                                             |
 | }                                                                                                      |
 +========================================================================================================+
 ```
@@ -205,5 +209,7 @@ When an aggregate is registered via `SqliteAggregate::define_with_state<State, M
    Unlike Virtual Tables where `user_data` must be injected from the VTab, SQLite aggregates receive `pApp` directly via `sqlite3_user_data(ctx)`. `ctx.state<State>()` executes in **1 single CPU instruction**.
 2. **Multi-Group Concurrency**:
    Across different `GROUP BY` groups in a query, each group receives its own independent `AggregateHolder<T>` instance in `sqlite3_aggregate_context`. All groups share the connection-level `SqliteExtState<State>` thread-safely via `ReadGuard` and `WriteGuard`.
-3. **Automated Destruction on Database Close**:
-   When the SQLite database connection is closed (`sqlite3_close` / `sqlite3_close_v2`), SQLite invokes `SqliteExtState<State>::destructor`, decrementing the reference count and safely freeing the state memory when `ref_count == 0`.
+3. **Registration-Owned Destruction on Database Close**:
+   When the SQLite database connection is closed (`sqlite3_close` / `sqlite3_close_v2`), SQLite invokes `destructor`, decrementing the reference count and safely freeing the state memory when `ref_count == 0`. Lookups during execution do not inflate refcounts.
+4. **C++17 Freestanding Execution**:
+   Enforces a clean C++17 baseline (`-std=c++17` on GCC/Clang, `/std:c++17` on MSVC) with zero standard library runtime dependencies (`-nostdlib++`, `-fno-exceptions`, `-fno-rtti`).

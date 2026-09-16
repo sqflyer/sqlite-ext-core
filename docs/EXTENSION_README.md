@@ -1,6 +1,6 @@
 # SQLite Native Extension Framework (`sqlite3_ext_creator.h` / `sqlite3_ext_creator.hpp`)
 
-`sqlite3_ext_creator.h` (Pure C) and `sqlite3_ext_creator.hpp` (C++11) provide an industrial-grade, zero-overhead framework for developing native, dynamically loadable SQLite extensions (`.so`, `.dll`, `.dylib`). They eliminate the error-prone C boilerplate, symbol visibility decorators, and dispatch table initialization rituals traditionally required to write SQLite extensions, while remaining completely freestanding (`-nostdlib++`, `-fno-exceptions`, `-fno-rtti`).
+`sqlite3_ext_creator.h` (Pure C) and `sqlite3_ext_creator.hpp` (C++17) provide an industrial-grade, zero-overhead framework for developing native, dynamically loadable SQLite extensions (`.so`, `.dll`, `.dylib`). They eliminate the error-prone C boilerplate, symbol visibility decorators, and dispatch table initialization rituals traditionally required to write SQLite extensions, while remaining completely freestanding (`-nostdlib++`, `-fno-exceptions`, `-fno-rtti`).
 
 ---
 
@@ -22,7 +22,7 @@ The extension framework solves all of these challenges seamlessly for both Pure 
 
 | Feature | C++ (`sqlite3_ext_creator.hpp`) | Pure C (`sqlite3_ext_creator.h`) |
 | :--- | :--- | :--- |
-| **Header Language** | Modern C++11 (`-nostdlib++`) | Pure C99/C11 (ANSI C) |
+| **Header Language** | Modern C++17 (`-nostdlib++`) | Pure C99/C11 (ANSI C) |
 | **Named Entrypoint** | `SQLITE_EXTENSION_ENTRYPOINT(ext, db)` | `SQLITE_C_EXTENSION_ENTRYPOINT(ext, db)` |
 | **Default Entrypoint** | `SQLITE_DEFAULT_EXTENSION_ENTRYPOINT(db)` | `SQLITE_C_DEFAULT_EXTENSION_ENTRYPOINT(db)` |
 | **Error Handling** | `SQLITE_EXTENSION_ENTRYPOINT_CTX(ext, ctx)` | `SQLITE_C_EXTENSION_ENTRYPOINT_ERR(ext, db, err)` |
@@ -118,7 +118,7 @@ SQLITE_C_EXTENSION_ENTRYPOINT(my_c_ext, db) {
 ### Linux / Unix (GCC / Clang)
 ```bash
 # C++ Extension
-g++ -shared -fPIC -O2 -std=c++11 -Wall -Wextra \
+g++ -shared -fPIC -O2 -std=c++17 -Wall -Wextra \
     -fno-exceptions -fno-rtti -nostdlib++ \
     -I./include -o libmy_extension.so my_extension.cpp
 
@@ -130,7 +130,7 @@ gcc -shared -fPIC -O2 -std=c99 -Wall -Wextra \
 ### Windows (MSYS2 / MinGW GCC)
 ```bash
 # C++ Extension
-g++ -shared -fPIC -O2 -std=c++11 -Wall -Wextra \
+g++ -shared -fPIC -O2 -std=c++17 -Wall -Wextra \
     -fno-exceptions -fno-rtti -nostdlib++ \
     -I./include -o libmy_extension.dll my_extension.cpp
 
@@ -141,12 +141,12 @@ gcc -shared -fPIC -O2 -std=c99 -Wall -Wextra \
 
 ### Windows (MSVC `cl.exe`)
 ```cmd
-cl /LD /O2 /std:c++14 /GR- /EHsc- /W4 /I.\include my_extension.cpp /link /OUT:my_extension.dll
+cl /LD /O2 /std:c++17 /GR- /EHsc- /W4 /I.\include my_extension.cpp /link /OUT:my_extension.dll
 ```
 
 ### macOS (Clang)
 ```bash
-clang++ -dynamiclib -fPIC -O2 -std=c++11 -Wall -Wextra \
+clang++ -dynamiclib -fPIC -O2 -std=c++17 -Wall -Wextra \
     -fno-exceptions -fno-rtti -nostdlib++ \
     -I./include -o libmy_extension.dylib my_extension.cpp
 ```

@@ -55,13 +55,19 @@ When SQLite invokes `xColumn(sqlite3_vtab_cursor* pCursor, sqlite3_context* ctx,
 
 ---
 
-## 3. Direct State Injection Architecture
+## 3. Direct State Injection Architecture (Shared, Connection & Hybrid)
+
+In modern C++17 (`-std=c++17` / `/std:c++17`), virtual tables can be seamlessly injected with three varieties of state without virtual dispatch overhead:
+1. **Shared State (`define_with_state`)**: Backed by `SqliteExtState<T>`, shared across all database connections to the same file.
+2. **Connection State (`define_with_conn_state`)**: Backed by `SqliteConnState<T>`, lock-free and strictly isolated to the connection handle.
+3. **Hybrid State (`define_with_hybrid_state`)**: Backed by `SqliteHybridState<ExtT, ConnT>`, combining shared and private connection states into a unified context.
 
 ```
 +========================================================================================================+
 | 1. REGISTRATION PHASE (sqlite3_create_module_v2)                                                       |
 +========================================================================================================+
 | SqliteVTab::define_with_state<AppState, MyTable, Options>(db, "my_table")                              |
+|   | (or define_with_conn_state / define_with_hybrid_state)                                             |
 |   |                                                                                                    |
 |   |---> raw_state = SqliteExtState<AppState>::init(db)  (Allocates shared Entry struct)                |
 |   |---> sqlite3_create_module_v2(db, "my_table", &module_def, raw_state, destructor)                   |
@@ -79,6 +85,7 @@ When SQLite invokes `xColumn(sqlite3_vtab_cursor* pCursor, sqlite3_context* ctx,
 |   |---> TableWrapper* wrapper = sqlite_new<TableWrapper>();                                            |
 |   |---> wrapper->raw_state = pAux;         <--- Injected into TableWrapper!                            |
 |   |---> args.state<AppState>()             <--- Accessible in connect() via args.state<T>()!           |
+|   |     args.conn_state<ConnState>()       <--- Or args.conn_state<T>() / args.hybrid_state<E, C>()!   |
 |   |---> *ppVTab = &wrapper->base;                                                                      |
 +=================================================================|======================================+
                                                                   v
@@ -92,6 +99,8 @@ When SQLite invokes `xColumn(sqlite3_vtab_cursor* pCursor, sqlite3_context* ctx,
 |   |---> wrapper->instance->column(ctx, N);                                                             |
 |           |                                                                                            |
 |           +---> AppState* state = ctx.state<AppState>();  (O(1) direct single-instruction extraction!) |
+|           +---> ConnState* conn = ctx.conn_state<ConnState>();                                         |
+|           +---> auto [ext, conn] = ctx.hybrid_state<ExtT, ConnT>(); (C++17 structured bindings)        |
 +========================================================================================================+
 ```
 

@@ -24,7 +24,7 @@ else
 endif
 
 CFLAGS := -std=c99 $(POSIX_FLAGS) -Wall -Wextra -O2 -I../../include $(SAN_FLAGS)
-CXXFLAGS := -std=c++11 $(POSIX_FLAGS) -Wall -Wextra -O2 -I../../include -fno-exceptions -fno-rtti $(SAN_FLAGS)
+CXXFLAGS := -std=c++17 $(POSIX_FLAGS) -Wall -Wextra -O2 -I../../include -fno-exceptions -fno-rtti $(SAN_FLAGS)
 
 BIN_DIR = bin
 

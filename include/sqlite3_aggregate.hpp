@@ -6,6 +6,7 @@
 #include "sqlite3_value.hpp"
 #include "sqlite3_allocator.hpp"
 #include "sqlite3_ext_state.hpp"
+#include "sqlite3_conn_state.hpp"
 #include "sqlite3_buffer.hpp"
 
 
@@ -128,8 +129,13 @@ namespace SqliteAggregateDetail {
      * @brief Overloaded helpers to write return values directly to the SQLite execution context.
      */
     inline void set_sqlite_result(sqlite3_context* ctx, int val) { sqlite3_result_int(ctx, val); }
-    inline void set_sqlite_result(sqlite3_context* ctx, sqlite3_int64 val) { sqlite3_result_int64(ctx, val); }
+    inline void set_sqlite_result(sqlite3_context* ctx, long val) { sqlite3_result_int64(ctx, (sqlite3_int64)val); }
+    inline void set_sqlite_result(sqlite3_context* ctx, long long val) { sqlite3_result_int64(ctx, (sqlite3_int64)val); }
+    inline void set_sqlite_result(sqlite3_context* ctx, unsigned int val) { sqlite3_result_int64(ctx, (sqlite3_int64)val); }
+    inline void set_sqlite_result(sqlite3_context* ctx, unsigned long val) { sqlite3_result_int64(ctx, (sqlite3_int64)val); }
+    inline void set_sqlite_result(sqlite3_context* ctx, unsigned long long val) { sqlite3_result_int64(ctx, (sqlite3_int64)val); }
     inline void set_sqlite_result(sqlite3_context* ctx, double val) { sqlite3_result_double(ctx, val); }
+    inline void set_sqlite_result(sqlite3_context* ctx, float val) { sqlite3_result_double(ctx, (double)val); }
     inline void set_sqlite_result(sqlite3_context* ctx, bool val) { sqlite3_result_int(ctx, val ? 1 : 0); }
     inline void set_sqlite_result(sqlite3_context* ctx, decltype(nullptr)) { sqlite3_result_null(ctx); }
     inline void set_sqlite_result(sqlite3_context* ctx, const char* val) {
@@ -308,6 +314,48 @@ public:
         );
     }
 
+    /**
+     * @brief Register a C++ struct as an Aggregate Function with SQLite bound to connection-unique state.
+     */
+    template <typename State>
+    static int define_with_conn_state(SqliteDatabaseView db, const char* name, int num_args = -1, bool deterministic = false) {
+        void* raw_state = SqliteConnState<State>::init(db.get());
+        int flags = SQLITE_UTF8 | SQLITE_SUBTYPE | (deterministic ? SQLITE_DETERMINISTIC : 0);
+
+        return sqlite3_create_function_v2(
+            db.get(),
+            name,
+            num_args,
+            flags,
+            raw_state,
+            nullptr,   // xFunc
+            &SqliteAggregateModule<T>::step_proxy,
+            &SqliteAggregateModule<T>::final_proxy,
+            SqliteConnState<State>::destructor
+        );
+    }
+
+    /**
+     * @brief Register a C++ struct as an Aggregate Function with SQLite bound to hybrid state.
+     */
+    template <typename ExtState, typename ConnState, typename LockPolicy = SqliteRwLock>
+    static int define_with_hybrid_state(SqliteDatabaseView db, const char* name, int num_args = -1, bool deterministic = false) {
+        void* raw_holder = SqliteHybridState<ExtState, ConnState, LockPolicy>::init(db.get());
+        int flags = SQLITE_UTF8 | SQLITE_SUBTYPE | (deterministic ? SQLITE_DETERMINISTIC : 0);
+
+        return sqlite3_create_function_v2(
+            db.get(),
+            name,
+            num_args,
+            flags,
+            raw_holder,
+            nullptr,   // xFunc
+            &SqliteAggregateModule<T>::step_proxy,
+            &SqliteAggregateModule<T>::final_proxy,
+            SqliteHybridState<ExtState, ConnState, LockPolicy>::destructor
+        );
+    }
+
 private:
     /**
      * @brief The internal xStep C callback executed by SQLite for each row.
@@ -383,6 +431,22 @@ public:
     template <typename State, typename T>
     static inline int define_with_state(SqliteDatabaseView db, const char* name, int num_args = -1, bool deterministic = false) {
         return SqliteAggregateModule<T>::template define_with_state<State>(db, name, num_args, deterministic);
+    }
+
+    /**
+     * @brief Register an Object-Oriented C++ Aggregate Function bound to connection-unique state.
+     */
+    template <typename State, typename T>
+    static inline int define_with_conn_state(SqliteDatabaseView db, const char* name, int num_args = -1, bool deterministic = false) {
+        return SqliteAggregateModule<T>::template define_with_conn_state<State>(db, name, num_args, deterministic);
+    }
+
+    /**
+     * @brief Register an Object-Oriented C++ Aggregate Function bound to hybrid state.
+     */
+    template <typename ExtState, typename ConnState, typename T, typename LockPolicy = SqliteRwLock>
+    static inline int define_with_hybrid_state(SqliteDatabaseView db, const char* name, int num_args = -1, bool deterministic = false) {
+        return SqliteAggregateModule<T>::template define_with_hybrid_state<ExtState, ConnState, LockPolicy>(db, name, num_args, deterministic);
     }
 };
 

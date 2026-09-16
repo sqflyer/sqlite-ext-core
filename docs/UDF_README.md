@@ -1,6 +1,6 @@
 # C++ User-Defined Function (UDF) Framework (`sqlite3_udf.hpp`)
 
-`sqlite3_udf.hpp` provides a unified, zero-overhead modern C++11 framework for defining and registering SQLite User-Defined Functions (UDFs). It supports **Stateless Scalar Functions**, **Thread-Safe Stateful Functions** (sharing state across multiple UDFs via `SqliteExtState<T>`), **Object-Oriented Aggregates**, and **Table-Valued Functions (TVFs)** with bounds-safe argument checking and zero runtime heap allocation.
+`sqlite3_udf.hpp` provides a unified, zero-overhead modern C++17 framework for defining and registering SQLite User-Defined Functions (UDFs). It supports **Stateless Scalar Functions**, **Thread-Safe Stateful Functions** (sharing state across multiple UDFs via `SqliteExtState<T>`, `SqliteConnState<T>`, or `SqliteHybridState<ExtT, ConnT>`), **Object-Oriented Aggregates**, and **Table-Valued Functions (TVFs)** with bounds-safe argument checking and zero runtime heap allocation.
 
 ---
 
@@ -13,7 +13,7 @@
 | **Bounds-Safe `SqliteUdfArgs`** | Out-of-bounds indexing (e.g. `args[-1]`, `args[999]`) safely produces `SQLITE_NULL` views rather than segmentation faults. |
 | **Shared Stateful UDFs** | Multiple UDFs can share and mutate the exact same `SqliteExtState<T>` struct instance with thread-safe RAII locking. |
 | **Compile-Time Template Proxies** | `SqliteUdf::define_with_state<State, func>(db, "name", num_args)` binds raw state directly to `pApp` with zero heap allocation. |
-| **Stateless C++11 Lambdas** | Pass inline stateless lambdas directly without writing separate forward declarations or helper functions. |
+| **Stateless C++17 Lambdas** | Pass inline stateless lambdas directly without writing separate forward declarations or helper functions. |
 | **Aggregates & TVFs** | Native registration for C++ Aggregate classes (`define_aggregate<T>`) and Table-Valued Functions (`define_tvf<T>`). |
 | **Freestanding & `-nostdlib++`** | 100% header-only, zero dependencies on standard library runtime heaps (`<functional>`, `<vector>`, `<memory>`). |
 
@@ -177,8 +177,8 @@ static void state_get_stats(SqliteContext ctx, SqliteUdfArgs args) {
 ### Step 3: Register Functions on the Database
 ```cpp
 void setup_stateful_functions(SqliteDatabaseView db) {
-    // 1. Initialize custom starting state for this connection
-    SqliteExtState<AppState>::get_or_create(db.get(), [](AppState* s) {
+    // 1. Initialize custom starting state during registration
+    SqliteExtState<AppState>::init(db.get(), [](AppState* s) {
         s->counter = 100;
         s->accumulator = 0;
         s->last_tag[0] = '\0';
@@ -259,17 +259,23 @@ SqliteAggregate::define<StdDevAgg>(db, "std_dev", 1);
   - `func`: `void(*)(SqliteContext, SqliteUdfArgs)`
   - `func`: `void(*)(SqliteContext&, SqliteUdfArgs)`
   - `func`: `void(*)(sqlite3_context*, SqliteUdfArgs)`
-  - `func`: C++11 Lambda capturing local values
+  - `func`: C++17 Lambda capturing local values
 - `SqliteUdf::define<Func>(db, name, num_args, deterministic = true)` (Zero-Allocation Template Proxy)
 
 ### Stateful Scalar UDFs:
 - `SqliteUdf::define_with_state<State, Func>(db, name, num_args, deterministic = false)`
   - Direct compile-time proxy binding `raw_state` to `pApp` with automated `xDestroy` garbage collection on connection close.
+- `SqliteUdf::define_with_conn_state<State, Func>(db, name, num_args, deterministic = false)`
+  - Direct compile-time proxy binding lock-free per-connection state (`SqliteConnState<State>`).
+- `SqliteUdf::define_with_hybrid_state<ExtT, ConnT, Func>(db, name, num_args, deterministic = false)`
+  - Direct compile-time proxy binding unified hybrid holder (`SqliteHybridState<ExtT, ConnT>`).
 
 ### State Access Helpers:
-- `SqliteExtState<State>::get_or_create(db, init_fn)`
-- `SqliteExtState<State>::get(db)`
+- `SqliteExtState<State>::init(db, init_fn)` / `SqliteExtState<State>::try_init(db, init_fn)`
+- `SqliteExtState<State>::get(db)` / `SqliteExtState<State>::try_get(db)`
 - `SqliteExtState<State>::from_context(ctx)` or `ctx.state<State>()`
+- `SqliteConnState<State>::get(db)` / `SqliteConnState<State>::try_get(db)`
+- `SqliteConnState<State>::from_context(ctx)` or `ctx.conn_state<State>()`
 
 ### Umbrella Master Header:
 - `#include "sqlite3_ext.hpp"`: Provides `SqliteExt` unified registration across Scalar UDFs, Aggregates, TVFs, and Virtual Tables.

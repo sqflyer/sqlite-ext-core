@@ -24,7 +24,7 @@ else
 endif
 
 CFLAGS := -Wall -Wextra -I../../include $(SAN_FLAGS)
-CXXFLAGS := -std=c++11 -Wall -Wextra -I../../include -fno-exceptions -fno-rtti $(SAN_FLAGS)
+CXXFLAGS := -std=c++17 -Wall -Wextra -I../../include -fno-exceptions -fno-rtti $(SAN_FLAGS)
 LDFLAGS_C := -lsqlite3 $(SAN_FLAGS)
 LDFLAGS_CXX := -lsqlite3 $(SAN_FLAGS)
 BIN_DIR = bin

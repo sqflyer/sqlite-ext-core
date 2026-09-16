@@ -2042,7 +2042,7 @@ void test_subtype_factory_heap_paths() {
     assert(uuid_text.is_uuid());
     assert(uuid_text.is_text());
     assert(uuid_text.subtype() == SQLITE_SUBTYPE_UUID);
-    assert(uuid_text.is_heap_allocated()); // 36 > 13
+    assert(uuid_text.is_heap_allocated()); // 36 > 21 = MAX_INLINE_STR_LEN
     assert(uuid_text.as_text() == SqliteStringView(uuid_str, uuid_len));
 
     // 2. from_uuid binary (16 bytes) → in-situ BLOB (16 <= 22 = MAX_INLINE_BUF_LEN)
@@ -3870,7 +3870,7 @@ int main() {
     printf("Testing as_text and as_blob on SqliteValueView & SqliteValueOwned...\n");
     test_as_text_and_as_blob(db);
 
-    printf("Testing Subtypes & Affinities (16-byte Layout)...\n");
+    printf("Testing Subtypes & Affinities (24-byte Layout)...\n");
     test_subtypes_and_affinities(db);
     
     printf("Testing Value View Ergonomics (to_owned, predicates, from_column)...\n");
@@ -3882,7 +3882,7 @@ int main() {
     printf("Testing SqliteValueOwned::from_literal (SQL Literal Inferred Parsing)...\n");
     test_from_literal();
 
-    printf("Testing SBO Boundary Exact Transitions (13 vs 14 chars, 14 vs 15 bytes)...\n");
+    printf("Testing SBO Boundary Exact Transitions (21 vs 22 chars, 22 vs 23 bytes)...\n");
     test_sbo_boundary_and_heap_transitions();
 
     printf("Testing Owned Move & Self-Assignment Lifetime Safety...\n");

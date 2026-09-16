@@ -173,5 +173,5 @@ For TVFs that read or modify connection-level shared state (e.g. caches, thread 
 | **Frame Memory Size** | Stack size + ~80 bytes state control block | **~32 – 64 Bytes total** |
 | **Deep Call Depth Yield**| **Supported** (Yield from recursive subroutines) | **Unsupported** (Top-level loop only) |
 | **Context Switch Time** | **~15 – 25 ns** (Hardware register swap) | **~1 – 3 ns** (Direct function jump) |
-| **Compiler Requirement**| **C++11** (`-std=c++11`) | **C++20** (`-std=c++20` or `/std:c++20`) |
+| **Compiler Requirement**| **C++17 Baseline** (`-std=c++17`, `/std:c++17`) | **C++20** (`-std=c++20` or `/std:c++20`) |
 | **Standard Library Dep**| **0.0% (`-nostdlib++`)** | **0.0% (`-nostdlib++`)** |

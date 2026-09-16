@@ -120,16 +120,75 @@ While C simply allocates structs using `sqlite3_malloc`, the C++ templates must 
 
 For strict no-throw error handling and out-of-memory (OOM) resilience without C++ exceptions, both state managers provide fallible methods using the standard Rust-style `SqliteResult<T>` and `SqliteStatus` interfaces:
 
-- **`SqliteExtState<T>::try_get_or_create(db, ctx)`**: Returns `SqliteResult<T*>`. On cold-path allocation failure, returns `SqliteResult<T*>::err(SQLITE_NOMEM, ...)`.
-- **`SqliteExtState<T>::try_init(db, ctx)`**: Proactively allocates and registers state for the database connection, returning `SqliteStatus`.
-- **`SqliteConnState<T>::try_get_or_create(db, ctx)`**: Returns `SqliteResult<T*>` for per-connection state.
-- **`SqliteConnState<T>::try_init(db, ctx)`**: Returns `SqliteStatus` for per-connection state initialization.
+- **`SqliteExtState<T>::try_get(db)`**: Returns `SqliteResult<T*>`. If the state was not registered during extension loading, returns `SqliteResult<T*>::err(SQLITE_NOTFOUND, ...)`.
+- **`SqliteExtState<T>::try_init(db, init_fn)`**: Proactively allocates and registers state for the database connection, returning `SqliteResult<void*>`.
+- **`SqliteConnState<T>::try_get(db)`**: Returns `SqliteResult<T*>` for per-connection state.
+- **`SqliteConnState<T>::try_init(db, init_fn)`**: Proactively allocates and registers per-connection state, returning `SqliteResult<void*>`.
 
 ```cpp
-SqliteResult<MyState*> res = SqliteExtState<MyState>::try_get_or_create(db, ctx);
+SqliteResult<MyState*> res = SqliteExtState<MyState>::try_get(db);
 if (res.is_err()) {
     res.set_sqlite_err(ctx);
     return;
 }
 MyState* state = res.unwrap();
 ```
+
+---
+
+## 12. C++17 Baseline & Registration-Owned Lifecycle Reference Counting
+
+### 12.1 Standard C++17 Compiler Requirement
+The state subsystem requires a **C++17 baseline** (`-std=c++17` on GCC/Clang, `/std:c++17` on MSVC) while enforcing strict freestanding execution:
+- `-nostdlib++`: Drops `libc++`/`libstdc++` dependencies.
+- `-fno-exceptions -fno-rtti`: Zero unwind tables and zero RTTI metadata.
+- **C++17 Language Features Utilized**:
+  - `inline` static template members: Guarantee single-definition ODR safety across multiple translation units without linker duplicate symbol collisions.
+  - `if constexpr`: Eliminates dead branch code generation in compile-time lock selection and allocator traits.
+  - Structured bindings: Seamlessly unbind hybrid states (`auto [ext, conn] = AppHybrid::from_context(ctx);`).
+
+### 12.2 Elimination of `get_or_create` (The Refcount Leak Trap)
+Earlier iterations provided a `get_or_create(db, init_fn)` API. However, in SQLite extensions, state lifecycle is intrinsically bound to SQLite's `sqlite3_create_function_v2` / `sqlite3_create_module_v2` registration and their corresponding `xDestroy` callbacks:
+1. If an extension author invoked `get_or_create()` prior to or outside of registration, the internal entry's reference count was initialized without a matching `xDestroy` callback registered in SQLite.
+2. During teardown (`sqlite3_close`), SQLite only fired `xDestroy` for the registered functions, leaving the extra reference dangling (`refcount > 0`).
+3. Under AddressSanitizer (ASan) and LeakSanitizer (LSan), this produced persistent memory leak reports.
+
+### 12.3 The Registration-Owned Lifecycle Model
+To eliminate untracked leaks with 100% mathematical certainty, the architecture enforces a **Registration-Owned Lifecycle**:
+
+```text
+┌─────────────────────────────────────────────────────────────────────────────┐
+│ 1. Extension Loading Phase (sqlite3_myext_init)                             │
+├─────────────────────────────────────────────────────────────────────────────┤
+│ • SqliteExt::define_scalar_with_state<AppState, my_func>(db, "fn1")         │
+│   └──> Defaults init(db) -> refcount = 1, binds SqliteExtState::destructor  │
+│ • SqliteExt::define_scalar_with_state<AppState, other_func>(db, "fn2")      │
+│   └──> Retains existing entry -> refcount = 2, binds destructor             │
+│                                                                             │
+│ • Post-registration state configuration:                                    │
+│   AppState* state = SqliteExtState<AppState>::get(db); // refcount UNCHANGED│
+│   state->cache_size = 1024;                                                 │
+└─────────────────────────────────────────────────────────────────────────────┘
+                                       │
+                                       ▼
+┌─────────────────────────────────────────────────────────────────────────────┐
+│ 2. Query Execution Phase (SELECT fn1(), fn2())                              │
+├─────────────────────────────────────────────────────────────────────────────┤
+│ • Context lookup: ctx.state<AppState>() or SqliteExtState::from_context(ctx)│
+│ • Database handle lookup: SqliteExtState::get(db) / try_get(db)             │
+│ • Zero reference count modifications: refcount remains 2                    │
+└─────────────────────────────────────────────────────────────────────────────┘
+                                       │
+                                       ▼
+┌─────────────────────────────────────────────────────────────────────────────┐
+│ 3. Database Teardown Phase (sqlite3_close(db))                              │
+├─────────────────────────────────────────────────────────────────────────────┤
+│ • SQLite invokes xDestroy for fn1 -> destructor decrements: refcount = 1    │
+│ • SQLite invokes xDestroy for fn2 -> destructor decrements: refcount = 0    │
+│ • At refcount == 0, double-checked atomic lock frees memory & unlinks entry  │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+- **`init(db, init_fn)` & `try_init(db, init_fn)`**: Reserved for initialization and registration-time reference binding.
+- **`get(db)` & `try_get(db)`**: Non-mutating lookups that never modify reference counts.
+- **Symmetrical Balance**: Every `refcount` increment is guaranteed to have exactly one corresponding SQLite `xDestroy` decrement.

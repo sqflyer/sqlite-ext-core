@@ -102,15 +102,19 @@ When `SqliteTvf::define<MyIterator>(db, "my_tvf")` is called, the compiler gener
 
 ---
 
-## 4. Stateful TVFs (`define_with_state`) Architecture
+## 4. Stateful TVFs (`define_with_state`, `define_with_conn_state`, `define_with_hybrid_state`)
 
-When a TVF is registered via `SqliteTvf::define_with_state<State, Iterator>(db, name)`:
+In C++17, Table-Valued Functions seamlessly participate in stateful workflows under the **Registration-Owned Reference Counting Model**:
+1. **`define_with_state<State, Iterator>`**: Shared per-database state (`SqliteExtState`).
+2. **`define_with_conn_state<State, Iterator>`**: Lock-free per-connection state (`SqliteConnState`).
+3. **`define_with_hybrid_state<ExtT, ConnT, Iterator>`**: Unified hybrid state (`SqliteHybridState`).
 
 ```
 +========================================================================================================+
 | 1. REGISTRATION PHASE (sqlite3_create_module_v2)                                                       |
 +========================================================================================================+
 | SqliteTvf::define_with_state<AppState, MyTvf>(db, "my_tvf")                                            |
+|   | (or define_with_conn_state / define_with_hybrid_state)                                             |
 |   |                                                                                                    |
 |   |---> raw_state = SqliteExtState<AppState>::init(db)  (Allocates shared Entry struct)                |
 |   |---> sqlite3_create_module_v2(db, "my_tvf", &module_def, raw_state, destructor)                     |
@@ -145,20 +149,21 @@ When a TVF is registered via `SqliteTvf::define_with_state<State, Iterator>(db, 
 +========================================================================================================+
 | void column(SqliteContext ctx, int col_idx) override {                                                 |
 |     AppState* state = ctx.state<AppState>();                                                           |
-|     //                ^                                                                                |
-|     //                +--- Calls: ctx.user_data() -> returns injected `m_user_data`                   |
-|     //                +--- Downcasts `Entry*` -> returns `&entry->state` in 1 CPU instruction!         |
+|     // ConnState* conn = ctx.conn_state<ConnState>();                                                  |
+|     // auto [ext, conn] = ctx.hybrid_state<ExtT, ConnT>();                                             |
 | }                                                                                                      |
 +========================================================================================================+
 ```
 
 ### Key Architectural Advantages:
-1. **Automated Lifecycle on Database Close**:
-   When the SQLite database connection is closed (`sqlite3_close` / `sqlite3_close_v2`), SQLite invokes `SqliteExtState<State>::destructor`, decrementing the reference count and safely freeing the state memory when `ref_count == 0`.
+1. **Registration-Owned Lifecycle**:
+   State registration defaults initialization (`init(db)`), binding reference counting to SQLite module `xDestroy`. When the database connection is closed (`sqlite3_close`), SQLite invokes `destructor`, cleanly decrementing references and freeing memory when `ref_count == 0`.
 2. **Direct Context Injection (Zero-Lookup $O(1)$ State Retrieval)**:
    SQLite's C engine passes `NULL` for `sqlite3_user_data(ctx)` in virtual table `xColumn` callbacks. The TVF framework circumvents this limitation by capturing `pAux` in `xConnect` on `VTab::raw_state`, and injecting it into `SqliteContext(ctx, pTab->raw_state)` during `xColumn`. Calling `ctx.state<State>()` accesses the injected pointer directly in **1 single CPU instruction ($O(1)$)** with zero hash lookups and zero database handle searches.
 3. **Cross-Subsystem State Sharing**:
-   Scalar UDFs, Aggregates, Table-Valued Functions (TVFs), and Virtual Tables on the same connection all read and write to the exact same thread-safe `SqliteExtState<T>` struct instance.
+   Scalar UDFs, Aggregates, Table-Valued Functions (TVFs), and Virtual Tables on the same connection all read and write to the exact same thread-safe `SqliteExtState<T>` or lock-free `SqliteConnState<T>` struct instance.
+4. **C++17 Freestanding Execution**:
+   Requires `-std=c++17` on GCC/Clang and `/std:c++17` on MSVC, executing in pure freestanding mode (`-nostdlib++`, `-fno-exceptions`, `-fno-rtti`).
 
 ### 4.1 Multi-TVF & Multi-VTab Stack Isolation Model
 

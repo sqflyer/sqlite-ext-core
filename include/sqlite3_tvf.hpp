@@ -6,6 +6,7 @@
 #include "sqlite3_aggregate.hpp" // Provides SqliteUdfArgs
 #include "sqlite3_allocator.hpp"
 #include "sqlite3_ext_state.hpp"
+#include "sqlite3_conn_state.hpp"
 
 // ============================================================================
 // TVF (TABLE-VALUED FUNCTION) FRAMEWORK
@@ -297,6 +298,44 @@ struct SqliteTvfModule {
             SqliteExtState<State>::destructor
         );
     }
+
+    /**
+     * @brief Register the C++ TVF iterator as a Stateful Table-Valued Function bound to connection state.
+     */
+    template <typename State>
+    static int define_with_conn_state(SqliteDatabaseView db, const char* name) {
+        static_assert(sizeof(T::schema()) > 0, 
+            "TVF iterator struct must define a 'static constexpr const char* schema()' method!");
+
+        void* raw_state = SqliteConnState<State>::init(db.get());
+
+        return sqlite3_create_module_v2(
+            db.get(), 
+            name, 
+            &module_def, 
+            raw_state,
+            SqliteConnState<State>::destructor
+        );
+    }
+
+    /**
+     * @brief Register the C++ TVF iterator as a Stateful Table-Valued Function bound to hybrid state.
+     */
+    template <typename ExtState, typename ConnState, typename LockPolicy = SqliteRwLock>
+    static int define_with_hybrid_state(SqliteDatabaseView db, const char* name) {
+        static_assert(sizeof(T::schema()) > 0, 
+            "TVF iterator struct must define a 'static constexpr const char* schema()' method!");
+
+        void* raw_holder = SqliteHybridState<ExtState, ConnState, LockPolicy>::init(db.get());
+
+        return sqlite3_create_module_v2(
+            db.get(), 
+            name, 
+            &module_def, 
+            raw_holder,
+            SqliteHybridState<ExtState, ConnState, LockPolicy>::destructor
+        );
+    }
 };
 
 // Out-of-line definition for static constexpr member
@@ -331,6 +370,22 @@ public:
     template <typename State, typename T>
     static inline int define_with_state(SqliteDatabaseView db, const char* name) {
         return SqliteTvfModule<T>::template define_with_state<State>(db, name);
+    }
+
+    /**
+     * @brief Register an Object-Oriented C++ Table-Valued Function (TVF) bound to connection-unique state.
+     */
+    template <typename State, typename T>
+    static inline int define_with_conn_state(SqliteDatabaseView db, const char* name) {
+        return SqliteTvfModule<T>::template define_with_conn_state<State>(db, name);
+    }
+
+    /**
+     * @brief Register an Object-Oriented C++ Table-Valued Function (TVF) bound to hybrid state.
+     */
+    template <typename ExtState, typename ConnState, typename T, typename LockPolicy = SqliteRwLock>
+    static inline int define_with_hybrid_state(SqliteDatabaseView db, const char* name) {
+        return SqliteTvfModule<T>::template define_with_hybrid_state<ExtState, ConnState, LockPolicy>(db, name);
     }
 };
 

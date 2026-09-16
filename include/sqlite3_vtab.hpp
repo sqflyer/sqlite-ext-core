@@ -6,6 +6,7 @@
 #include "sqlite3_db.hpp"
 #include "sqlite3_allocator.hpp"
 #include "sqlite3_ext_state.hpp"
+#include "sqlite3_conn_state.hpp"
 #include "sqlite3_vtab_arg.hpp"
 
 /**
@@ -122,6 +123,36 @@ public:
     template <typename State>
     inline State* state() const {
         return SqliteExtState<State>::from_ptr(m_pAux);
+    }
+
+    /**
+     * @brief Retrieve connection-unique state directly from connect args.
+     * @tparam State The user-defined state struct.
+     * @return Strongly-typed State* pointer, or nullptr.
+     */
+    template <typename State>
+    inline State* conn_state() const {
+        return SqliteConnState<State>::from_ptr(m_pAux);
+    }
+
+    /**
+     * @brief Retrieve hybrid state directly from connect args.
+     * @tparam ExtState The user-defined shared state struct.
+     * @tparam ConnState The user-defined per-connection state struct.
+     * @tparam LockPolicy Lock policy for the shared component (defaults to SqliteRwLock).
+     * @return State struct containing pointers to ext and conn.
+     */
+    template <typename ExtState, typename ConnState, typename LockPolicy = SqliteRwLock>
+    inline typename SqliteHybridState<ExtState, ConnState, LockPolicy>::State hybrid_state() const {
+        using Hybrid = SqliteHybridState<ExtState, ConnState, LockPolicy>;
+        typename Hybrid::Holder* holder = static_cast<typename Hybrid::Holder*>(m_pAux);
+        if (holder) {
+            return typename Hybrid::State{
+                SqliteExtState<ExtState, LockPolicy>::from_ptr(holder->ext_raw),
+                SqliteConnState<ConnState>::from_ptr(holder->conn_raw)
+            };
+        }
+        return typename Hybrid::State{};
     }
 
     template <typename T>
@@ -637,6 +668,24 @@ public:
         void* raw_state = SqliteExtState<State>::init(db.get());
         return register_module(db.get(), module_name, raw_state, SqliteExtState<State>::destructor);
     }
+
+    /**
+     * @brief Registers the C++ Virtual Table module with SQLite bound to connection state.
+     */
+    template <typename State>
+    static int register_module_with_conn_state(SqliteDatabaseView db, const char* module_name) {
+        void* raw_state = SqliteConnState<State>::init(db.get());
+        return register_module(db.get(), module_name, raw_state, SqliteConnState<State>::destructor);
+    }
+
+    /**
+     * @brief Registers the C++ Virtual Table module with SQLite bound to hybrid state.
+     */
+    template <typename ExtState, typename ConnState, typename LockPolicy = SqliteRwLock>
+    static int register_module_with_hybrid_state(SqliteDatabaseView db, const char* module_name) {
+        void* raw_holder = SqliteHybridState<ExtState, ConnState, LockPolicy>::init(db.get());
+        return register_module(db.get(), module_name, raw_holder, SqliteHybridState<ExtState, ConnState, LockPolicy>::destructor);
+    }
 };
 
 // Out-of-line definition for static constexpr member in C++11
@@ -673,6 +722,36 @@ public:
     template <typename State, typename VTableType, VTabOptions Options = VTabOptions::ReadOnly>
     static inline int define_with_state(SqliteDatabaseView db, const char* module_name) {
         return SqliteVTabModule<VTableType, Options>::template register_module_with_state<State>(db, module_name);
+    }
+
+    /**
+     * @brief Register a C++ Virtual Table module with SQLite bound to connection-unique state.
+     * @tparam State The user-defined per-connection state struct type.
+     * @tparam VTableType The C++ class implementing the virtual table (inheriting from SqliteVTable).
+     * @tparam Options Bitmask of VTabOptions (e.g. VTabOptions::Writable, VTabOptions::Eponymous).
+     * @param db The SQLite database connection (SqliteDatabaseView, SqliteDatabaseOwned, or sqlite3*).
+     * @param module_name The SQL virtual table module name.
+     * @return SQLITE_OK on success, or an SQLite error code.
+     */
+    template <typename State, typename VTableType, VTabOptions Options = VTabOptions::ReadOnly>
+    static inline int define_with_conn_state(SqliteDatabaseView db, const char* module_name) {
+        return SqliteVTabModule<VTableType, Options>::template register_module_with_conn_state<State>(db, module_name);
+    }
+
+    /**
+     * @brief Register a C++ Virtual Table module with SQLite bound to hybrid state.
+     * @tparam ExtState The user-defined shared state struct type.
+     * @tparam ConnState The user-defined per-connection state struct type.
+     * @tparam VTableType The C++ class implementing the virtual table (inheriting from SqliteVTable).
+     * @tparam Options Bitmask of VTabOptions (e.g. VTabOptions::Writable, VTabOptions::Eponymous).
+     * @tparam LockPolicy Concurrency lock policy for shared state (defaults to SqliteRwLock).
+     * @param db The SQLite database connection (SqliteDatabaseView, SqliteDatabaseOwned, or sqlite3*).
+     * @param module_name The SQL virtual table module name.
+     * @return SQLITE_OK on success, or an SQLite error code.
+     */
+    template <typename ExtState, typename ConnState, typename VTableType, VTabOptions Options = VTabOptions::ReadOnly, typename LockPolicy = SqliteRwLock>
+    static inline int define_with_hybrid_state(SqliteDatabaseView db, const char* module_name) {
+        return SqliteVTabModule<VTableType, Options>::template register_module_with_hybrid_state<ExtState, ConnState, LockPolicy>(db, module_name);
     }
 };
 

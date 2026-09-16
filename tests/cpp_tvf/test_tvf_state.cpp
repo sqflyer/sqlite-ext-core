@@ -191,8 +191,16 @@ int main() {
     sqlite3* db1;
     assert(sqlite3_open(":memory:", &db1) == SQLITE_OK);
 
-    printf("1. Initializing shared TVF state on db1...\n");
-    SqliteExtState<TvfSharedState>::get_or_create(db1, [](TvfSharedState* s) {
+    printf("1. Registering stateful TVFs and companion UDFs on db1 (defaults init)...\n");
+    assert((SqliteTvf::define_with_state<TvfSharedState, MetricsStreamer>(db1, "stream_metrics")) == SQLITE_OK);
+    assert((SqliteTvf::define_with_state<TvfSharedState, ScaledSeriesIterator>(db1, "scaled_series")) == SQLITE_OK);
+    assert((SqliteUdf::define_with_state<TvfSharedState, udf_get_tvf_stats>(db1, "tvf_stats", 0)) == SQLITE_OK);
+    assert((SqliteUdf::define_with_state<TvfSharedState, udf_set_metric>(db1, "tvf_set_metric", 2)) == SQLITE_OK);
+
+    printf("2. Initializing shared TVF state on db1 via get()...\n");
+    {
+        TvfSharedState* s = SqliteExtState<TvfSharedState>::get(db1);
+        assert(s != nullptr);
         s->total_rows_emitted = 0;
         s->query_executions = 0;
         const char* initial_sess = "session_alpha";
@@ -201,13 +209,7 @@ int main() {
         s->metrics[1] = 20; // MEM
         s->metrics[2] = 30; // IO
         s->metrics[3] = 40; // NET
-    });
-
-    printf("2. Registering stateful TVFs and companion UDFs on db1...\n");
-    assert((SqliteTvf::define_with_state<TvfSharedState, MetricsStreamer>(db1, "stream_metrics")) == SQLITE_OK);
-    assert((SqliteTvf::define_with_state<TvfSharedState, ScaledSeriesIterator>(db1, "scaled_series")) == SQLITE_OK);
-    assert((SqliteUdf::define_with_state<TvfSharedState, udf_get_tvf_stats>(db1, "tvf_stats", 0)) == SQLITE_OK);
-    assert((SqliteUdf::define_with_state<TvfSharedState, udf_set_metric>(db1, "tvf_set_metric", 2)) == SQLITE_OK);
+    }
 
     // ------------------------------------------------------------------------
     // Test 1: Query Stateful TVF (stream_metrics)
@@ -290,7 +292,12 @@ int main() {
     sqlite3* db2;
     assert(sqlite3_open(":memory:", &db2) == SQLITE_OK);
 
-    SqliteExtState<TvfSharedState>::get_or_create(db2, [](TvfSharedState* s) {
+    assert((SqliteTvf::define_with_state<TvfSharedState, MetricsStreamer>(db2, "stream_metrics")) == SQLITE_OK);
+    assert((SqliteUdf::define_with_state<TvfSharedState, udf_get_tvf_stats>(db2, "tvf_stats", 0)) == SQLITE_OK);
+
+    {
+        TvfSharedState* s = SqliteExtState<TvfSharedState>::get(db2);
+        assert(s != nullptr);
         s->total_rows_emitted = 0;
         s->query_executions = 0;
         const char* db2_sess = "session_beta";
@@ -299,10 +306,7 @@ int main() {
         s->metrics[1] = 200;
         s->metrics[2] = 300;
         s->metrics[3] = 400;
-    });
-
-    assert((SqliteTvf::define_with_state<TvfSharedState, MetricsStreamer>(db2, "stream_metrics")) == SQLITE_OK);
-    assert((SqliteUdf::define_with_state<TvfSharedState, udf_get_tvf_stats>(db2, "tvf_stats", 0)) == SQLITE_OK);
+    }
 
     // Verify db2 initial stats
     {

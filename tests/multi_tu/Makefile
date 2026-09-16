@@ -21,7 +21,7 @@ else
     SAN_FLAGS := -fsanitize=address
 endif
 
-CXXFLAGS := -std=c++11 -Wall -Wextra -O2 -I../../include -fno-exceptions -fno-rtti $(SAN_FLAGS)
+CXXFLAGS := -std=c++17 -Wall -Wextra -O2 -I../../include -fno-exceptions -fno-rtti $(SAN_FLAGS)
 
 TARGET_DIR = bin
 TARGET = $(TARGET_DIR)/test_multi_tu

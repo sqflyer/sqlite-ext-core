@@ -29,7 +29,7 @@ else
     endif
 endif
 
-CXXFLAGS := -std=c++11 -Wall -Wextra -O2 -I../../include -fno-exceptions -fno-rtti $(SAN_FLAGS)
+CXXFLAGS := -std=c++17 -Wall -Wextra -O2 -I../../include -fno-exceptions -fno-rtti $(SAN_FLAGS)
 
 TARGET_DIR = bin
 STATELESS_LIB = $(TARGET_DIR)/libtest_ext_stateless$(EXT_SUFFIX)

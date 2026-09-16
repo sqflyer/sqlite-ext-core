@@ -98,25 +98,25 @@ struct MixedWeightedAvg : public SqliteAggregateBase<double> {
 // Default Entrypoint: sqlite3_extension_init
 // ----------------------------------------------------------------------------
 SQLITE_DEFAULT_EXTENSION_ENTRYPOINT(db) {
-    // 1. Initialize State for stateful components
-    SqliteExt::init_state<MixedAuditState>(db, [](MixedAuditState* s) {
-        s->audit_calls = 0;
-        s->weighted_accumulator = 0.0;
-    });
-
-    // 2. Register Stateless Components
+    // 1. Register Stateless Components
     int rc = SqliteExt::define_scalar(db, "mixed_multiply", 2, mixed_multiply);
     if (rc != SQLITE_OK) return rc;
 
     rc = SqliteExt::define_tvf<MixedIotaIterator>(db, "mixed_iota");
     if (rc != SQLITE_OK) return rc;
 
-    // 3. Register Stateful Components
+    // 2. Register Stateful Components (defaults the init during extension loading)
     rc = SqliteExt::define_scalar_with_state<MixedAuditState, mixed_audit_log>(db, "mixed_audit", 0);
     if (rc != SQLITE_OK) return rc;
 
     rc = SqliteExt::define_aggregate_with_state<MixedAuditState, MixedWeightedAvg>(db, "mixed_weighted_avg", 2);
     if (rc != SQLITE_OK) return rc;
+
+    // 3. Customize State for stateful components via init_state
+    SqliteExt::init_state<MixedAuditState>(db, [](MixedAuditState* s) {
+        s->audit_calls = 0;
+        s->weighted_accumulator = 0.0;
+    });
 
     return SQLITE_OK;
 }

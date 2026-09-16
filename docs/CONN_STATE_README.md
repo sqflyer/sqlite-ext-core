@@ -125,8 +125,8 @@ if (session) {
     session->session_id = 42;
 }
 
-// Proactive creation / initialization:
-MyConnSession* session = SqliteConnState<MyConnSession>::get_or_create(db, [](MyConnSession* s) {
+// Initialize or register with custom setup callback:
+void* pApp = SqliteConnState<MyConnSession>::init(db, [](MyConnSession* s) {
     s->session_id = 1001;
     s->query_count = 0;
 });
@@ -134,14 +134,14 @@ MyConnSession* session = SqliteConnState<MyConnSession>::get_or_create(db, [](My
 
 ---
 
-## Fallible OOM Handling (`SqliteResult`)
+## Fallible OOM & Lookup Handling (`SqliteResult`)
 
 For applications operating under strict SQLite memory limits (`sqlite3_hard_heap_limit64`):
 
 ```cpp
-SqliteResult<MyConnSession*> res = SqliteConnState<MyConnSession>::try_get_or_create(db, ctx);
+SqliteResult<MyConnSession*> res = SqliteConnState<MyConnSession>::try_get(db);
 if (res.is_err()) {
-    res.set_sqlite_err(ctx); // Propagates SQLITE_NOMEM to SQLite query
+    res.set_sqlite_err(ctx); // Propagates SQLITE_NOTFOUND or error to SQLite query
     return;
 }
 MyConnSession* session = res.unwrap();

@@ -164,7 +164,7 @@ private:
             if (init_fn) {
                 init_fn(&entry->state);
             }
-            entry->refcount = 1;
+            entry->refcount = 0;
             registry_map.insert_or_assign(&entry->db_path, entry);
         }
         return entry;
@@ -172,17 +172,13 @@ private:
 
     /**
      * @brief Looks up existing state entry in the DuoSTL Robin Hood hash map.
-     * Assumes the caller holds the registry lock. Automatically retains the entry if found.
+     * Assumes the caller holds the registry lock. Does not retain.
      */
     static Entry* entry_find_locked(const char *db_path) {
         duo::String key(db_path);
         const duo::String *p_key = &key;
         Entry **p_entry = registry_map.get(p_key);
-        Entry *entry = p_entry ? *p_entry : nullptr;
-        if (entry) {
-            entry_retain(entry);
-        }
-        return entry;
+        return p_entry ? *p_entry : nullptr;
     }
 
     /**
@@ -193,20 +189,8 @@ private:
         ensure_mutex_init();
         if (registry_mutex) sqlite3_mutex_enter(registry_mutex);
         Entry *entry = entry_find_locked(db_path);
-        if (registry_mutex) sqlite3_mutex_leave(registry_mutex);
-        return entry;
-    }
-
-    /**
-     * @brief Retrieves an existing state entry or creates a new one if it does not exist.
-     * Thread-safe against concurrent initialization attempts across multiple connections.
-     */
-    static Entry* entry_get_or_create(const char *db_path, void (*init_fn)(T*)) {
-        ensure_mutex_init();
-        if (registry_mutex) sqlite3_mutex_enter(registry_mutex);
-        Entry *entry = entry_find_locked(db_path);
-        if (!entry) {
-            entry = entry_alloc(db_path, init_fn);
+        if (entry) {
+            entry_retain(entry);
         }
         if (registry_mutex) sqlite3_mutex_leave(registry_mutex);
         return entry;
@@ -220,23 +204,9 @@ public:
     }
 
     /** 
-     * @brief Retrieves the strongly-typed T* shared state for the attached database, creating it if not present.
-     * @param db The SQLite database connection.
-     * @param init_fn Optional setup callback executed only when the state is created for the first time.
-     * @return Strongly-typed pointer to the shared state instance (T*).
-     */
-    static T* get_or_create(sqlite3 *db, void (*init_fn)(T*) = nullptr) {
-        if (!db) return nullptr;
-        char resolved_path[128];
-        const char *db_path = get_db_path(db, resolved_path);
-        Entry *entry = entry_get_or_create(db_path, init_fn);
-        return entry ? &entry->state : nullptr;
-    }
-
-    /** 
      * @brief Retrieves an existing strongly-typed T* shared state for the attached database if present.
      * @param db The SQLite database connection.
-     * @return Strongly-typed pointer T* if found, or nullptr if not yet created.
+     * @return Strongly-typed pointer T* if found, or nullptr if not yet registered.
      */
     static T* get(sqlite3 *db) {
         if (!db) return nullptr;
@@ -245,33 +215,40 @@ public:
         ensure_mutex_init();
         if (registry_mutex) sqlite3_mutex_enter(registry_mutex);
         Entry *entry = entry_find_locked(db_path);
-        if (entry) {
-            entry_release(entry);
-        }
         if (registry_mutex) sqlite3_mutex_leave(registry_mutex);
         return entry ? &entry->state : nullptr;
     }
 
-    /** @brief Initializes or fetches the shared state for the attached database, returning raw entry handle. */
+    /**
+     * @brief Attempts to retrieve an existing strongly-typed shared state, returning SqliteResult.
+     */
+    static SqliteResult<T*> try_get(sqlite3 *db) {
+        if (!db) {
+            return SqliteResult<T*>::err(SQLITE_MISUSE, "Null database connection in SqliteExtState::try_get");
+        }
+        T* state = get(db);
+        if (!state) {
+            return SqliteResult<T*>::err(SQLITE_NOTFOUND, "Shared extension state not registered for database connection");
+        }
+        return SqliteResult<T*>::ok(state);
+    }
+
+    /** @brief Initializes or fetches the shared state for the attached database, returning raw entry handle with retained refcount. */
     static void* init(sqlite3 *db, void (*init_fn)(T*) = nullptr) {
         if (!db) return nullptr;
         char resolved_path[128];
         const char *db_path = get_db_path(db, resolved_path);
-        return (void*)entry_get_or_create(db_path, init_fn);
-    }
-
-    /**
-     * @brief Attempts to retrieve or create the strongly-typed shared state, returning SqliteResult.
-     */
-    static SqliteResult<T*> try_get_or_create(sqlite3 *db, void (*init_fn)(T*) = nullptr) {
-        if (!db) {
-            return SqliteResult<T*>::err(SQLITE_MISUSE, "Null database connection in SqliteExtState::try_get_or_create");
+        ensure_mutex_init();
+        if (registry_mutex) sqlite3_mutex_enter(registry_mutex);
+        Entry *entry = entry_find_locked(db_path);
+        if (!entry) {
+            entry = entry_alloc(db_path, init_fn);
         }
-        T* state = get_or_create(db, init_fn);
-        if (!state) {
-            return SqliteResult<T*>::nomem("Failed to allocate shared extension state in SqliteExtState::try_get_or_create");
+        if (entry) {
+            entry_retain(entry);
         }
-        return SqliteResult<T*>::ok(state);
+        if (registry_mutex) sqlite3_mutex_leave(registry_mutex);
+        return (void*)entry;
     }
 
     /**

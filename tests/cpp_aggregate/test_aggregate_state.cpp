@@ -193,21 +193,23 @@ int main() {
     sqlite3* db1;
     assert(sqlite3_open(":memory:", &db1) == SQLITE_OK);
 
-    printf("1. Initializing shared state on db1...\n");
-    SqliteExtState<AggregateSharedState>::get_or_create(db1, [](AggregateSharedState* s) {
-        s->total_rows_stepped = 0;
-        s->global_sum = 0.0;
-        s->finalize_invocations = 0;
-        const char* initial_tag = "initial_v1";
-        memcpy(s->last_tag, initial_tag, strlen(initial_tag) + 1);
-    });
-
-    printf("2. Registering stateful aggregates and companion UDFs on db1...\n");
+    printf("1. Registering stateful aggregates and companion UDFs on db1 (defaults init)...\n");
     assert((SqliteAggregate::define_with_state<AggregateSharedState, StatefulWeightedAvg>(db1, "weighted_avg", 2)) == SQLITE_OK);
     assert((SqliteAggregate::define_with_state<AggregateSharedState, StatefulTaggedConcat>(db1, "tagged_concat", 1)) == SQLITE_OK);
     assert((SqliteUdf::define_with_state<AggregateSharedState, udf_get_agg_stats>(db1, "agg_stats", 0)) == SQLITE_OK);
     assert((SqliteUdf::define_with_state<AggregateSharedState, udf_set_agg_tag>(db1, "agg_set_tag", 1)) == SQLITE_OK);
     assert((SqliteUdf::define_with_state<AggregateSharedState, udf_reset_agg_state>(db1, "agg_reset", 0)) == SQLITE_OK);
+
+    printf("2. Initializing shared state on db1 via get()...\n");
+    {
+        AggregateSharedState* s = SqliteExtState<AggregateSharedState>::get(db1);
+        assert(s != nullptr);
+        s->total_rows_stepped = 0;
+        s->global_sum = 0.0;
+        s->finalize_invocations = 0;
+        const char* initial_tag = "initial_v1";
+        memcpy(s->last_tag, initial_tag, strlen(initial_tag) + 1);
+    }
 
     char* err = nullptr;
     assert(sqlite3_exec(db1, "CREATE TABLE grades(dept TEXT, score REAL, weight REAL);", nullptr, nullptr, &err) == SQLITE_OK);
@@ -280,16 +282,18 @@ int main() {
     sqlite3* db2;
     assert(sqlite3_open(":memory:", &db2) == SQLITE_OK);
 
-    SqliteExtState<AggregateSharedState>::get_or_create(db2, [](AggregateSharedState* s) {
+    assert((SqliteAggregate::define_with_state<AggregateSharedState, StatefulWeightedAvg>(db2, "weighted_avg", 2)) == SQLITE_OK);
+    assert((SqliteUdf::define_with_state<AggregateSharedState, udf_get_agg_stats>(db2, "agg_stats", 0)) == SQLITE_OK);
+
+    {
+        AggregateSharedState* s = SqliteExtState<AggregateSharedState>::get(db2);
+        assert(s != nullptr);
         s->total_rows_stepped = 0;
         s->global_sum = 0.0;
         s->finalize_invocations = 0;
         const char* db2_tag = "db2_fresh";
         memcpy(s->last_tag, db2_tag, strlen(db2_tag) + 1);
-    });
-
-    assert((SqliteAggregate::define_with_state<AggregateSharedState, StatefulWeightedAvg>(db2, "weighted_avg", 2)) == SQLITE_OK);
-    assert((SqliteUdf::define_with_state<AggregateSharedState, udf_get_agg_stats>(db2, "agg_stats", 0)) == SQLITE_OK);
+    }
 
     // Check db2 starts fresh
     assert(sqlite3_prepare_v2(db2, "SELECT agg_stats();", -1, &stmt, nullptr) == SQLITE_OK);

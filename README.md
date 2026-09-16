@@ -1,13 +1,13 @@
 # C/C++ SQLite Extension Core (`sqlite-ext-core`)
 
-A collection of foundational, zero-dependency C and C++ headers providing thread-safe state management, garbage collection, and native abstractions for building advanced SQLite extensions.
+A collection of foundational, zero-dependency C and C++17 headers providing thread-safe state management, garbage collection, and native abstractions for building advanced SQLite extensions.
 
-This repository serves as the native C and C++ counterpart to the Rust `sqlite-ext-core` library.
+This repository serves as the native C (C99/C11) and modern C++17 counterpart to the Rust `sqlite-ext-core` library. All C++ templates, containers, and modules require a standard **C++17 baseline** (`-std=c++17` on GCC/Clang, `/std:c++17` on MSVC) while strictly preserving freestanding runtime purity (`-nostdlib++`, `-fno-exceptions`, `-fno-rtti`).
 
 ## Currently Implemented
 
 ### 1. Zero-Dependency C++ Memory Allocator & Fallible Results (`sqlite3_allocator.hpp`)
-A fully freestanding C++ allocator and Rust-style explicit result monad that brings `std::allocator`, `std::construct_at`, `std::move` semantics, and zero-exception fallible error handling to SQLite extensions compiled with `-nostdlib++` and `-fno-exceptions`.
+A fully freestanding C++17 allocator and Rust-style explicit result monad that brings `std::allocator`, `std::construct_at`, `std::move` semantics, and zero-exception fallible error handling to SQLite extensions compiled with `-nostdlib++` and `-fno-exceptions`.
 
 #### Key Features:
 - **Rust-Style `SqliteResult<T>` & `SqliteStatus`**: Pure Rust-style explicit return types bundling typed payloads with SQLite integer error codes and custom error messages (`is_ok()`, `is_err()`, `err_code()`, `err_message()`, `err_msg()`, `unwrap()`, `unwrap_or()`, `unwrap_or_default()`, `take_value()`, `inspect_err()`, `or_else()`, `and_then()`).
@@ -49,7 +49,7 @@ A zero-dependency, freestanding suite of cross-platform atomics, locks, and gene
 ### 3. Per-Database Shared State Manager (`sqlite3_ext_state.h` / `.hpp`)
 Maintaining state (like connection pools, in-memory key-value stores (`memkv`), LRU caches, or query metrics) inside a SQLite extension is notoriously difficult due to SQLite's architecture, where extensions are loaded once per process but are used concurrently across multiple database connections.
 
-The state manager solves this by automatically generating a thread-safe, garbage-collected, **Per-Database Shared State Registry** with pluggable lock selection.
+The state manager solves this by automatically generating a thread-safe, garbage-collected, **Per-Database Shared State Registry** with pluggable lock selection and a **Registration-Owned Reference Counting Lifecycle Model**.
 
 #### Key Features:
 - **Pluggable Lock Selection**: Both Pure C and C++ state registries allow choosing the optimal synchronization primitive for your workload:
@@ -57,8 +57,9 @@ The state manager solves this by automatically generating a thread-safe, garbage
   - **1-Byte Spinlock (TinyLock)**: `SQLITE_EXTENSION_STATE_DECLARE_TINY(State)` / `SqliteExtStateTiny<T>` (ideal for fast in-memory KV stores and metrics)
   - **SQLite Native Mutex**: `SQLITE_EXTENSION_STATE_DECLARE_MUTEX(State)` / `SqliteExtStateMutex<T>`
   - **Generic Lock Adapter**: `SQLITE_EXTENSION_STATE_DECLARE_WITH_LOCK(State, LockType)` / `SqliteExtState<T, LockPolicy>`
+- **Registration-Owned Reference Count Model**: Registration routines (`define_with_state`, `init_state`) default state initialization via `init(db, init_fn)` or `try_init(db, init_fn)`, binding the allocated entry's reference count strictly to SQLite's module/function `xDestroy` hooks. Runtime access is performed via `get(db)`, `try_get(db)`, or `from_context(ctx)` with **zero refcount inflation**, completely preventing untracked memory leaks.
 - **ODR-Safe C API**: Available as a split macro suite (`SQLITE_EXTENSION_STATE_DECLARE` / `DEFINE`) for pure C extensions to perfectly prevent One-Definition Rule violations across multiple translation units.
-- **C++ Template API**: Available as a pure C++ template (`SqliteExtState<T, LockPolicy = SqliteRwLock>`) for C++ extensions. (Strict compile-time boundaries prevent accidental cross-language misuse).
+- **C++17 Template API**: Available as a pure C++17 template (`SqliteExtState<T, LockPolicy = SqliteRwLock>`) leveraging C++17 inline variables and template static guarantees. (Strict compile-time boundaries prevent accidental cross-language misuse).
 - **3-Layer Caching Architecture**: Implements O(1) nanosecond-fast state retrieval using SQLite's `sqlite3_set_auxdata` cache, falling back to a global registry.
 - **Automated Garbage Collection**: Integrates directly with SQLite's `xDestroy` connection hooks to automatically free memory when the last connection to a database closes.
 - **Embedded C++ Objects**: The C++ template seamlessly manages memory lifecycles via `sqlite_new` and `sqlite_delete` (fully relying on standard C++ destructors without needing custom `free_fn` callbacks) to support nested C++ objects (like `std::string`).
@@ -69,6 +70,21 @@ The state manager solves this by automatically generating a thread-safe, garbage
 #### Documentation
 - [State Manager Quickstart](docs/EXT_STATE_README.md)
 - [State Manager Internal Architecture](docs/EXT_STATE_ARCHITECTURE.md)
+
+### 3.5. Per-Connection & Hybrid State Manager (`sqlite3_conn_state.h` / `.hpp`)
+Maintains state that is strictly isolated to a single SQLite database connection (`sqlite3*`) rather than shared across all connections to a database file. Because SQLite guarantees serialized single-threaded execution per connection handle, `SqliteConnState` operates **100% lock-free** with nanosecond lookups.
+
+#### Key Features:
+- **Lock-Free Execution**: Query and statement evaluations bypass mutexes and spinlocks entirely, executing at raw pointer-dereference speed.
+- **High-Performance DuoSTL Pointer Map**: Backed by an $\mathcal{O}(1)$ open-addressing pointer hash table (`duo::HashMap<sqlite3*, Entry*>`) with power-of-two capacity growth.
+- **Unified Hybrid State (`SqliteHybridState<ExtT, ConnT>`)**: Pairs per-database shared state with per-connection private state under a single SQLite `pApp` context and dual-destructor teardown hook (`Holder`).
+- **C++17 Structured Bindings**: Unpacks hybrid state effortlessly inside UDFs: `auto [ext, conn] = AppHybrid::from_context(ctx);`.
+- **Registration-Owned Refcounting**: Symmetrical with `SqliteExtState`, registration defaults `init(db, init_fn)`, while runtime query lookups use `get(db)` or `try_get(db)` without inflating references.
+- **100% SQLite Memory Tracking**: All bucket tables and state payloads allocate exclusively via `sqlite3_realloc64` and `sqlite3_free`.
+
+#### Documentation
+- [Connection State Quickstart](docs/CONN_STATE_README.md)
+- [Connection State Architecture](docs/CONN_STATE_ARCHITECTURE.md)
 
 ### 4. C++ RAII Value Types (`sqlite3_value.hpp`)
 Zero-dependency C++ RAII wrappers for SQLite core data types designed for zero-allocation lookups, heterogeneous map keys, UDF argument access, and statement column readings.
@@ -322,7 +338,7 @@ A zero-allocation, high-performance C++17 argument parser, schema inspector, val
 - [Virtual Table Argument Parser Architecture](docs/VTAB_ARG_ARCHITECTURE.md)
 
 ### 16. Extension Creation Macros (`sqlite3_ext_creator.h` / `sqlite3_ext_creator.hpp`)
-Zero-boilerplate entrypoint macros and dynamic symbol exports for creating native loadable SQLite extensions in Pure C (C99/C11) and modern C++11.
+Zero-boilerplate entrypoint macros and dynamic symbol exports for creating native loadable SQLite extensions in Pure C (C99/C11) and modern C++17.
 
 #### Key Features:
 - **Zero-Boilerplate Entrypoints**: Replaces tedious `SQLITE_EXTENSION_INIT1`, `SQLITE_EXTENSION_INIT2(pApi)`, and `extern "C"` boilerplate with single-line macros (`SQLITE_EXTENSION_ENTRYPOINT(my_ext, db)`).
@@ -337,7 +353,7 @@ Zero-boilerplate entrypoint macros and dynamic symbol exports for creating nativ
 - [Extension Architecture](docs/EXTENSION_ARCHITECTURE.md)
 
 ### 17. Freestanding Time & Clock Subsystem (`sqlite3_time.h` / `sqlite3_time.hpp`)
-Zero-dependency, high-resolution monotonic clocks, wall-clock epoch timestamps, millisecond/microsecond sleep routines, and automatic system timezone offset detection for Pure C and C++11 (`-nostdlib++` compliant, no `<chrono>`).
+Zero-dependency, high-resolution monotonic clocks, wall-clock epoch timestamps, millisecond/microsecond sleep routines, and automatic system timezone offset detection for Pure C and C++17 (`-nostdlib++` compliant, no `<chrono>`).
 
 #### Key Features:
 - **Monotonic Precision**: High-resolution monotonic timers in nanoseconds, microseconds, and milliseconds via `QueryPerformanceCounter` on Windows and `clock_gettime(CLOCK_MONOTONIC)` on POSIX.
@@ -350,7 +366,7 @@ Zero-dependency, high-resolution monotonic clocks, wall-clock epoch timestamps, 
 - [Time & Clock Architecture](docs/TIME_ARCHITECTURE.md)
 
 ### 18. Freestanding Threading & Async Subsystem (`include/async/sqlite3_thread.h` / `sqlite3_thread.hpp`)
-Zero-dependency, cross-platform C99 and C++11 threading primitives, condition variables, and native OS mutexes for background task scheduling and write-behind pipelines without `<thread>` or `<condition_variable>`.
+Zero-dependency, cross-platform C99 and C++17 threading primitives, condition variables, and native OS mutexes for background task scheduling and write-behind pipelines without `<thread>` or `<condition_variable>`.
 
 #### Key Features:
 - **`std::thread` Parity**: `SqliteThread` spawns threads with free functions, stateless lambdas, or stateful capturing closures with 1-cycle move semantics (`sqlite_move`).
@@ -364,12 +380,12 @@ Zero-dependency, cross-platform C99 and C++11 threading primitives, condition va
 - [Threading & Async Architecture](docs/THREAD_ARCHITECTURE.md)
 
 ### 19. Freestanding Coroutine, Generator & Fiber Subsystem (`include/async/sqlite3_coro.h` / `sqlite3_coro.hpp`)
-Zero-dependency, cross-platform C99 stackful fibers and C++11/C++20 generators for cooperative multitasking, stream generation, and recursive Table-Valued Functions (TVF) without `<coroutine>` or `<thread>`.
+Zero-dependency, cross-platform C99 stackful fibers and C++17/C++20 generators for cooperative multitasking, stream generation, and recursive Table-Valued Functions (TVF) without `<coroutine>` or `<thread>`.
 
 #### Key Features:
-- **Stackful Fibers**: Pure C `sqlite3_coro_t` and C++11 `SqliteCoroutine` mapping to native Win32 Fibers (`CreateFiber` / `SwitchToFiber`) on Windows and POSIX `ucontext_t` on Linux/macOS.
+- **Stackful Fibers**: Pure C `sqlite3_coro_t` and C++17 `SqliteCoroutine` mapping to native Win32 Fibers (`CreateFiber` / `SwitchToFiber`) on Windows and POSIX `ucontext_t` on Linux/macOS.
 - **Deep Stack Yielding**: Ability to yield execution and transfer data pointers from deep inside recursive call stacks with 0 state-machine boilerplate.
-- **C++11 Range Generators**: `SqliteFiberGenerator<T>` enables writing generator pipelines consumed directly via standard C++11 range-based for loops (`for (T val : gen)`).
+- **C++17 Range Generators**: `SqliteFiberGenerator<T>` enables writing generator pipelines consumed directly via standard C++ range-based for loops (`for (T val : gen)`).
 - **Freestanding C++20 `co_yield`**: `SqliteGenerator<T>` lowers `co_yield` expressions into flat compiler state machines with 0 stack allocation and memory allocated via `sqlite3_malloc64`.
 - **100% SQLite Allocator Accounting**: Stack memory (POSIX) and closure frames are tracked through `sqlite3_malloc64` and `sqlite3_free`.
 
@@ -421,14 +437,15 @@ A freestanding C++ test execution harness and interactive SQL script runner for 
 
 ### 23. Unified Umbrella Headers & Entry Points (`sqlite3_ext.h` / `sqlite3_ext.hpp`)
 Master umbrella headers providing full subsystem access:
-- **Pure C (`sqlite3_ext.h`)**: Unifies `sqlite3_atomic.h`, `sqlite3_time.h`, `sqlite3_tiny_lock.h`, `sqlite3_rw_lock.h`, `sqlite3_mutex_lock.h`, `sqlite3_smart_ptr.h`, and `sqlite3_ext_state.h`.
+- **Pure C (`sqlite3_ext.h`)**: Unifies `sqlite3_atomic.h`, `sqlite3_time.h`, `sqlite3_tiny_lock.h`, `sqlite3_rw_lock.h`, `sqlite3_mutex_lock.h`, `sqlite3_smart_ptr.h`, `sqlite3_ext_state.h`, and `sqlite3_conn_state.h`.
 - **C++ (`sqlite3_ext.hpp`)**: Master umbrella header and unified registration facade (`SqliteExt`) providing symmetrical registration across all extension subsystems:
-  - **Scalar UDFs**: `SqliteExt::define_scalar`, `SqliteExt::define_scalar_with_state`
-  - **Aggregates**: `SqliteExt::define_aggregate`, `SqliteExt::define_aggregate_with_state`
-  - **Table-Valued Functions**: `SqliteExt::define_tvf`, `SqliteExt::define_tvf_with_state`, `SqliteExt::define_tvf_coro`, `SqliteExt::define_tvf_coro_with_state`
-  - **Virtual Tables**: `SqliteExt::define_vtab`, `SqliteExt::define_vtab_with_state`
+  - **Scalar UDFs**: `SqliteExt::define_scalar`, `SqliteExt::define_scalar_with_state`, `SqliteExt::define_scalar_with_conn_state`, `SqliteExt::define_scalar_with_hybrid_state`
+  - **Aggregates**: `SqliteExt::define_aggregate`, `SqliteExt::define_aggregate_with_state`, `SqliteExt::define_aggregate_with_conn_state`, `SqliteExt::define_aggregate_with_hybrid_state`
+  - **Table-Valued Functions**: `SqliteExt::define_tvf`, `SqliteExt::define_tvf_with_state`, `SqliteExt::define_tvf_with_conn_state`, `SqliteExt::define_tvf_with_hybrid_state`, `SqliteExt::define_tvf_coro`, `SqliteExt::define_tvf_coro_with_state`, `SqliteExt::define_tvf_coro_with_conn_state`, `SqliteExt::define_tvf_coro_with_hybrid_state`
+  - **Virtual Tables**: `SqliteExt::define_vtab`, `SqliteExt::define_vtab_with_state`, `SqliteExt::define_vtab_with_conn_state`, `SqliteExt::define_vtab_with_hybrid_state`
+
 ### 24. Zero-Dependency Dual-ABI Embedded Containers (`stl/`)
-A freestanding, dual-ABI container and algorithms library designed specifically for SQLite extensions and systems programming. Provides standard library container replacements (`duo::HashMap`, `duo::HashSet`, `duo::Vector`, `duo::String`, `duo::Span`, `duo::StringView`, `duo::BitVector`) that operate under `-nostdlib++`, `-fno-exceptions`, and `-fno-rtti` while routing 100% of allocations through SQLite's memory arena.
+A freestanding, dual-ABI container and algorithms library designed specifically for SQLite extensions and systems programming. Provides standard library container replacements (`duo::HashMap`, `duo::HashSet`, `duo::Vector`, `duo::String`, `duo::Span`, `duo::StringView`, `duo::BitVector`) that operate under C++17 standard layout, `if constexpr`, and structured bindings with `-nostdlib++`, `-fno-exceptions`, and `-fno-rtti` while routing 100% of allocations through SQLite's memory arena.
 
 #### Key Features:
 - **Dual-ABI Standard Layout**: Every C++ container wraps a standard-layout C mirror struct (`m_inner`) for bit-for-bit equivalence and zero-cost FFI with Pure C code.
@@ -443,12 +460,12 @@ A freestanding, dual-ABI container and algorithms library designed specifically 
 
 ## Building and Testing
 
-`sqlite-ext-core` features dual cross-platform build systems supporting both Clang / GCC (`Makefile`) and Microsoft Visual C++ (`make.bat`), with strict `-nostdlib++` verification enforced across all compilers.
+`sqlite-ext-core` features dual cross-platform build systems supporting both Clang / GCC (`Makefile`) and Microsoft Visual C++ (`make.bat`), enforcing a **C++17 standard baseline** (`-std=c++17` on GCC/Clang, `/std:c++17` on MSVC) with strict `-nostdlib++` verification across all compilers.
 
 > **Environment Setup Guide**: For full step-by-step installation instructions on Linux, macOS, Windows MSYS2 (CLANG64/ASan), and Visual Studio 2022 MSVC, see [`SETUP.md`](SETUP.md).
 
 ### 1. POSIX / macOS / Windows MSYS2 (`Makefile`)
-Uses `clang` / `clang++` (or `gcc` on Linux) with `-nostdlib++ -fno-exceptions -fno-rtti -fsanitize=address`:
+Uses `clang` / `clang++` (or `gcc` on Linux) with `-std=c++17 -nostdlib++ -fno-exceptions -fno-rtti -fsanitize=address`:
 
 ```bash
 # Clean and run all 20 subsystem integration tests
@@ -489,7 +506,7 @@ make example-c        # Pure C extension demo
 ```
 
 ### 2. Native Windows MSVC (`make.bat`)
-Uses MSVC `cl.exe` with Level 4 warnings (`/W4`), `/GR-` (no RTTI), `/EHs-c-` (no exceptions), and `/link /NODEFAULTLIB:msvcprt.lib /NODEFAULTLIB:libcpmt.lib` (strictly prohibiting any link against the MSVC C++ standard library):
+Uses MSVC `cl.exe` with `/std:c++17`, Level 4 warnings (`/W4`), `/GR-` (no RTTI), `/EHs-c-` (no exceptions), and `/link /NODEFAULTLIB:msvcprt.lib /NODEFAULTLIB:libcpmt.lib` (strictly prohibiting any link against the MSVC C++ standard library):
 
 ```cmd
 :: Clean previous build artifacts

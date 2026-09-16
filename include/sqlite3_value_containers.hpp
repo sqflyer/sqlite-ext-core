@@ -569,7 +569,7 @@ template <size_t N, typename Enable> class SqliteValueTuple;
  * Allocations).
  *
  * Stores exactly N elements in an in-situ stack array of `SqliteValueOwned[N]`.
- * Memory footprint is exactly `N * 16` bytes.
+ * Memory footprint is exactly `N * 24` bytes.
  *
  * @tparam N Fixed column count between 1 and 8 inclusive.
  */
@@ -580,7 +580,7 @@ class SqliteValueTuple<
                 "SqliteValueTuple fixed specialization is for N = 1..8");
 
 protected:
-  SqliteValueOwned m_values[N]; ///< Fixed in-situ stack storage (N * 16 bytes).
+  SqliteValueOwned m_values[N]; ///< Fixed in-situ stack storage (N * 24 bytes).
 
 private:
   /**
@@ -589,10 +589,10 @@ private:
    *
    * ### Single-Burst SIMD Initialization (`init_null_values`):
    * Instead of executing scalar constructor loops or branchy element-by-element
-   * initialization, this helper copies `N * 16` bytes directly from
+   * initialization, this helper copies `N * 24` bytes directly from
    * `SqliteValueOwned::static_null_array()`.
    *
-   * - `sizeof(SqliteValueTuple<N>) == N * 16` is a compile-time constant.
+   * - `sizeof(SqliteValueTuple<N>) == N * 24` is a compile-time constant.
    * - GCC/Clang/MSVC lower this `memcpy` to 1–4 vector register operations
    * (`movups` / `vmovups`), initializing the entire stack array in 1–2 CPU
    * clock cycles (~0.3–0.6 ns).
@@ -1305,7 +1305,7 @@ public:
    *
    * ### 100% Data Density Branchless Stack SBO Mechanics:
    * When residing on the stack (`!is_heap()`), `SqliteValueVec<N>` occupies
-   * exactly `N * 16` bytes with zero bytes wasted on an external size integer.
+   * exactly `N * 24` bytes with zero bytes wasted on an external size integer.
    *
    * - `init_empty()` zeroes the entire buffer (`tag == 0x00`).
    * - Any constructed SQLite value has a valid type code in [1..5],
@@ -2781,8 +2781,8 @@ static_assert(sizeof(SqliteValueVec<8>) == 192,
 
 /**
  * @brief Zero-heap stack allocation dispatcher using SqliteValueTuple for
- * sizes 1..8 (0 heap allocations). Falls back to SqliteValueTuple<> (N = 0) for
- * sizes > 8.
+ * sizes 1..16 (0 heap allocations). Falls back to SqliteValueTuple<> (N = 0) for
+ * sizes > 16.
  *
  * Usage:
  * @code
@@ -2794,76 +2794,52 @@ static_assert(sizeof(SqliteValueVec<8>) == 192,
  * @endcode
  *
  * @tparam Callable Lambda/Functor signature: `auto(SqliteRowOwnedWrapper row_wrapper)`
- * @param size Requested number of columns (1..8 for stack, >8 uses dynamic heap).
+ * @param size Requested number of columns (1..16 for stack, >16 uses dynamic heap).
  * @param fn Visitor callback receiving the mutable wrapper span.
  * @return Return value of the user callback function.
  */
+#define SQLITE_CASE_WITH_ROW_OWNED(N) \
+    case N: { \
+        SqliteValueOwned arr[N]; \
+        SqliteRowOwnedWrapper ownedWrapper(arr, N); \
+        return fn(ownedWrapper); \
+    }
+
 template <typename Callable>
 inline auto withSqliteRowOwned(int size, Callable &&fn)
     -> decltype(fn(SqliteRowOwnedWrapper())) {
     switch (size) {
-    case 1: {
-        SqliteValueOwned arr[1];
-        SqliteRowOwnedWrapper ownedWrapper = SqliteRowOwnedWrapper(arr, 1);
-        ownedWrapper.set_null_all();
-        return fn(ownedWrapper);
-      }
-    case 2: {
-        SqliteValueOwned arr[2];
-        SqliteRowOwnedWrapper ownedWrapper = SqliteRowOwnedWrapper(arr, 2);
-        ownedWrapper.set_null_all();
-        return fn(ownedWrapper);
-      }
-    case 3: {
-        SqliteValueOwned arr[3];
-        SqliteRowOwnedWrapper ownedWrapper = SqliteRowOwnedWrapper(arr, 3);
-        ownedWrapper.set_null_all();
-        return fn(ownedWrapper);
-      }
-    case 4: {
-        SqliteValueOwned arr[4];
-        SqliteRowOwnedWrapper ownedWrapper = SqliteRowOwnedWrapper(arr, 4);
-        ownedWrapper.set_null_all();
-        return fn(ownedWrapper);
-      }
-    case 5: {
-        SqliteValueOwned arr[5];
-        SqliteRowOwnedWrapper ownedWrapper = SqliteRowOwnedWrapper(arr, 5);
-        ownedWrapper.set_null_all();
-        return fn(ownedWrapper);
-    }
-    case 6: {
-        SqliteValueOwned arr[6];
-        SqliteRowOwnedWrapper ownedWrapper = SqliteRowOwnedWrapper(arr, 6);
-        ownedWrapper.set_null_all();
-        return fn(ownedWrapper);
-    }
-    case 7: {
-        SqliteValueOwned arr[7];
-        SqliteRowOwnedWrapper ownedWrapper = SqliteRowOwnedWrapper(arr, 7);
-        ownedWrapper.set_null_all();
-        return fn(ownedWrapper);
-    }
-    case 8: {
-        SqliteValueOwned arr[8];
-        SqliteRowOwnedWrapper ownedWrapper = SqliteRowOwnedWrapper(arr, 8);
-        ownedWrapper.set_null_all();
-        return fn(ownedWrapper);
-    }
-    default: {
-        if (size <= 0) {
-          return fn(SqliteRowOwnedWrapper(nullptr, 0));
+        SQLITE_CASE_WITH_ROW_OWNED(1)
+        SQLITE_CASE_WITH_ROW_OWNED(2)
+        SQLITE_CASE_WITH_ROW_OWNED(3)
+        SQLITE_CASE_WITH_ROW_OWNED(4)
+        SQLITE_CASE_WITH_ROW_OWNED(5)
+        SQLITE_CASE_WITH_ROW_OWNED(6)
+        SQLITE_CASE_WITH_ROW_OWNED(7)
+        SQLITE_CASE_WITH_ROW_OWNED(8)
+        SQLITE_CASE_WITH_ROW_OWNED(9)
+        SQLITE_CASE_WITH_ROW_OWNED(10)
+        SQLITE_CASE_WITH_ROW_OWNED(11)
+        SQLITE_CASE_WITH_ROW_OWNED(12)
+        SQLITE_CASE_WITH_ROW_OWNED(13)
+        SQLITE_CASE_WITH_ROW_OWNED(14)
+        SQLITE_CASE_WITH_ROW_OWNED(15)
+        SQLITE_CASE_WITH_ROW_OWNED(16)
+        default: {
+            if (size <= 0) {
+                return fn(SqliteRowOwnedWrapper(nullptr, 0));
+            }
+            // For sizes > 16, fall back to heap-allocated dynamic tuple (N = 0)
+            SqliteValueTuple<> arr(size);
+            return fn(SqliteRowOwnedWrapper(arr.data(), size));
         }
-        // For sizes > 8, use SqliteValueTuple<> (N = 0) which compiles to the direct heap
-        // tuple template specialization, allocating the dynamic buffer via sqlite3_malloc64.
-        SqliteValueTuple<> arr(size);
-        return fn(SqliteRowOwnedWrapper(arr.data(), size));
     }
-  }
 }
 
+#undef SQLITE_CASE_WITH_ROW_OWNED
+
 /**
- * @brief Zero-heap 2D scope dispatcher evaluating runtime key and value column counts (1..8),
+ * @brief Zero-heap 2D scope dispatcher evaluating runtime key and value column counts (1..16),
  *        passing two mutable SqliteRowOwnedWrapper spans (Key & Value) to the callback.
  */
 template <typename Callable>

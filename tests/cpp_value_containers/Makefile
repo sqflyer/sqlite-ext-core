@@ -23,7 +23,7 @@ else
     SAN_FLAGS := -fsanitize=address
 endif
 
-CXXFLAGS := -std=c++11 -Wall -Wextra -I../../include -fno-exceptions -fno-rtti $(SAN_FLAGS)
+CXXFLAGS := -std=c++17 -Wall -Wextra -I../../include -fno-exceptions -fno-rtti $(SAN_FLAGS)
 LDFLAGS := -lsqlite3 $(SAN_FLAGS)
 BIN_DIR = bin
 
@@ -46,7 +46,7 @@ $(BIN_DIR)/test_value_containers_comparisons: test_value_containers_comparisons.
 	$(CXX) $(CXXFLAGS) -o $@ $< $(LDFLAGS)
 
 $(BIN_DIR)/test_value_containers_std: test_value_containers_std.cpp | $(BIN_DIR)
-	$(CXX) -std=c++14 -Wall -Wextra -I../../include $(SAN_FLAGS) -o $@ $< $(LDFLAGS)
+	$(CXX) -std=c++17 -Wall -Wextra -I../../include $(SAN_FLAGS) -o $@ $< $(LDFLAGS)
 
 $(BIN_DIR):
 	mkdir -p $(BIN_DIR)

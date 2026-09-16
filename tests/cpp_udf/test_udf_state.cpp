@@ -150,20 +150,22 @@ int main() {
     sqlite3* db1;
     assert(sqlite3_open(":memory:", &db1) == SQLITE_OK);
 
-    printf("1. Initializing custom shared state on db1...\n");
-    SqliteExtState<SharedAppState>::get_or_create(db1, [](SharedAppState* s) {
-        s->counter = 100;
-        s->accumulator = 50;
-        const char* initial_tag = "init";
-        memcpy(s->tag, initial_tag, 5);
-    });
-
-    printf("2. Registering 5 UDFs that share the same SharedAppState...\n");
+    printf("1. Registering 5 UDFs that share the same SharedAppState (defaults init)...\n");
     assert((SqliteUdf::define_with_state<SharedAppState, udf_state_inc>(db1, "state_inc", 0)) == SQLITE_OK);
     assert((SqliteUdf::define_with_state<SharedAppState, udf_state_accumulate>(db1, "state_accumulate", 1)) == SQLITE_OK);
     assert((SqliteUdf::define_with_state<SharedAppState, udf_state_set_tag>(db1, "state_set_tag", 1)) == SQLITE_OK);
     assert((SqliteUdf::define_with_state<SharedAppState, udf_state_get_stats>(db1, "state_get_stats", 0)) == SQLITE_OK);
     assert((SqliteUdf::define_with_state<SharedAppState, udf_state_reset>(db1, "state_reset", 0)) == SQLITE_OK);
+
+    printf("2. Initializing custom shared state on db1 via get()...\n");
+    {
+        SharedAppState* s = SqliteExtState<SharedAppState>::get(db1);
+        assert(s != nullptr);
+        s->counter = 100;
+        s->accumulator = 50;
+        const char* initial_tag = "init";
+        memcpy(s->tag, initial_tag, 5);
+    }
 
     sqlite3_stmt* stmt;
 
@@ -229,17 +231,19 @@ int main() {
     sqlite3* db2;
     assert(sqlite3_open(":memory:", &db2) == SQLITE_OK);
 
-    // Initialize db2 with different starting state
-    SqliteExtState<SharedAppState>::get_or_create(db2, [](SharedAppState* s) {
+    assert((SqliteUdf::define_with_state<SharedAppState, udf_state_inc>(db2, "state_inc", 0)) == SQLITE_OK);
+    assert((SqliteUdf::define_with_state<SharedAppState, udf_state_accumulate>(db2, "state_accumulate", 1)) == SQLITE_OK);
+    assert((SqliteUdf::define_with_state<SharedAppState, udf_state_get_stats>(db2, "state_get_stats", 0)) == SQLITE_OK);
+
+    // Initialize db2 with custom starting state via get()
+    {
+        SharedAppState* s = SqliteExtState<SharedAppState>::get(db2);
+        assert(s != nullptr);
         s->counter = 0;
         s->accumulator = 0;
         const char* default_tag = "db2_fresh";
         memcpy(s->tag, default_tag, 10);
-    });
-
-    assert((SqliteUdf::define_with_state<SharedAppState, udf_state_inc>(db2, "state_inc", 0)) == SQLITE_OK);
-    assert((SqliteUdf::define_with_state<SharedAppState, udf_state_accumulate>(db2, "state_accumulate", 1)) == SQLITE_OK);
-    assert((SqliteUdf::define_with_state<SharedAppState, udf_state_get_stats>(db2, "state_get_stats", 0)) == SQLITE_OK);
+    }
 
     // Check db2 stats
     assert(sqlite3_prepare_v2(db2, "SELECT state_get_stats();", -1, &stmt, nullptr) == SQLITE_OK);

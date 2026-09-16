@@ -11,7 +11,7 @@ if not exist bin mkdir bin
 cl /nologo /O2 /W4 /Zi /fsanitize=address /MD /I"../../include" /std:c11 /Fe:bin\test_time_c.exe test_time_c.c
 if %ERRORLEVEL% neq 0 exit /b %ERRORLEVEL%
 
-cl /nologo /O2 /W4 /Zi /fsanitize=address /MD /I"../../include" /std:c++14 /Fe:bin\test_time.exe test_time.cpp
+cl /nologo /O2 /W4 /Zi /fsanitize=address /MD /I"../../include" /std:c++17 /Fe:bin\test_time.exe test_time.cpp
 if %ERRORLEVEL% neq 0 exit /b %ERRORLEVEL%
 
 bin\test_time_c.exe

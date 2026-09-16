@@ -219,17 +219,7 @@ public:
 SQLITE_EXTENSION_ENTRYPOINT_CTX(stateful_ext, ctx) {
     SqliteDatabaseView db = ctx.db();
 
-    // 1. Initialize State
-    SqliteExt::init_state<StatefulSessionState>(db, [](StatefulSessionState* s) {
-        s->counter = 500;
-        const char* tag = "SESSION_TEST";
-        memcpy(s->session_tag, tag, strlen(tag) + 1);
-        for (int i = 0; i < 5; ++i) {
-            s->cache[i] = (i + 1) * 111;
-        }
-    });
-
-    // 2. Register Stateful Scalar UDFs
+    // 1. Register Stateful Scalar UDFs (defaults init during extension loading)
     int rc = SqliteExt::define_scalar_with_state<StatefulSessionState, stateful_inc>(db, "stateful_inc", 0);
     if (rc != SQLITE_OK) return rc;
 
@@ -239,17 +229,27 @@ SQLITE_EXTENSION_ENTRYPOINT_CTX(stateful_ext, ctx) {
     rc = SqliteExt::define_scalar_with_state<StatefulSessionState, stateful_set_tag>(db, "stateful_set_tag", 1);
     if (rc != SQLITE_OK) return rc;
 
-    // 3. Register Stateful Aggregate
+    // 2. Register Stateful Aggregate
     rc = SqliteExt::define_aggregate_with_state<StatefulSessionState, StatefulTaggedConcat>(db, "stateful_concat", 1);
     if (rc != SQLITE_OK) return rc;
 
-    // 4. Register Stateful TVF
+    // 3. Register Stateful TVF
     rc = SqliteExt::define_tvf_with_state<StatefulSessionState, StatefulMetricsTvf>(db, "stateful_metrics");
     if (rc != SQLITE_OK) return rc;
 
-    // 5. Register Stateful Virtual Table
+    // 4. Register Stateful Virtual Table
     rc = SqliteExt::define_vtab_with_state<StatefulSessionState, StatefulCacheTable>(db, "stateful_cache");
     if (rc != SQLITE_OK) return rc;
+
+    // 5. Customize State
+    SqliteExt::init_state<StatefulSessionState>(db, [](StatefulSessionState* s) {
+        s->counter = 500;
+        const char* tag = "SESSION_TEST";
+        memcpy(s->session_tag, tag, strlen(tag) + 1);
+        for (int i = 0; i < 5; ++i) {
+            s->cache[i] = (i + 1) * 111;
+        }
+    });
 
     return SQLITE_OK;
 }

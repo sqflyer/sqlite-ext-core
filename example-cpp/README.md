@@ -1,6 +1,6 @@
 # Comprehensive Guide: SQLite C++ Extension Example
 
-This directory contains a complete, production-ready demonstration of building, compiling, loading, and querying a native loadable SQLite extension developed in modern C++11 using **`sqlite-ext-core`**.
+This directory contains a complete, production-ready demonstration of building, compiling, loading, and querying a native loadable SQLite extension developed in modern C++17 using **`sqlite-ext-core`**.
 
 ---
 
@@ -304,7 +304,7 @@ SQLITE_DEFAULT_EXTENSION_ENTRYPOINT(db) {
 
 ### Compiler Flags Rationale:
 - `-shared -fPIC`: Emits position-independent shared library binaries.
-- `-std=c++11`: Modern C++ template metaprogramming.
+- `-std=c++17`: Modern C++17 template metaprogramming, structured bindings, and if constexpr.
 - `-nostdlib++`: Drops `libstdc++`/`libc++` runtime dependency, producing lean binaries under 25KB.
 - `-fno-exceptions -fno-rtti`: Guarantees deterministic execution without exception overhead or RTTI tables.
 - `-I../include`: Direct access to `sqlite-ext-core` headers.
@@ -312,7 +312,7 @@ SQLITE_DEFAULT_EXTENSION_ENTRYPOINT(db) {
 ### Linux / macOS
 ```bash
 mkdir -p build
-g++ -shared -fPIC -O2 -std=c++11 -Wall -Wextra \
+g++ -shared -fPIC -O2 -std=c++17 -Wall -Wextra \
     -fno-exceptions -fno-rtti -nostdlib++ \
     -I../include -o build/libexample.so example.cpp
 ```
@@ -320,7 +320,7 @@ g++ -shared -fPIC -O2 -std=c++11 -Wall -Wextra \
 ### Windows (MSYS2 / MinGW GCC)
 ```bash
 mkdir -p build
-g++ -shared -fPIC -O2 -std=c++11 -Wall -Wextra \
+g++ -shared -fPIC -O2 -std=c++17 -Wall -Wextra \
     -fno-exceptions -fno-rtti -nostdlib++ \
     -I../include -o build/libexample.dll example.cpp
 ```
@@ -328,7 +328,7 @@ g++ -shared -fPIC -O2 -std=c++11 -Wall -Wextra \
 ### Windows (MSVC `cl.exe`)
 ```cmd
 mkdir build
-cl /LD /O2 /std:c++14 /GR- /EHsc- /W4 /I..\include example.cpp /link /OUT:build\libexample.dll
+cl /LD /O2 /std:c++17 /GR- /EHsc- /W4 /I..\include example.cpp /link /OUT:build\libexample.dll
 ```
 
 ---

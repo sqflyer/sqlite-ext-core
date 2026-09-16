@@ -49,8 +49,12 @@ int sqlite3_myext_init(sqlite3 *db, char **pzErrMsg, const sqlite3_api_routines 
 }
 ```
 
-### 3. Use it in your Functions (C++)
-If you compile with a C++ compiler (`g++`, `clang++`, MSVC), you **must** use the `SqliteExtState<T>` template from `sqlite3_ext_state.hpp`. (Attempting to use the pure C `SQLITE_EXTENSION_STATE_DECLARE` macro in C++ will trigger a strict compile-time error). It automatically generates RAII lock guards and safely manages embedded C++ objects via `sqlite_construct_at` and `sqlite_destroy_at` (fully relying on standard C++ destructors without needing custom `free_fn` callbacks).
+### 3. Use it in your Functions (C++17)
+If you compile with C++ (`g++`, `clang++`, MSVC), you **must** use the `SqliteExtState<T>` template from `sqlite3_ext_state.hpp` under **C++17** (`-std=c++17` or `/std:c++17`). (Attempting to use the pure C `SQLITE_EXTENSION_STATE_DECLARE` macro in C++ will trigger a strict compile-time error). It automatically generates RAII lock guards and safely manages embedded C++ objects via `sqlite_construct_at` and `sqlite_destroy_at` (fully relying on standard C++ destructors without needing custom `free_fn` callbacks).
+
+The state subsystem enforces a **Registration-Owned Reference Counting Model**:
+- State is initialized/retained during registration: `SqliteExtState<SharedState>::init(db)` or via `SqliteExt::define_scalar_with_state`.
+- Query-time lookups use `SqliteExtState<SharedState>::get(db)` or `SqliteExtState<SharedState>::from_context(ctx)` with **zero refcount modifications**.
 
 ```cpp
 #include "sqlite3_ext_state.hpp"
@@ -80,6 +84,10 @@ static void test_counter_func(sqlite3_context *ctx, int argc, sqlite3_value **ar
 // In your init function:
 // void* raw_state = SqliteExtState<SharedState>::init(db);
 // sqlite3_create_function_v2(..., raw_state, ..., SqliteExtState<SharedState>::destructor);
+
+// Safe post-registration configuration (does not inflate refcounts!):
+// SharedState* state = SqliteExtState<SharedState>::get(db);
+// state->counter = 42;
 
 // Fallible variant returning SqliteResult:
 // SqliteResult<void*> init_res = SqliteExtState<SharedState>::try_init(db);

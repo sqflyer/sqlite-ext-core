@@ -27,7 +27,7 @@ else
     endif
 endif
 
-CXXFLAGS := -std=c++11 -Wall -Wextra -O2 -I../include -fno-exceptions -fno-rtti $(SAN_FLAGS)
+CXXFLAGS := -std=c++17 -Wall -Wextra -O2 -I../include -fno-exceptions -fno-rtti $(SAN_FLAGS)
 
 BUILD_DIR = build
 TARGET = $(BUILD_DIR)/libexample$(EXT_SUFFIX)

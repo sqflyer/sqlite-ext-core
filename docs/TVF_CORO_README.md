@@ -271,5 +271,5 @@ SqliteTvfCoro::define_with_state<MetricsState, MetricsTvf>(db, "db_metrics");
 | **Row Iteration Time** | ~4 – 8 ns | **~15 – 25 ns** | **~5 – 9 ns** |
 | **Cursor Heap Memory** | ~64 Bytes | **32 KB (Stack) + ~80B** | **~48 Bytes** |
 | **Lines of C++ Code** | ~45 – 60 lines | **~10 – 15 lines** | **~8 – 12 lines** |
-| **Compiler Standard** | C++11 | **C++11** | **C++20** |
+| **Compiler Standard** | C++17 | **C++17** | **C++20** |
 | **Standard Library Dep**| 0.0% | **0.0% (`-nostdlib++`)** | **0.0% (`-nostdlib++`)** |

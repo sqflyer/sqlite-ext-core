@@ -219,8 +219,8 @@ struct TaggedConcat : public SqliteAggregateBase<SqliteStringOwned> {
 ### Step 3: Register Companion Functions & Stateful Aggregate
 ```cpp
 void setup_stateful_aggregates(SqliteDatabaseView db) {
-    // 1. Initialize per-database shared state
-    SqliteExtState<MetricSharedState>::get_or_create(db.get(), [](MetricSharedState* s) {
+    // 1. Initialize per-database shared state during registration
+    SqliteExtState<MetricSharedState>::init(db.get(), [](MetricSharedState* s) {
         s->total_aggregations = 0;
         const char* tag = "BATCH_A";
         memcpy(s->prefix_tag, tag, strlen(tag) + 1);
@@ -229,6 +229,10 @@ void setup_stateful_aggregates(SqliteDatabaseView db) {
     // 2. Register aggregate bound to shared state
     SqliteAggregate::define_with_state<MetricSharedState, TaggedConcat>(db, "tagged_concat", 1);
     // Or via umbrella: SqliteExt::define_aggregate_with_state<MetricSharedState, TaggedConcat>(db, "tagged_concat", 1);
+
+    // Also supports connection-isolated state and hybrid state:
+    // SqliteAggregate::define_with_conn_state<ConnState, TaggedConcat>(db, "tagged_concat_conn", 1);
+    // SqliteAggregate::define_with_hybrid_state<MetricSharedState, ConnState, TaggedConcat>(db, "tagged_concat_hybrid", 1);
 }
 ```
 

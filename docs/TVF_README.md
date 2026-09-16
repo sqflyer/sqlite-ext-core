@@ -256,8 +256,8 @@ struct MetricsIterator : public SqliteTvfIterator {
 ### Step 3: Register the Stateful TVF
 ```cpp
 void setup_stateful_tvf(SqliteDatabaseView db) {
-    // 1. Initialize per-database shared state
-    SqliteExtState<AppMetricsState>::get_or_create(db.get(), [](AppMetricsState* s) {
+    // 1. Initialize per-database shared state during registration
+    SqliteExtState<AppMetricsState>::init(db.get(), [](AppMetricsState* s) {
         s->total_queries = 120;
         s->cache_hits = 95;
         s->cache_misses = 25;
@@ -266,6 +266,10 @@ void setup_stateful_tvf(SqliteDatabaseView db) {
     // 2. Register TVF bound to shared state with automated xDestroy cleanup
     SqliteTvf::define_with_state<AppMetricsState, MetricsIterator>(db, "app_metrics");
     // Or via umbrella: SqliteExt::define_tvf_with_state<AppMetricsState, MetricsIterator>(db, "app_metrics");
+
+    // Also supports connection-isolated state and hybrid state:
+    // SqliteTvf::define_with_conn_state<ConnState, MetricsIterator>(db, "conn_metrics");
+    // SqliteTvf::define_with_hybrid_state<AppMetricsState, ConnState, MetricsIterator>(db, "hybrid_metrics");
 }
 ```
 

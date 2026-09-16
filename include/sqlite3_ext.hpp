@@ -48,27 +48,31 @@ public:
     // ========================================================================
 
     /**
-     * @brief Initializes or retrieves a singleton shared state struct bound to the database connection.
+     * @brief Populates custom state values on the registered shared state instance.
      * @tparam State The user-defined state struct type.
      * @tparam InitFunc Callable with signature `void(State*)` or `void(State&)`.
      * @param db The SQLite database connection (SqliteDatabaseView, SqliteDatabaseOwned, or sqlite3*).
-     * @param init_fn Initializer callback executed exactly once upon state allocation.
-     * @return Raw pointer to the shared State instance.
+     * @param init_fn Initializer callback executed on the existing state.
+     * @return Raw pointer to the shared State instance if registered, or nullptr.
      */
     template <typename State, typename InitFunc>
     static inline State* init_state(SqliteDatabaseView db, InitFunc init_fn) {
-        return SqliteExtState<State>::get_or_create(db, init_fn);
+        State* s = SqliteExtState<State>::get(db.get());
+        if (s) {
+            init_fn(s);
+        }
+        return s;
     }
 
     /**
-     * @brief Initializes or retrieves a singleton shared state struct bound to the database connection.
+     * @brief Retrieves the existing shared state struct bound to the database connection.
      * @tparam State The user-defined state struct type.
      * @param db The SQLite database connection (SqliteDatabaseView, SqliteDatabaseOwned, or sqlite3*).
-     * @return Raw pointer to the shared State instance.
+     * @return Raw pointer to the shared State instance, or nullptr if not registered.
      */
     template <typename State>
     static inline State* init_state(SqliteDatabaseView db) {
-        return SqliteExtState<State>::get_or_create(db, nullptr);
+        return SqliteExtState<State>::get(db.get());
     }
 
     /**
@@ -79,31 +83,35 @@ public:
      */
     template <typename State>
     static inline State* get_state(SqliteDatabaseView db) {
-        return SqliteExtState<State>::get(db);
+        return SqliteExtState<State>::get(db.get());
     }
 
     /**
-     * @brief Initializes or retrieves a per-connection unique state struct bound to the connection handle.
+     * @brief Populates custom state values on the registered per-connection state instance.
      * @tparam State The user-defined per-connection state struct type.
      * @tparam InitFunc Callable with signature `void(State*)` or `void(State&)`.
      * @param db The SQLite database connection handle.
-     * @param init_fn Initializer callback executed exactly once upon state allocation.
-     * @return Raw pointer to the per-connection State instance.
+     * @param init_fn Initializer callback executed on the existing state.
+     * @return Raw pointer to the per-connection State instance if registered, or nullptr.
      */
     template <typename State, typename InitFunc>
     static inline State* init_conn_state(SqliteDatabaseView db, InitFunc init_fn) {
-        return SqliteConnState<State>::get_or_create(db, init_fn);
+        State* s = SqliteConnState<State>::get(db.get());
+        if (s) {
+            init_fn(s);
+        }
+        return s;
     }
 
     /**
-     * @brief Initializes or retrieves a per-connection unique state struct bound to the connection handle.
+     * @brief Retrieves the existing per-connection unique state struct bound to the connection handle.
      * @tparam State The user-defined per-connection state struct type.
      * @param db The SQLite database connection handle.
-     * @return Raw pointer to the per-connection State instance.
+     * @return Raw pointer to the per-connection State instance, or nullptr if not registered.
      */
     template <typename State>
     static inline State* init_conn_state(SqliteDatabaseView db) {
-        return SqliteConnState<State>::get_or_create(db, nullptr);
+        return SqliteConnState<State>::get(db.get());
     }
 
     /**
@@ -114,7 +122,7 @@ public:
      */
     template <typename State>
     static inline State* get_conn_state(SqliteDatabaseView db) {
-        return SqliteConnState<State>::get(db);
+        return SqliteConnState<State>::get(db.get());
     }
 
     /**
@@ -203,6 +211,22 @@ public:
         return SqliteUdf::define_with_state<State, Func>(db, name, num_args, deterministic);
     }
 
+    /**
+     * @brief Register a stateful compile-time function template proxy bound to connection-unique state.
+     */
+    template <typename State, SqliteUdf::ScalarFuncContext Func>
+    static inline int define_scalar_with_conn_state(SqliteDatabaseView db, const char* name, int num_args = -1, bool deterministic = false) {
+        return SqliteUdf::define_with_conn_state<State, Func>(db, name, num_args, deterministic);
+    }
+
+    /**
+     * @brief Register a stateful compile-time function template proxy bound to hybrid state.
+     */
+    template <typename ExtState, typename ConnState, SqliteUdf::ScalarFuncContext Func, typename LockPolicy = SqliteRwLock>
+    static inline int define_scalar_with_hybrid_state(SqliteDatabaseView db, const char* name, int num_args = -1, bool deterministic = false) {
+        return SqliteUdf::define_with_hybrid_state<ExtState, ConnState, Func, LockPolicy>(db, name, num_args, deterministic);
+    }
+
     // ========================================================================
     // 3. Object-Oriented Aggregate Functions
     // ========================================================================
@@ -236,6 +260,22 @@ public:
         return SqliteAggregate::define_with_state<State, AggType>(db, name, num_args, deterministic);
     }
 
+    /**
+     * @brief Register an Object-Oriented C++ Aggregate Function bound to connection-unique state.
+     */
+    template <typename State, typename AggType>
+    static inline int define_aggregate_with_conn_state(SqliteDatabaseView db, const char* name, int num_args = -1, bool deterministic = false) {
+        return SqliteAggregate::define_with_conn_state<State, AggType>(db, name, num_args, deterministic);
+    }
+
+    /**
+     * @brief Register an Object-Oriented C++ Aggregate Function bound to hybrid state.
+     */
+    template <typename ExtState, typename ConnState, typename AggType, typename LockPolicy = SqliteRwLock>
+    static inline int define_aggregate_with_hybrid_state(SqliteDatabaseView db, const char* name, int num_args = -1, bool deterministic = false) {
+        return SqliteAggregate::define_with_hybrid_state<ExtState, ConnState, AggType, LockPolicy>(db, name, num_args, deterministic);
+    }
+
     // ========================================================================
     // 4. Eponymous Table-Valued Functions (TVFs)
     // ========================================================================
@@ -266,6 +306,22 @@ public:
     }
 
     /**
+     * @brief Register an Object-Oriented Table-Valued Function (TVF) bound to connection-unique state.
+     */
+    template <typename State, typename TvfType>
+    static inline int define_tvf_with_conn_state(SqliteDatabaseView db, const char* name) {
+        return SqliteTvf::define_with_conn_state<State, TvfType>(db, name);
+    }
+
+    /**
+     * @brief Register an Object-Oriented Table-Valued Function (TVF) bound to hybrid state.
+     */
+    template <typename ExtState, typename ConnState, typename TvfType, typename LockPolicy = SqliteRwLock>
+    static inline int define_tvf_with_hybrid_state(SqliteDatabaseView db, const char* name) {
+        return SqliteTvf::define_with_hybrid_state<ExtState, ConnState, TvfType, LockPolicy>(db, name);
+    }
+
+    /**
      * @brief Register a Coroutine-based Table-Valued Function (TVF) (Stateless).
      * @tparam TvfType The struct defining `schema()` and `generate(SqliteUdfArgs)`.
      * @param db The SQLite database connection.
@@ -288,6 +344,22 @@ public:
     template <typename State, typename TvfType>
     static inline int define_tvf_coro_with_state(SqliteDatabaseView db, const char* name) {
         return SqliteTvfCoro::define_with_state<State, TvfType>(db, name);
+    }
+
+    /**
+     * @brief Register a Coroutine-based Table-Valued Function (TVF) bound to connection-unique state.
+     */
+    template <typename State, typename TvfType>
+    static inline int define_tvf_coro_with_conn_state(SqliteDatabaseView db, const char* name) {
+        return SqliteTvfCoro::define_with_conn_state<State, TvfType>(db, name);
+    }
+
+    /**
+     * @brief Register a Coroutine-based Table-Valued Function (TVF) bound to hybrid state.
+     */
+    template <typename ExtState, typename ConnState, typename TvfType, typename LockPolicy = SqliteRwLock>
+    static inline int define_tvf_coro_with_hybrid_state(SqliteDatabaseView db, const char* name) {
+        return SqliteTvfCoro::define_with_hybrid_state<ExtState, ConnState, TvfType, LockPolicy>(db, name);
     }
 
     // ========================================================================
@@ -319,6 +391,22 @@ public:
     template <typename State, typename VTableType, VTabOptions Options = VTabOptions::ReadOnly>
     static inline int define_vtab_with_state(SqliteDatabaseView db, const char* module_name) {
         return SqliteVTab::define_with_state<State, VTableType, Options>(db, module_name);
+    }
+
+    /**
+     * @brief Register a C++ Virtual Table module with SQLite bound to connection-unique state.
+     */
+    template <typename State, typename VTableType, VTabOptions Options = VTabOptions::ReadOnly>
+    static inline int define_vtab_with_conn_state(SqliteDatabaseView db, const char* module_name) {
+        return SqliteVTab::define_with_conn_state<State, VTableType, Options>(db, module_name);
+    }
+
+    /**
+     * @brief Register a C++ Virtual Table module with SQLite bound to hybrid state.
+     */
+    template <typename ExtState, typename ConnState, typename VTableType, VTabOptions Options = VTabOptions::ReadOnly, typename LockPolicy = SqliteRwLock>
+    static inline int define_vtab_with_hybrid_state(SqliteDatabaseView db, const char* module_name) {
+        return SqliteVTab::define_with_hybrid_state<ExtState, ConnState, VTableType, Options, LockPolicy>(db, module_name);
     }
 
     // ========================================================================

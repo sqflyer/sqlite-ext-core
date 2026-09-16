@@ -388,6 +388,12 @@ template <typename T, typename LockPolicy = SqliteRwLock> class SqliteExtState;
 template <typename T> class SqliteConnState;
 #endif
 
+#ifndef SQLITE_HYBRID_STATE_FWD_DECLARED
+#define SQLITE_HYBRID_STATE_FWD_DECLARED
+class SqliteRwLock;
+template <typename ExtT, typename ConnT, typename LockPolicy = SqliteRwLock> class SqliteHybridState;
+#endif
+
 /**
  * @brief Zero-allocation, lightweight RAII wrapper for sqlite3_context inside UDFs, Aggregates, and Virtual Tables.
  * 
@@ -484,6 +490,19 @@ public:
     template <typename State>
     inline State* conn_state() const {
         return SqliteConnState<State>::from_context(*this);
+    }
+
+    /**
+     * @brief Retrieves the strongly-typed hybrid extension state directly from this context.
+     * 
+     * @tparam ExtState The user-defined shared state struct type.
+     * @tparam ConnState The user-defined per-connection state struct type.
+     * @tparam LockPolicy Lock policy for the shared component (defaults to SqliteRwLock).
+     * @return State struct containing pointers to ext and conn.
+     */
+    template <typename ExtState, typename ConnState, typename LockPolicy = SqliteRwLock>
+    inline typename SqliteHybridState<ExtState, ConnState, LockPolicy>::State hybrid_state() const {
+        return SqliteHybridState<ExtState, ConnState, LockPolicy>::from_context(*this);
     }
 
     // ========================================================================

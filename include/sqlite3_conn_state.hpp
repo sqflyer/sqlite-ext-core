@@ -69,6 +69,12 @@ template <typename T>
 class SqliteConnState;
 #endif
 
+#ifndef SQLITE_HYBRID_STATE_FWD_DECLARED
+#define SQLITE_HYBRID_STATE_FWD_DECLARED
+template <typename ExtT, typename ConnT, typename LockPolicy = SqliteRwLock>
+class SqliteHybridState;
+#endif
+
 /**
  * @brief Thread-safe (registration) & lock-free (execution) per-connection state manager.
  * 
@@ -150,7 +156,7 @@ private:
         Entry *entry = sqlite_new<Entry>();
         if (entry) {
             entry->db = db;
-            entry->refcount = 1;
+            entry->refcount = 0;
             if (init_fn) {
                 init_fn(&entry->state);
             }
@@ -167,30 +173,6 @@ public:
     static void destructor(void *p) {
         Entry *entry = (Entry *)p;
         entry_release(entry);
-    }
-
-    /**
-     * @brief Retrieves the strongly-typed T* state for the connection, creating it if not present.
-     * 
-     * @param db The SQLite database connection handle.
-     * @param init_fn Optional initialization callback executed on first creation.
-     * @return T* Pointer to the connection state, or nullptr on allocation failure.
-     */
-    static T* get_or_create(sqlite3 *db, void (*init_fn)(T*) = nullptr) {
-        if (!db) return nullptr;
-        ensure_mutex_init();
-        if (registry_mutex) sqlite3_mutex_enter(registry_mutex);
-        
-        Entry** p_entry = registry_map.get(db);
-        Entry* entry = p_entry ? *p_entry : nullptr;
-        if (!entry) {
-            entry = entry_alloc(db, init_fn);
-        } else {
-            entry_retain(entry);
-        }
-        
-        if (registry_mutex) sqlite3_mutex_leave(registry_mutex);
-        return entry ? &entry->state : nullptr;
     }
 
     /**
@@ -212,6 +194,20 @@ public:
     }
 
     /**
+     * @brief Attempts to retrieve an existing strongly-typed connection state, returning SqliteResult.
+     */
+    static SqliteResult<T*> try_get(sqlite3 *db) {
+        if (!db) {
+            return SqliteResult<T*>::err(SQLITE_MISUSE, "Null database connection in SqliteConnState::try_get");
+        }
+        T* state = get(db);
+        if (!state) {
+            return SqliteResult<T*>::err(SQLITE_NOTFOUND, "Connection state not registered for database connection");
+        }
+        return SqliteResult<T*>::ok(state);
+    }
+
+    /**
      * @brief Allocates and initializes state on connection open, returning a raw void* suitable for pApp.
      * 
      * @param db The SQLite database connection handle.
@@ -225,14 +221,29 @@ public:
         
         Entry** p_entry = registry_map.get(db);
         Entry* entry = p_entry ? *p_entry : nullptr;
+        if (!entry) {
+            entry = entry_alloc(db, init_fn);
+        }
         if (entry) {
             entry_retain(entry);
-        } else {
-            entry = entry_alloc(db, init_fn);
         }
         
         if (registry_mutex) sqlite3_mutex_leave(registry_mutex);
         return entry;
+    }
+
+    /**
+     * @brief Attempts to initialize connection state, returning raw handle in SqliteResult.
+     */
+    static SqliteResult<void*> try_init(sqlite3 *db, void (*init_fn)(T*) = nullptr) {
+        if (!db) {
+            return SqliteResult<void*>::err(SQLITE_MISUSE, "Null database connection in SqliteConnState::try_init");
+        }
+        void* raw = init(db, init_fn);
+        if (!raw) {
+            return SqliteResult<void*>::nomem("Failed to allocate connection state in SqliteConnState::try_init");
+        }
+        return SqliteResult<void*>::ok(raw);
     }
 
     /**
@@ -282,7 +293,12 @@ public:
      */
     template <typename Ctx>
     static T* from_context(Ctx& ctx) {
-        return from_context(ctx.handle());
+        void* data = ctx.user_data();
+        if (data) {
+            Entry *entry = static_cast<Entry*>(data);
+            return &entry->state;
+        }
+        return from_context(ctx.get());
     }
 
     /**
@@ -323,7 +339,7 @@ sqlite3_mutex* SqliteConnState<T>::registry_mutex = nullptr;
  * @tparam ConnT The user-defined state type private to each individual connection handle (sqlite3*).
  * @tparam LockPolicy Concurrency lock policy for the shared component (defaults to SqliteRwLock).
  */
-template <typename ExtT, typename ConnT, typename LockPolicy = SqliteRwLock>
+template <typename ExtT, typename ConnT, typename LockPolicy>
 class SqliteHybridState {
 public:
     /**
@@ -409,7 +425,15 @@ public:
      */
     template <typename Ctx>
     static State from_context(Ctx& ctx) {
-        return from_context(ctx.handle());
+        void* data = ctx.user_data();
+        if (data) {
+            Holder *holder = static_cast<Holder*>(data);
+            return State{
+                SqliteExtState<ExtT, LockPolicy>::from_ptr(holder->ext_raw),
+                SqliteConnState<ConnT>::from_ptr(holder->conn_raw)
+            };
+        }
+        return from_context(ctx.get());
     }
 
     /**
