@@ -20,6 +20,7 @@
 #include "sqlite3_vtab.hpp"
 #include "sqlite3_ext_state.hpp"
 #include "sqlite3_conn_state.hpp"
+#include "sqlite3_hybrid_state.hpp"
 #include "sqlite3_statement.hpp"
 #include "sqlite3_transaction.hpp"
 #include "sqlite3_blob_stream.hpp"
@@ -145,17 +146,31 @@ public:
     }
 
     /**
-     * @brief Retrieves both shared and per-connection states directly from a database handle.
+     * @brief Retrieves per-connection state directly from a database handle.
      * @tparam ExtState The user-defined shared state type.
      * @tparam ConnState The user-defined per-connection state type.
      * @tparam LockPolicy Lock policy for the shared component (defaults to SqliteRwLock).
      * @param db The SQLite database connection handle.
-     * @return State struct containing pointers to ext and conn.
+     * @return ConnState* pointer or nullptr.
      */
     template <typename ExtState, typename ConnState, typename LockPolicy = SqliteRwLock>
-    static inline typename SqliteHybridState<ExtState, ConnState, LockPolicy>::State
-    get_hybrid_state(SqliteDatabaseView db) {
-        return SqliteHybridState<ExtState, ConnState, LockPolicy>::from_db(db.get());
+    static inline ConnState*
+    get_hybrid_conn(SqliteDatabaseView db) {
+        return SqliteHybridState<ExtState, ConnState, LockPolicy>::conn(db.get());
+    }
+
+    /**
+     * @brief Retrieves shared extension state directly from a database handle.
+     * @tparam ExtState The user-defined shared state type.
+     * @tparam ConnState The user-defined per-connection state type.
+     * @tparam LockPolicy Lock policy for the shared component (defaults to SqliteRwLock).
+     * @param db The SQLite database connection handle.
+     * @return ExtState* pointer or nullptr.
+     */
+    template <typename ExtState, typename ConnState, typename LockPolicy = SqliteRwLock>
+    static inline ExtState*
+    get_hybrid_ext(SqliteDatabaseView db) {
+        return SqliteHybridState<ExtState, ConnState, LockPolicy>::ext(db.get());
     }
 
     // ========================================================================

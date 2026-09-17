@@ -360,9 +360,10 @@ public:
     public:
         explicit ReadGuard(T* s) : state(s) { read_acquire(state); }
         ~ReadGuard() { read_release(state); }
-        T* get() noexcept { return state; }
-        T* operator->() { return state; }
-        T& operator*() { return *state; }
+        T* get() const noexcept { return state; }
+        T* operator->() const noexcept { return state; }
+        T& operator*() const noexcept { return *state; }
+        explicit operator bool() const noexcept { return state != nullptr; }
     };
 
     /**
@@ -374,9 +375,10 @@ public:
     public:
         explicit WriteGuard(T* s) : state(s) { write_acquire(state); }
         ~WriteGuard() { write_release(state); }
-        T* get() noexcept { return state; }
-        T* operator->() { return state; }
-        T& operator*() { return *state; }
+        T* get() const noexcept { return state; }
+        T* operator->() const noexcept { return state; }
+        T& operator*() const noexcept { return *state; }
+        explicit operator bool() const noexcept { return state != nullptr; }
     };
 };
 

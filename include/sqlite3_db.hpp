@@ -385,6 +385,10 @@ public:
 #define SQLITE_EXT_STATE_FWD_DECLARED
 class SqliteRwLock;
 template <typename T, typename LockPolicy = SqliteRwLock> class SqliteExtState;
+#endif
+
+#ifndef SQLITE_CONN_STATE_FWD_DECLARED
+#define SQLITE_CONN_STATE_FWD_DECLARED
 template <typename T> class SqliteConnState;
 #endif
 
@@ -493,16 +497,29 @@ public:
     }
 
     /**
-     * @brief Retrieves the strongly-typed hybrid extension state directly from this context.
+     * @brief Retrieves the strongly-typed connection state component from a hybrid state context.
      * 
      * @tparam ExtState The user-defined shared state struct type.
      * @tparam ConnState The user-defined per-connection state struct type.
      * @tparam LockPolicy Lock policy for the shared component (defaults to SqliteRwLock).
-     * @return State struct containing pointers to ext and conn.
+     * @return Strongly-typed ConnState* pointer, or nullptr if not bound.
      */
     template <typename ExtState, typename ConnState, typename LockPolicy = SqliteRwLock>
-    inline typename SqliteHybridState<ExtState, ConnState, LockPolicy>::State hybrid_state() const {
-        return SqliteHybridState<ExtState, ConnState, LockPolicy>::from_context(*this);
+    inline ConnState* hybrid_conn() const {
+        return SqliteHybridState<ExtState, ConnState, LockPolicy>::conn(*this);
+    }
+
+    /**
+     * @brief Retrieves the strongly-typed shared extension state component from a hybrid state context.
+     * 
+     * @tparam ExtState The user-defined shared state struct type.
+     * @tparam ConnState The user-defined per-connection state struct type.
+     * @tparam LockPolicy Lock policy for the shared component (defaults to SqliteRwLock).
+     * @return Strongly-typed ExtState* pointer, or nullptr if not bound.
+     */
+    template <typename ExtState, typename ConnState, typename LockPolicy = SqliteRwLock>
+    inline ExtState* hybrid_ext() const {
+        return SqliteHybridState<ExtState, ConnState, LockPolicy>::ext(*this);
     }
 
     // ========================================================================

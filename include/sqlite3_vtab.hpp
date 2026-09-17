@@ -142,17 +142,40 @@ public:
      * @tparam LockPolicy Lock policy for the shared component (defaults to SqliteRwLock).
      * @return State struct containing pointers to ext and conn.
      */
+    /**
+     * @brief Retrieves the strongly-typed connection state component from a hybrid state context.
+     * 
+     * @tparam ExtState The user-defined shared state struct.
+     * @tparam ConnState The user-defined per-connection state struct.
+     * @tparam LockPolicy Lock policy for the shared component (defaults to SqliteRwLock).
+     * @return Strongly-typed ConnState* pointer or nullptr.
+     */
     template <typename ExtState, typename ConnState, typename LockPolicy = SqliteRwLock>
-    inline typename SqliteHybridState<ExtState, ConnState, LockPolicy>::State hybrid_state() const {
+    inline ConnState* hybrid_conn() const {
         using Hybrid = SqliteHybridState<ExtState, ConnState, LockPolicy>;
         typename Hybrid::Holder* holder = static_cast<typename Hybrid::Holder*>(m_pAux);
         if (holder) {
-            return typename Hybrid::State{
-                SqliteExtState<ExtState, LockPolicy>::from_ptr(holder->ext_raw),
-                SqliteConnState<ConnState>::from_ptr(holder->conn_raw)
-            };
+            return SqliteConnState<ConnState>::from_ptr(holder->conn_raw);
         }
-        return typename Hybrid::State{};
+        return nullptr;
+    }
+
+    /**
+     * @brief Retrieves the strongly-typed shared extension state component from a hybrid state context.
+     * 
+     * @tparam ExtState The user-defined shared state struct.
+     * @tparam ConnState The user-defined per-connection state struct.
+     * @tparam LockPolicy Lock policy for the shared component (defaults to SqliteRwLock).
+     * @return Strongly-typed ExtState* pointer or nullptr.
+     */
+    template <typename ExtState, typename ConnState, typename LockPolicy = SqliteRwLock>
+    inline ExtState* hybrid_ext() const {
+        using Hybrid = SqliteHybridState<ExtState, ConnState, LockPolicy>;
+        typename Hybrid::Holder* holder = static_cast<typename Hybrid::Holder*>(m_pAux);
+        if (holder) {
+            return SqliteExtState<ExtState, LockPolicy>::from_ptr(holder->ext_raw);
+        }
+        return nullptr;
     }
 
     template <typename T>

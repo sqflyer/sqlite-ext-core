@@ -20,6 +20,8 @@ if "%TARGET%"=="test-time" ( call :test_time & goto end )
 if "%TARGET%"=="test-oom" ( call :test_oom & goto end )
 if "%TARGET%"=="test-multi-tu" ( call :test_multi_tu & goto end )
 if "%TARGET%"=="test-ext-state" ( call :test_ext_state & goto end )
+if "%TARGET%"=="test-conn-state" ( call :test_conn_state & goto end )
+if "%TARGET%"=="test-hybrid-state" ( call :test_hybrid_state & goto end )
 if "%TARGET%"=="test-cpp-duo" ( call :test_cpp_duo & goto end )
 if "%TARGET%"=="test-cpp-value" ( call :test_cpp_value & goto end )
 if "%TARGET%"=="test-cpp-row" ( call :test_cpp_row & goto end )
@@ -50,6 +52,10 @@ exit /b 1
 
 :test
 call :test_ext_state
+if %ERRORLEVEL% neq 0 exit /b %ERRORLEVEL%
+call :test_conn_state
+if %ERRORLEVEL% neq 0 exit /b %ERRORLEVEL%
+call :test_hybrid_state
 if %ERRORLEVEL% neq 0 exit /b %ERRORLEVEL%
 call :test_cpp_duo
 if %ERRORLEVEL% neq 0 exit /b %ERRORLEVEL%
@@ -133,6 +139,16 @@ goto :eof
 :test_ext_state
 echo [Running test-ext-state]
 cd tests\ext_state && call make.bat && cd ..\..
+goto :eof
+
+:test_conn_state
+echo [Running test-conn-state]
+cd tests\conn_state && call make.bat && cd ..\..
+goto :eof
+
+:test_hybrid_state
+echo [Running test-hybrid-state]
+cd tests\hybrid_state && call make.bat && cd ..\..
 goto :eof
 
 :test_cpp_duo
@@ -262,6 +278,8 @@ goto :eof
 :clean
 echo [Cleaning build artifacts]
 cd tests\ext_state && call make.bat clean && cd ..\..
+cd tests\conn_state && call make.bat clean && cd ..\..
+cd tests\hybrid_state && call make.bat clean && cd ..\..
 cd tests\cpp_duo && call make.bat clean && cd ..\..
 cd tests\cpp_value && call make.bat clean && cd ..\..
 cd tests\cpp_row && call make.bat clean && cd ..\..

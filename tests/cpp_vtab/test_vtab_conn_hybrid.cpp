@@ -142,18 +142,19 @@ public:
     }
 
     int column(SqliteContext& ctx, int N) override {
-        auto hybrid = ctx.hybrid_state<SharedAppMetrics, ConnectionSession>();
-        assert(hybrid.ext != nullptr);
-        assert(hybrid.conn != nullptr);
+        auto ext = ctx.hybrid_ext<SharedAppMetrics, ConnectionSession>();
+        auto conn = ctx.hybrid_conn<SharedAppMetrics, ConnectionSession>();
+        assert(ext != nullptr);
+        assert(conn != nullptr);
 
         if (N == 0) {
             ctx.result_int(m_pos);
         } else if (N == 1) {
-            ctx.result_int(hybrid.ext->global_query_count);
+            ctx.result_int(ext->global_query_count);
         } else if (N == 2) {
-            ctx.result_int(hybrid.conn->session_id);
+            ctx.result_int(conn->session_id);
         } else if (N == 3) {
-            ctx.result_text(hybrid.conn->session_name);
+            ctx.result_text(conn->session_name);
         }
         return SQLITE_OK;
     }
@@ -176,10 +177,11 @@ public:
     static int connect(SqliteConnectArgs& args) {
         int rc = sqlite3_declare_vtab(args.db(), "CREATE TABLE x(row_id INT, global_queries INT, session_id INT, name TEXT)");
         if (rc == SQLITE_OK) {
-            auto hybrid = args.hybrid_state<SharedAppMetrics, ConnectionSession>();
-            assert(hybrid.ext != nullptr);
-            assert(hybrid.conn != nullptr);
-            args.set_instance(sqlite_new<HybridTable>(args.db(), hybrid.ext, hybrid.conn));
+            auto ext = args.hybrid_ext<SharedAppMetrics, ConnectionSession>();
+            auto conn = args.hybrid_conn<SharedAppMetrics, ConnectionSession>();
+            assert(ext != nullptr);
+            assert(conn != nullptr);
+            args.set_instance(sqlite_new<HybridTable>(args.db(), ext, conn));
         }
         return rc;
     }
@@ -208,18 +210,19 @@ static void udf_conn_bump(SqliteContext ctx, SqliteUdfArgs args) {
 
 static void udf_hybrid_bump(SqliteContext ctx, SqliteUdfArgs args) {
     (void)args;
-    auto hybrid = ctx.hybrid_state<SharedAppMetrics, ConnectionSession>();
-    assert(hybrid.ext != nullptr);
-    assert(hybrid.conn != nullptr);
+    auto ext = ctx.hybrid_ext<SharedAppMetrics, ConnectionSession>();
+    auto conn = ctx.hybrid_conn<SharedAppMetrics, ConnectionSession>();
+    assert(ext != nullptr);
+    assert(conn != nullptr);
 
-    hybrid.ext->global_total_items += 100;
-    hybrid.conn->local_counter += 1;
+    ext->global_total_items += 100;
+    conn->local_counter += 1;
 
     char buf[128];
     snprintf(buf, sizeof(buf), "global_items=%d,session=%s,counter=%d",
-             hybrid.ext->global_total_items,
-             hybrid.conn->session_name,
-             hybrid.conn->local_counter);
+             ext->global_total_items,
+             conn->session_name,
+             conn->local_counter);
     ctx.result_text(buf);
 }
 
@@ -251,16 +254,17 @@ struct HybridTvfIterator : public SqliteTvfIterator {
     }
 
     void column(SqliteContext ctx, int N) override {
-        auto hybrid = ctx.hybrid_state<SharedAppMetrics, ConnectionSession>();
-        assert(hybrid.ext != nullptr);
-        assert(hybrid.conn != nullptr);
+        auto ext = ctx.hybrid_ext<SharedAppMetrics, ConnectionSession>();
+        auto conn = ctx.hybrid_conn<SharedAppMetrics, ConnectionSession>();
+        assert(ext != nullptr);
+        assert(conn != nullptr);
 
         if (N == 0) {
             ctx.result_int(m_idx);
         } else if (N == 1) {
-            ctx.result_int(hybrid.ext->global_total_items);
+            ctx.result_int(ext->global_total_items);
         } else if (N == 2) {
-            ctx.result_text(hybrid.conn->session_name);
+            ctx.result_text(conn->session_name);
         }
     }
 
@@ -282,9 +286,9 @@ public:
         if (args.empty()) return;
         m_sum += args[0].as_int64();
 
-        auto hybrid = ctx.hybrid_state<SharedAppMetrics, ConnectionSession>();
-        if (hybrid.conn) {
-            hybrid.conn->local_counter++;
+        auto conn = ctx.hybrid_conn<SharedAppMetrics, ConnectionSession>();
+        if (conn) {
+            conn->local_counter++;
         }
     }
 

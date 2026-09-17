@@ -71,20 +71,34 @@ The state manager solves this by automatically generating a thread-safe, garbage
 - [State Manager Quickstart](docs/EXT_STATE_README.md)
 - [State Manager Internal Architecture](docs/EXT_STATE_ARCHITECTURE.md)
 
-### 3.5. Per-Connection & Hybrid State Manager (`sqlite3_conn_state.h` / `.hpp`)
+### 3.5. Per-Connection State Manager (`sqlite3_conn_state.h` / `.hpp`)
 Maintains state that is strictly isolated to a single SQLite database connection (`sqlite3*`) rather than shared across all connections to a database file. Because SQLite guarantees serialized single-threaded execution per connection handle, `SqliteConnState` operates **100% lock-free** with nanosecond lookups.
 
 #### Key Features:
 - **Lock-Free Execution**: Query and statement evaluations bypass mutexes and spinlocks entirely, executing at raw pointer-dereference speed.
 - **High-Performance DuoSTL Pointer Map**: Backed by an $\mathcal{O}(1)$ open-addressing pointer hash table (`duo::HashMap<sqlite3*, Entry*>`) with power-of-two capacity growth.
-- **Unified Hybrid State (`SqliteHybridState<ExtT, ConnT>`)**: Pairs per-database shared state with per-connection private state under a single SQLite `pApp` context and dual-destructor teardown hook (`Holder`).
-- **C++17 Structured Bindings**: Unpacks hybrid state effortlessly inside UDFs: `auto [ext, conn] = AppHybrid::from_context(ctx);`.
 - **Registration-Owned Refcounting**: Symmetrical with `SqliteExtState`, registration defaults `init(db, init_fn)`, while runtime query lookups use `get(db)` or `try_get(db)` without inflating references.
 - **100% SQLite Memory Tracking**: All bucket tables and state payloads allocate exclusively via `sqlite3_realloc64` and `sqlite3_free`.
+- **Intensive Go Concurrency Testing**: Verified across 75 simultaneous physical connections across 3 databases via dual-barrier synchronization (`tests/conn_state/go_loader`), proving zero cross-talk and exact deterministic isolation ($1200$ per connection).
 
 #### Documentation
 - [Connection State Quickstart](docs/CONN_STATE_README.md)
 - [Connection State Architecture](docs/CONN_STATE_ARCHITECTURE.md)
+
+### 3.6. Unified Hybrid State Manager (`sqlite3_hybrid_state.h` / `.hpp`)
+When an SQLite extension requires both **shared per-database state** (e.g. shared index, global cache) and **unique per-connection state** (e.g. session token, local query counter), `SqliteHybridState<ExtT, ConnT, LockPolicy>` pairs them under a single SQLite `pApp` registration and dual-destructor teardown hook (`Holder`).
+
+#### Key Features:
+- **Decoupled State Retrieval**: `AppHybrid::conn(ctx)` and `AppHybrid::conn(db)` resolve connection state with zero locks in 1 pointer dereference, completely decoupled from extension state.
+- **Strictly Scoped RAII Lock Guards**: `AppHybrid::WriteGuard` and `AppHybrid::ReadGuard` apply strictly to shared extension (`ext`) state (`AppHybrid::WriteGuard guard(ctx);`), preventing false lock contention on connection state.
+- **Dual-Destructor Dispatch**: Decrements the refcount of both `ext_entry` and `conn_entry`, preventing leaks and double-frees.
+- **C Macro & C++17 Template Parity**: Available as `DEFINE_SQLITE_HYBRID_STATE` in Pure C and `SqliteHybridState` in freestanding C++17.
+- **Direct Dispatch & UDF Parity**: Native `hybrid_conn` and `hybrid_ext` accessors supported across both `SqliteContext` and `DirectDispatchContext`.
+- **High-Concurrency Go Verification**: Verified across 75 concurrent connections under `tests/hybrid_state/go_loader` (conn isolation at 200, shared database state at 3500).
+
+#### Documentation
+- [Hybrid State Quickstart](docs/HYBRID_STATE_README.md)
+- [Hybrid State Architecture](docs/HYBRID_STATE_ARCHITECTURE.md)
 
 ### 4. C++ RAII Value Types (`sqlite3_value.hpp`)
 Zero-dependency C++ RAII wrappers for SQLite core data types designed for zero-allocation lookups, heterogeneous map keys, UDF argument access, and statement column readings.
@@ -436,7 +450,7 @@ A freestanding C++ test execution harness and interactive SQL script runner for 
 
 ### 23. Unified Umbrella Headers & Entry Points (`sqlite3_ext.h` / `sqlite3_ext.hpp`)
 Master umbrella headers providing full subsystem access:
-- **Pure C (`sqlite3_ext.h`)**: Unifies `sqlite3_atomic.h`, `sqlite3_time.h`, `sqlite3_tiny_lock.h`, `sqlite3_rw_lock.h`, `sqlite3_mutex_lock.h`, `sqlite3_smart_ptr.h`, `sqlite3_ext_state.h`, and `sqlite3_conn_state.h`.
+- **Pure C (`sqlite3_ext.h`)**: Unifies `sqlite3_atomic.h`, `sqlite3_time.h`, `sqlite3_tiny_lock.h`, `sqlite3_rw_lock.h`, `sqlite3_mutex_lock.h`, `sqlite3_smart_ptr.h`, `sqlite3_ext_state.h`, `sqlite3_conn_state.h`, and `sqlite3_hybrid_state.h`.
 - **C++ (`sqlite3_ext.hpp`)**: Master umbrella header and unified registration facade (`SqliteExt`) providing symmetrical registration across all extension subsystems:
   - **Scalar UDFs**: `SqliteExt::define_scalar`, `SqliteExt::define_scalar_with_state`, `SqliteExt::define_scalar_with_conn_state`, `SqliteExt::define_scalar_with_hybrid_state`
   - **Aggregates**: `SqliteExt::define_aggregate`, `SqliteExt::define_aggregate_with_state`, `SqliteExt::define_aggregate_with_conn_state`, `SqliteExt::define_aggregate_with_hybrid_state`
@@ -556,6 +570,8 @@ make test-cpp-vtab
 make test-cpp-sql-runner
 make test-cpp-extension
 make test-ext-state
+make test-conn-state
+make test-hybrid-state
 make test-cpp-duo
 
 # Run turnkey extension demos
@@ -599,6 +615,8 @@ make.bat test-cpp-vtab
 make.bat test-cpp-sql-runner
 make.bat test-cpp-extension
 make.bat test-ext-state
+make.bat test-conn-state
+make.bat test-hybrid-state
 make.bat test-cpp-duo
 
 :: Run turnkey extension demos

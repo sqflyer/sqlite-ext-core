@@ -24,11 +24,11 @@ LDFLAGS := -lsqlite3 $(SAN_FLAGS)
 
 all: test
 
-bin/test_duo: test_duo.cpp ../../include/sqlite3_conn_state.hpp ../../include/sqlite3_ext_state.hpp
+bin/test_duo: test_duo.cpp ../../include/stl/duo_hash.hpp ../../include/stl/duo_linear.hpp
 	mkdir -p bin
 	$(CXX) $(CXXFLAGS) -o $@ $< $(LDFLAGS)
 
-bin/test_duo_c: test_duo_c.c ../../include/sqlite3_conn_state.h ../../include/sqlite3_ext_state.h
+bin/test_duo_c: test_duo_c.c ../../include/stl/duo_hash.h
 	mkdir -p bin
 	$(CC) $(CFLAGS) -o $@ $< $(LDFLAGS)
 

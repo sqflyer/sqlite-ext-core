@@ -24,8 +24,8 @@
  *    invokes `xDestroy` on each registered function.
  * 
  * 4. 2-Tier Caching Pipeline:
- *    - Tier 1 (Hot Path): Nanosecond-level `sqlite3_get_auxdata` cache on slot 0x45585401.
- *    - Tier 2 (Warm Path): O(1) DuoSTL pointer map lookup by `sqlite3*`.
+ *    - Tier 1 (Hot Path): Nanosecond-level `sqlite3_user_data` direct retrieval (1 pointer dereference, 0 locks).
+ *    - Tier 2 (Cold Path): O(1) DuoSTL pointer map lookup by `sqlite3*` handle via `Prefix##_from_db(db)`.
  * 
  * 5. 100% SQLite Memory Tracking:
  *    All internal hash tables and state entries allocate exclusively through
@@ -75,6 +75,7 @@
 #include "stl/duo_alloc.h"
 #include "stl/duo_hash.h"
 #include "sqlite3_atomic.h"
+#include "sqlite3_tiny_lock.h"
 
 /**
  * @brief Dedicated SQLite AuxData argument slot for per-connection state caching.
@@ -108,46 +109,43 @@
     } Prefix##_ConnEntry;                                                                      \
                                                                                                \
     static duo_hashmap_t* Prefix##_conn_map = NULL;                                            \
-    static sqlite3_mutex* Prefix##_conn_mutex = NULL;                                          \
+    static sqlite3_tiny_lock Prefix##_conn_lock = {0};                                         \
                                                                                                \
-    /** @brief Lazily initializes the global connection registry mutex using double-checked locking. */ \
-    static void Prefix##_ensure_conn_mutex_init(void) {                                        \
-        if (!Prefix##_conn_mutex) {                                                            \
-            sqlite3_mutex *master = sqlite3_mutex_alloc(SQLITE_MUTEX_STATIC_MASTER);           \
-            if (master) sqlite3_mutex_enter(master);                                           \
-            if (!Prefix##_conn_mutex) {                                                        \
-                Prefix##_conn_mutex = sqlite3_mutex_alloc(SQLITE_MUTEX_STATIC_APP2);           \
-            }                                                                                  \
-            if (master) sqlite3_mutex_leave(master);                                           \
-        }                                                                                      \
+    static inline void Prefix##_conn_lock_acquire(void) {                                      \
+        sqlite3_tiny_lock_lock(&Prefix##_conn_lock);                                           \
+    }                                                                                          \
+                                                                                               \
+    static inline void Prefix##_conn_lock_release(void) {                                      \
+        sqlite3_tiny_lock_unlock(&Prefix##_conn_lock);                                         \
     }                                                                                          \
                                                                                                \
     /** @brief Increments the atomic reference counter for the connection entry. */            \
-    static Prefix##_ConnEntry* Prefix##_conn_retain(Prefix##_ConnEntry *entry) {               \
+    static inline Prefix##_ConnEntry* Prefix##_conn_retain(Prefix##_ConnEntry *entry) {        \
         if (!entry) return NULL;                                                               \
         sqlite_atomic_increment_32(&entry->refcount);                                          \
         return entry;                                                                          \
     }                                                                                          \
                                                                                                \
     /** @brief Unlinks and deletes the connection entry when reference count reaches zero. */  \
-    static void Prefix##_conn_free(Prefix##_ConnEntry *entry) {                                \
-        Prefix##_ensure_conn_mutex_init();                                                     \
-        if (Prefix##_conn_mutex) sqlite3_mutex_enter(Prefix##_conn_mutex);                     \
+    static inline void Prefix##_conn_free(Prefix##_ConnEntry *entry) {                         \
+        if (!entry) return;                                                                    \
+        Prefix##_conn_lock_acquire();                                                          \
                                                                                                \
         if (sqlite_atomic_load_32(&entry->refcount) > 0) {                                     \
-            if (Prefix##_conn_mutex) sqlite3_mutex_leave(Prefix##_conn_mutex);                 \
+            Prefix##_conn_lock_release();                                                      \
             return;                                                                            \
         }                                                                                      \
                                                                                                \
-        if (Prefix##_conn_map) {                                                               \
+        if (Prefix##_conn_map && entry->db) {                                                  \
             sqlite3 *k = entry->db;                                                            \
             duo_hashmap_delete(Prefix##_conn_map, &k);                                         \
             if (duo_hashmap_count(Prefix##_conn_map) == 0) {                                  \
                 duo_hashmap_free(Prefix##_conn_map);                                           \
                 Prefix##_conn_map = NULL;                                                      \
             }                                                                                  \
+            entry->db = NULL;                                                                  \
         }                                                                                      \
-        if (Prefix##_conn_mutex) sqlite3_mutex_leave(Prefix##_conn_mutex);                     \
+        Prefix##_conn_lock_release();                                                          \
                                                                                                \
         if (entry->free_fn) {                                                                  \
             entry->free_fn(&entry->state);                                                     \
@@ -156,7 +154,7 @@
     }                                                                                          \
                                                                                                \
     /** @brief Decrements the reference counter and triggers teardown at zero. */              \
-    static void Prefix##_conn_release(Prefix##_ConnEntry *entry) {                             \
+    static inline void Prefix##_conn_release(Prefix##_ConnEntry *entry) {                      \
         if (!entry) return;                                                                    \
         if (sqlite_atomic_decrement_32(&entry->refcount) == 0) {                               \
             Prefix##_conn_free(entry);                                                         \
@@ -164,65 +162,100 @@
     }                                                                                          \
                                                                                                \
     /** @brief SQLite bridge destructor callback for xDestroy. */                              \
-    static void Prefix##_destructor(void *p) {                                                 \
+    static inline void Prefix##_destructor(void *p) {                                          \
         Prefix##_ConnEntry *entry = (Prefix##_ConnEntry*)p;                                    \
         Prefix##_conn_release(entry);                                                          \
     }                                                                                          \
                                                                                                \
     /** @brief Retrieves the state pointer directly from a sqlite3* database handle. */        \
-    static StateType* Prefix##_from_db(sqlite3 *db) {                                          \
+    static inline StateType* Prefix##_from_db(sqlite3 *db) {                                   \
         if (!db) return NULL;                                                                  \
-        Prefix##_ensure_conn_mutex_init();                                                     \
-        if (Prefix##_conn_mutex) sqlite3_mutex_enter(Prefix##_conn_mutex);                     \
+        Prefix##_conn_lock_acquire();                                                          \
         Prefix##_ConnEntry **p_entry = Prefix##_conn_map ? (Prefix##_ConnEntry**)duo_hashmap_get(Prefix##_conn_map, &db) : NULL; \
         Prefix##_ConnEntry *entry = p_entry ? *p_entry : NULL;                                 \
-        if (Prefix##_conn_mutex) sqlite3_mutex_leave(Prefix##_conn_mutex);                     \
+        Prefix##_conn_lock_release();                                                          \
         return entry ? &entry->state : NULL;                                                   \
     }                                                                                          \
                                                                                                \
+    /** @brief Explicitly unregisters and frees the state entry for a connection. */           \
+    static inline void Prefix##_remove(sqlite3 *db) {                                          \
+        if (!db) return;                                                                       \
+        Prefix##_conn_lock_acquire();                                                          \
+        Prefix##_ConnEntry **p_entry = Prefix##_conn_map ? (Prefix##_ConnEntry**)duo_hashmap_get(Prefix##_conn_map, &db) : NULL; \
+        Prefix##_ConnEntry *entry = p_entry ? *p_entry : NULL;                                 \
+        if (entry) {                                                                           \
+            sqlite3 *k = db;                                                                   \
+            duo_hashmap_delete(Prefix##_conn_map, &k);                                         \
+            if (duo_hashmap_count(Prefix##_conn_map) == 0) {                                  \
+                duo_hashmap_free(Prefix##_conn_map);                                           \
+                Prefix##_conn_map = NULL;                                                      \
+            }                                                                                  \
+            entry->db = NULL;                                                                  \
+            Prefix##_conn_lock_release();                                                      \
+            Prefix##_conn_release(entry);                                                      \
+            return;                                                                            \
+        }                                                                                      \
+        Prefix##_conn_lock_release();                                                          \
+    }                                                                                          \
+                                                                                               \
     /** @brief Allocates or retains state for a connection, returning a pointer for pApp. */   \
-    static void* Prefix##_init(sqlite3 *db, void (*init_fn)(StateType*), void (*free_fn)(StateType*)) { \
+    static inline void* Prefix##_init(sqlite3 *db, void (*init_fn)(StateType*), void (*free_fn)(StateType*)) { \
         if (!db) return NULL;                                                                  \
-        Prefix##_ensure_conn_mutex_init();                                                     \
-        if (Prefix##_conn_mutex) sqlite3_mutex_enter(Prefix##_conn_mutex);                     \
+        Prefix##_conn_lock_acquire();                                                          \
         Prefix##_ConnEntry **p_entry = Prefix##_conn_map ? (Prefix##_ConnEntry**)duo_hashmap_get(Prefix##_conn_map, &db) : NULL; \
         Prefix##_ConnEntry *entry = p_entry ? *p_entry : NULL;                                 \
         if (entry) {                                                                           \
             Prefix##_conn_retain(entry);                                                       \
-            if (Prefix##_conn_mutex) sqlite3_mutex_leave(Prefix##_conn_mutex);                 \
+            Prefix##_conn_lock_release();                                                      \
+            return entry;                                                                      \
+        }                                                                                      \
+        Prefix##_conn_lock_release();                                                          \
+                                                                                               \
+        Prefix##_ConnEntry *new_entry = (Prefix##_ConnEntry*)sqlite3_malloc64(sizeof(Prefix##_ConnEntry)); \
+        if (!new_entry) return NULL;                                                           \
+        memset(new_entry, 0, sizeof(Prefix##_ConnEntry));                                      \
+        new_entry->db = db;                                                                    \
+        sqlite_atomic_store_32(&new_entry->refcount, 1);                                       \
+        new_entry->free_fn = free_fn;                                                          \
+        if (init_fn) init_fn(&new_entry->state);                                               \
+                                                                                               \
+        Prefix##_conn_lock_acquire();                                                          \
+        p_entry = Prefix##_conn_map ? (Prefix##_ConnEntry**)duo_hashmap_get(Prefix##_conn_map, &db) : NULL; \
+        entry = p_entry ? *p_entry : NULL;                                                     \
+        if (entry) {                                                                           \
+            Prefix##_conn_retain(entry);                                                       \
+            Prefix##_conn_lock_release();                                                      \
+            if (new_entry->free_fn) new_entry->free_fn(&new_entry->state);                     \
+            sqlite3_free(new_entry);                                                           \
             return entry;                                                                      \
         }                                                                                      \
         if (!Prefix##_conn_map) {                                                              \
             Prefix##_conn_map = duo_hashmap_new(sizeof(sqlite3*), sizeof(Prefix##_ConnEntry*), 16, 0, 0, NULL, NULL, NULL, NULL, NULL); \
-        }                                                                                      \
-        entry = (Prefix##_ConnEntry*)sqlite3_malloc64(sizeof(Prefix##_ConnEntry));             \
-        if (entry) {                                                                           \
-            memset(entry, 0, sizeof(Prefix##_ConnEntry));                                      \
-            entry->db = db;                                                                    \
-            entry->refcount = 1;                                                               \
-            entry->free_fn = free_fn;                                                          \
-            if (init_fn) init_fn(&entry->state);                                               \
-            if (Prefix##_conn_map) {                                                           \
-                duo_hashmap_set(Prefix##_conn_map, &db, &entry);                               \
+            if (!Prefix##_conn_map) {                                                          \
+                Prefix##_conn_lock_release();                                                  \
+                if (new_entry->free_fn) new_entry->free_fn(&new_entry->state);                 \
+                sqlite3_free(new_entry);                                                       \
+                return NULL;                                                                   \
             }                                                                                  \
         }                                                                                      \
-        if (Prefix##_conn_mutex) sqlite3_mutex_leave(Prefix##_conn_mutex);                     \
-        return entry;                                                                          \
+        duo_hashmap_set(Prefix##_conn_map, &db, &new_entry);                                  \
+        Prefix##_conn_lock_release();                                                          \
+        return new_entry;                                                                      \
     }                                                                                          \
                                                                                                \
-    /** @brief Multi-tier fast resolution of connection state inside SQL functions. */         \
-    static StateType* Prefix##_from_context(sqlite3_context *ctx) {                            \
+    /** @brief Fast resolution of connection state inside SQL functions. */                     \
+    static inline StateType* Prefix##_from_context(sqlite3_context *ctx) {                     \
         if (!ctx) return NULL;                                                                 \
-        Prefix##_ConnEntry *entry = (Prefix##_ConnEntry*)sqlite3_get_auxdata(ctx, SQLITE_CONN_STATE_AUXDATA_SLOT); \
+        Prefix##_ConnEntry *entry = (Prefix##_ConnEntry*)sqlite3_user_data(ctx);               \
         if (entry) return &entry->state;                                                       \
-        entry = (Prefix##_ConnEntry*)sqlite3_user_data(ctx);                                   \
-        if (entry) {                                                                           \
-            Prefix##_conn_retain(entry);                                                       \
-            sqlite3_set_auxdata(ctx, SQLITE_CONN_STATE_AUXDATA_SLOT, entry, Prefix##_destructor); \
-            return &entry->state;                                                              \
-        }                                                                                      \
         sqlite3 *db = sqlite3_context_db_handle(ctx);                                          \
         return Prefix##_from_db(db);                                                           \
+    }                                                                                          \
+                                                                                               \
+    /** @brief Fast resolution from raw entry pointer. */                                      \
+    static inline StateType* Prefix##_from_ptr(void *p) {                                      \
+        Prefix##_ConnEntry *entry = (Prefix##_ConnEntry*)p;                                    \
+        return entry ? &entry->state : NULL;                                                   \
     }
 
 /**
@@ -231,110 +264,8 @@
 #define SQLITE_CONNECTION_STATE(StateType) DEFINE_SQLITE_CONN_STATE(StateType, StateType)
 
 /**
- * @brief Generates a unified hybrid state struct and management routines packaging both
- * a shared extension state (ExtStateType) and a per-connection state (ConnStateType).
- * 
- * Generates:
- * - `HybridPrefix_HybridState`: Struct holding `ExtStateType *ext` and `ConnStateType *conn`.
- * - `HybridPrefix_hybrid_init(db, ext_init, ext_free, conn_init, conn_free)`: Initializes both and returns a single `void*` for `pApp`.
- * - `HybridPrefix_hybrid_destructor(p)`: Single unified destructor callback for `sqlite3_create_function_v2` / `xDestroy`.
- * - `HybridPrefix_hybrid_from_context(ctx)`: Resolves both states from a `sqlite3_context*`.
- * - `HybridPrefix_hybrid_from_db(db)`: Resolves both states from a `sqlite3*` handle.
- * - `HybridPrefix_hybrid_write_acquire/release`: Lock helpers for the shared component.
- * - `HybridPrefix_hybrid_read_acquire/release`: Read lock helpers for the shared component.
+ * @brief Forward backward-compatibility include for unified hybrid state
  */
-#define DEFINE_SQLITE_HYBRID_STATE(ExtStateType, ExtPrefix, ConnStateType, ConnPrefix, HybridPrefix) \
-    /** @brief Unified hybrid structure packaging both shared and connection state pointers. */       \
-    typedef struct HybridPrefix##_HybridState {                                                       \
-        ExtStateType *ext;   /**< Pointer to shared per-database state (requires lock). */            \
-        ConnStateType *conn; /**< Pointer to unique per-connection state (lock-free). */              \
-    } HybridPrefix##_HybridState;                                                                     \
-                                                                                                      \
-    /** @brief Internal carrier holding raw entry pointers for single xDestroy bridging. */           \
-    typedef struct HybridPrefix##_HybridHolder {                                                      \
-        void *ext_raw;  /**< Pointer to ExtState Entry. */                                            \
-        void *conn_raw; /**< Pointer to ConnState Entry. */                                           \
-    } HybridPrefix##_HybridHolder;                                                                    \
-                                                                                                      \
-    /** @brief Unified destructor passed as xDestroy to sqlite3_create_function_v2. */                \
-    static inline void HybridPrefix##_hybrid_destructor(void *p) {                                    \
-        HybridPrefix##_HybridHolder *holder = (HybridPrefix##_HybridHolder*)p;                        \
-        if (holder) {                                                                                 \
-            if (holder->ext_raw)  ExtPrefix##_destructor(holder->ext_raw);                            \
-            if (holder->conn_raw) ConnPrefix##_destructor(holder->conn_raw);                          \
-            sqlite3_free(holder);                                                                     \
-        }                                                                                             \
-    }                                                                                                 \
-                                                                                                      \
-    /** @brief Initializes both states on the connection and returns a single unified holder. */      \
-    static inline void* HybridPrefix##_hybrid_init(                                                   \
-        sqlite3 *db,                                                                                  \
-        void (*ext_init)(ExtStateType*),                                                              \
-        void (*ext_free)(ExtStateType*),                                                              \
-        void (*conn_init)(ConnStateType*),                                                            \
-        void (*conn_free)(ConnStateType*)                                                             \
-    ) {                                                                                               \
-        if (!db) return NULL;                                                                         \
-        void *ext_raw  = ExtPrefix##_init(db, ext_init, ext_free);                                    \
-        void *conn_raw = ConnPrefix##_init(db, conn_init, conn_free);                                 \
-        HybridPrefix##_HybridHolder *holder =                                                         \
-            (HybridPrefix##_HybridHolder*)sqlite3_malloc64(sizeof(HybridPrefix##_HybridHolder));      \
-        if (holder) {                                                                                 \
-            holder->ext_raw  = ext_raw;                                                               \
-            holder->conn_raw = conn_raw;                                                              \
-        }                                                                                             \
-        return (void*)holder;                                                                         \
-    }                                                                                                 \
-                                                                                                      \
-    /** @brief Resolves both states into a single HybridState struct inside UDFs / TVFs. */          \
-    static inline HybridPrefix##_HybridState HybridPrefix##_hybrid_from_context(sqlite3_context *ctx) {\
-        HybridPrefix##_HybridState state;                                                             \
-        HybridPrefix##_HybridHolder *holder = (HybridPrefix##_HybridHolder*)sqlite3_user_data(ctx);   \
-        if (holder) {                                                                                 \
-            ExtPrefix##_Entry *ext_entry = (ExtPrefix##_Entry*)holder->ext_raw;                       \
-            ConnPrefix##_ConnEntry *conn_entry = (ConnPrefix##_ConnEntry*)holder->conn_raw;           \
-            state.ext  = ext_entry ? &ext_entry->state : NULL;                                        \
-            state.conn = conn_entry ? &conn_entry->state : NULL;                                      \
-        } else {                                                                                      \
-            sqlite3 *db = sqlite3_context_db_handle(ctx);                                             \
-            state.ext  = ExtPrefix##_from_db(ctx, db);                                                \
-            state.conn = ConnPrefix##_from_context(ctx);                                              \
-        }                                                                                             \
-        return state;                                                                                 \
-    }                                                                                                 \
-                                                                                                      \
-    /** @brief Resolves both states directly from a sqlite3* database handle. */                      \
-    static inline HybridPrefix##_HybridState HybridPrefix##_hybrid_from_db(sqlite3 *db) {             \
-        HybridPrefix##_HybridState state;                                                             \
-        state.ext  = ExtPrefix##_from_db_handle(db);                                                  \
-        state.conn = ConnPrefix##_from_db(db);                                                        \
-        return state;                                                                                 \
-    }                                                                                                 \
-                                                                                                      \
-    /** @brief Acquires write lock on the shared extension state component. */                        \
-    static inline void HybridPrefix##_hybrid_write_acquire(HybridPrefix##_HybridState *state) {       \
-        if (state && state->ext) ExtPrefix##_write_acquire(state->ext);                               \
-    }                                                                                                 \
-                                                                                                      \
-    /** @brief Releases write lock on the shared extension state component. */                        \
-    static inline void HybridPrefix##_hybrid_write_release(HybridPrefix##_HybridState *state) {       \
-        if (state && state->ext) ExtPrefix##_write_release(state->ext);                               \
-    }                                                                                                 \
-                                                                                                      \
-    /** @brief Acquires read lock on the shared extension state component. */                         \
-    static inline void HybridPrefix##_hybrid_read_acquire(HybridPrefix##_HybridState *state) {        \
-        if (state && state->ext) ExtPrefix##_read_acquire(state->ext);                                \
-    }                                                                                                 \
-                                                                                                      \
-    /** @brief Releases read lock on the shared extension state component. */                         \
-    static inline void HybridPrefix##_hybrid_read_release(HybridPrefix##_HybridState *state) {        \
-        if (state && state->ext) ExtPrefix##_read_release(state->ext);                                \
-    }
-
-/**
- * @brief Convenience macro for generating a hybrid state registry when ExtPrefix and ConnPrefix match type names.
- */
-#define SQLITE_HYBRID_STATE(ExtStateType, ConnStateType, HybridPrefix) \
-    DEFINE_SQLITE_HYBRID_STATE(ExtStateType, ExtStateType, ConnStateType, ConnStateType, HybridPrefix)
+#include "sqlite3_hybrid_state.h"
 
 #endif // SQLITE3_CONN_STATE_H

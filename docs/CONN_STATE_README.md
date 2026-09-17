@@ -1,15 +1,29 @@
 # SQLite Connection State Manager (C/C++)
 
-`sqlite3_conn_state.h` (for Pure C) and `sqlite3_conn_state.hpp` (for C++) provide zero-dependency, **lock-free, per-connection state management** for SQLite extensions and embedded servers.
+`sqlite3_conn_state.h` (for Pure C) and `sqlite3_conn_state.hpp` (for C++) provide zero-dependency, **thread-safe, lock-free per-connection state management** for SQLite extensions and embedded servers.
 
 ---
 
 ## Why do I need this?
 
 - **Shared State (`SqliteExtState`)**: Shared across all connections to the same database file (requires mutex/RW locks).
-- **Connection State (`SqliteConnState`)**: Unique to **one single connection (`sqlite3*`)** (runs **100% lock-free**).
+- **Connection State (`SqliteConnState`)**: Unique to **one single connection (`sqlite3*`)** (runs **100% lock-free during queries**).
 
 If your extension needs to track per-connection query metrics, maintain prepared scratchpad buffers, hold user authentication tokens, or manage session-specific parser contexts, use `SqliteConnState`.
+
+---
+
+## Concurrency & Thread-Safety Model
+
+1. **Parallel Connection Creation & Teardown**:
+   - Creating and destroying connections in parallel across worker threads is fully thread-safe.
+   - The global pointer registry map is synchronized using an ultra-low-overhead atomic spinlock (`SqliteTinyLock`), eliminating OS mutex context switches and dynamic lazy-initialization overhead.
+   - **Zero Lock Contention during State Allocation**: `Entry` allocation and user initialization callbacks (`init_fn`) occur **outside** the lock; the spinlock is held only for nanoseconds during $\mathcal{O}(1)$ map lookup/insertion.
+2. **Lock-Free Query Execution**:
+   - Because SQLite serializes execution per database connection (`sqlite3*`), query-time state lookups and payload mutations are **100% lock-free** with zero mutex or atomic overhead.
+   - Locks are strictly only engaged during connection creation (`init`) and teardown (`remove`, `destructor`). No per-connection state locks (`read_acquire`, `write_acquire`) are needed.
+3. **Atomic Reference Counting**:
+   - Coordinates multi-UDF registrations using `SqliteAtomic<uint32_t>`, ensuring safe lifecycle management across independent `xDestroy` callbacks without data races.
 
 ---
 
@@ -34,7 +48,7 @@ struct MyConnSession {
 int sqlite3_myext_init(sqlite3 *db, char **pzErrMsg, const sqlite3_api_routines *pApi) {
     SQLITE_EXTENSION_INIT2(pApi);
 
-    // Initialize the connection state:
+    // Initialize the connection state (thread-safe, non-blocking):
     void* raw_state = SqliteConnState<MyConnSession>::init(db);
 
     // Register UDFs with the connection state destructor:
@@ -50,7 +64,7 @@ int sqlite3_myext_init(sqlite3 *db, char **pzErrMsg, const sqlite3_api_routines 
 
 ### 3. Access State Inside UDFs / TVFs
 
-Inside your SQL functions, lookups are completely **lock-free** and hit the $\mathcal{O}(1)$ auxdata fast-path:
+Inside your SQL functions, lookups are completely **lock-free** and hit the $\mathcal{O}(1)$ user_data / auxdata fast-path:
 
 ```cpp
 static void session_query_count_func(sqlite3_context *ctx, int argc, sqlite3_value **argv) {
@@ -60,7 +74,7 @@ static void session_query_count_func(sqlite3_context *ctx, int argc, sqlite3_val
         return;
     }
 
-    // Lock-free mutation:
+    // 100% Lock-free mutation (no read_acquire or write_acquire needed):
     session->query_count++;
 
     sqlite3_result_int(ctx, session->query_count);
@@ -82,8 +96,8 @@ typedef struct {
     int session_id;
 } MyConnSession;
 
-// Generates MyConnSession_init, MyConnSession_get, MyConnSession_destructor:
-SQLITE_CONNECTION_STATE(MyConnSession, MyConnSession)
+// Generates MyConnSession_init, MyConnSession_from_db, MyConnSession_remove, MyConnSession_destructor:
+SQLITE_CONNECTION_STATE(MyConnSession)
 ```
 
 ### 2. Initialize and Register in Pure C
@@ -151,10 +165,10 @@ MyConnSession* session = res.unwrap();
 
 ## Hybrid State (`SqliteHybridState`)
 
-When an SQLite extension requires both **shared per-database state** (e.g. shared index, global cache) and **unique per-connection state** (e.g. session token, local query counter), use `SqliteHybridState<ExtType, ConnType, LockPolicy>`:
+When an SQLite extension requires both **shared per-database state** (e.g. shared index, global cache) and **unique per-connection state** (e.g. session token, local query counter), use `SqliteHybridState<ExtType, ConnType, LockPolicy>` (defined in `sqlite3_hybrid_state.hpp` / `sqlite3_hybrid_state.h`):
 
 ```cpp
-#include "sqlite3_conn_state.hpp"
+#include "sqlite3_hybrid_state.hpp"
 
 struct GlobalCache {
     int total_queries = 0;
@@ -172,20 +186,55 @@ sqlite3_create_function_v2(db, "hybrid_fn", 0, SQLITE_UTF8, pApp, hybrid_fn, NUL
 
 // 2. Inside UDF:
 static void hybrid_fn(sqlite3_context *ctx, int argc, sqlite3_value **argv) {
-    auto state = AppHybrid::from_context(ctx);
+    // Lock-free connection state (0 locks, 1 pointer dereference):
+    SessionState *conn = AppHybrid::conn(ctx);
+    if (!conn) return;
+    conn->local_queries++;
 
-    // Lock-free connection state:
-    state.conn->local_queries++;
-
-    // Safe RAII write locking on shared state:
+    // Safe RAII write locking strictly on shared extension state:
     {
-        AppHybrid::WriteGuard lock(state);
+        AppHybrid::WriteGuard lock(ctx);
+        if (!lock) return;
         lock->total_queries++;
     }
-
-    // Structured binding support:
-    // auto [ext, conn] = AppHybrid::from_context(ctx);
 }
+```
+
+> [!TIP]
+> For complete documentation, detailed C/C++ usage guides, and benchmarks on the unified hybrid state subsystem, see [HYBRID_STATE_README.md](./HYBRID_STATE_README.md).
+
+---
+
+## Integration Testing & Go Concurrency Suite
+
+The connection state engine is validated under an intensive multi-database concurrency stress test written in Go (`tests/conn_state/go_loader/concurrency.go` and `lazy_load.go` using `github.com/mattn/go-sqlite3`):
+
+### 1. Test Architecture & Topology
+- **3 Independent Databases**: Evaluates concurrency across multiple database files simultaneously (`test_conn_db_0.sqlite`, `test_conn_db_1.sqlite`, `test_conn_db_2.sqlite`).
+- **25 Concurrent Connections per DB (75 Physical Connections Total)**: Simulates real-world high-concurrency connection pools.
+- **Dual-Barrier Synchronization**:
+  - `startBarrier`: Holds all 25 connections per database open simultaneously before executing queries, forcing SQLite to allocate and maintain distinct physical `sqlite3*` connection handles.
+  - `doneBarrier`: Prevents any connection from being closed or recycled back into Go's connection pool until all worker goroutines complete their query cycles.
+
+### 2. Verification Invariants
+- **Strict Connection Isolation**:
+  - Each connection executes 100 iterations.
+  - Each iteration calls `test_conn_counter` (+1) and `test_conn_multi_counter` (+10).
+  - Given an initial counter of 100, each connection must calculate:
+    $$\text{Expected} = 100 + 100 \times (1 + 10) = 1200$$
+  - Every one of the 75 connections independently reaches exactly `1200`. Zero state leakage, zero cross-connection pollution, and zero race conditions.
+- **Dynamic Runtime Lazy-Loading (`lazy_load.go`)**:
+  - Tests dynamic loading via `sqliteConn.LoadExtension` on active connection pools, verifying that runtime state registration and teardown succeed without deadlocks or missed allocations.
+- **Zero Memory Leaks**:
+  - Validated with Valgrind (`Memcheck`) and Linux GCC `-fsanitize=address,leak` across thousands of allocations and closures (`0 bytes leaked in 0 blocks`).
+
+### Running the Tests
+```bash
+# In MSYS2 / Windows:
+make test-conn-state
+
+# In Linux / WSL (with ASan/LSan):
+wsl bash -lc "make test-conn-state"
 ```
 
 ---

@@ -1,6 +1,6 @@
 /**
  * @file sqlite3_conn_state.hpp
- * @brief High-performance, lock-free per-connection unique state registry for SQLite extensions (C++ Template API).
+ * @brief High-performance, thread-safe per-connection state registry for SQLite extensions (C++ Template API).
  * 
  * Provides `SqliteConnState<T>`, an O(1) pointer-hash-map backed per-connection
  * state registry powered by DuoSTL (`duo::HashMap`).
@@ -12,19 +12,24 @@
  *    Uses an open-addressing pointer hash map (`duo::HashMap<sqlite3*, Entry*>`)
  *    for constant-time state retrieval.
  * 
- * 2. Lock-Free Query Execution:
- *    Because SQLite enforces single-threaded execution per connection handle
- *    (`sqlite3*`), lookups and mutations during query execution are 100% lock-free.
+ * 2. Concurrency & Parallel Connection Safety:
+ *    Synchronizes the global registry map with an atomic spinlock (`sqlite3_tiny_lock`),
+ *    guaranteeing thread safety when creating, looking up, and tearing down connections
+ *    in parallel across worker threads with zero runtime mutex initialization overhead.
  * 
- * 3. Multi-Function Reference Counting:
- *    Correctly coordinates lifecycle when multiple UDFs/TVFs on the same connection
- *    share the same connection state, preventing double-free upon `sqlite3_close`.
+ * 3. Lock-Free Query Execution:
+ *    Because SQLite serializes execution per database connection (`sqlite3*`),
+ *    query-time state lookups and payload mutations are 100% lock-free with zero mutex overhead.
  * 
- * 4. 2-Tier Caching Pipeline:
- *    - Tier 1: `sqlite3_get_auxdata` fast path on slot 0x45585401.
- *    - Tier 2: `SqlitePtrMap` lookup by `sqlite3*` handle.
+ * 4. Atomic Multi-Function Reference Counting:
+ *    Uses `SqliteAtomic<uint32_t>` to coordinate lifecycles when multiple UDFs/TVFs on the
+ *    same connection share the same state, preventing double-free and use-after-free bugs.
  * 
- * 5. C++ RAII Lifecycle:
+ * 5. 2-Tier Caching Pipeline:
+ *    - Tier 1 (Hot Path): Direct Function User Data (`sqlite3_user_data(ctx)`).
+ *    - Tier 2 (Cold Path): Hash Table Lookup by `sqlite3*` handle via `from_db(db)`.
+ * 
+ * 6. C++ RAII Lifecycle:
  *    Safely manages constructors and destructors of complex embedded C++ types
  *    via `sqlite_new<Entry>()` and `sqlite_delete(entry)`.
  * 
@@ -36,7 +41,7 @@
  * 
  * struct MySession {
  *     int query_count = 0;
- *     std::string user_token;
+ *     duo::String user_token;
  * };
  * 
  * // Extension init:
@@ -58,10 +63,11 @@
 #define SQLITE3_CONN_STATE_HPP
 
 #include "sqlite3_conn_state.h" // For SQLITE_CONN_STATE_AUXDATA_SLOT
-#include "sqlite3_ext_state.hpp"
+#include "sqlite3_tiny_lock.hpp"
 #include "stl/duo_alloc.hpp"
 #include "stl/duo_hash.hpp"
 #include "sqlite3_allocator.hpp"
+#include "sqlite3_atomic.hpp"
 
 #ifndef SQLITE_CONN_STATE_FWD_DECLARED
 #define SQLITE_CONN_STATE_FWD_DECLARED
@@ -69,14 +75,8 @@ template <typename T>
 class SqliteConnState;
 #endif
 
-#ifndef SQLITE_HYBRID_STATE_FWD_DECLARED
-#define SQLITE_HYBRID_STATE_FWD_DECLARED
-template <typename ExtT, typename ConnT, typename LockPolicy = SqliteRwLock>
-class SqliteHybridState;
-#endif
-
 /**
- * @brief Thread-safe (registration) & lock-free (execution) per-connection state manager.
+ * @brief Thread-safe (registration & execution) per-connection state manager.
  * 
  * @tparam T The user-defined state type to associate with each sqlite3* connection.
  */
@@ -87,37 +87,39 @@ private:
      * @brief Internal container storing connection pointer, active refcount, and state payload.
      */
     struct Entry {
-        sqlite3 *db = nullptr; /**< Associated SQLite database connection handle. */
-        int refcount = 0;      /**< Active reference count across UDFs and auxdata bindings. */
-        T state;               /**< User-defined state payload instance. */
+        sqlite3 *db = nullptr;              /**< Associated SQLite database connection handle. */
+        SqliteAtomic<uint32_t> refcount{0}; /**< Active reference count across UDFs and auxdata bindings. */
+        T state;                            /**< User-defined state payload instance. */
     };
 
-    /** @brief Global mapping from sqlite3* connection pointers to state entries. */
-    static duo::HashMap<sqlite3*, Entry*> registry_map;
+    using MapType = duo::HashMap<sqlite3*, Entry*>;
 
-    /** @brief Mutex protecting the registry map during initial allocation and destruction. */
-    static sqlite3_mutex* registry_mutex;
+    /** @brief Global mapping from sqlite3* connection pointers to state entries. */
+    static MapType registry_map;
+
+    /** @brief Atomic spinlock protecting the registry map during allocation and destruction. */
+    static SqliteTinyLock registry_lock_inst;
 
     /**
-     * @brief Lazily initializes the registry mutex using double-checked locking on STATIC_MASTER.
+     * @brief Acquires the registry lock.
      */
-    static void ensure_mutex_init() {
-        if (!registry_mutex) {
-            sqlite3_mutex *master = sqlite3_mutex_alloc(SQLITE_MUTEX_STATIC_MASTER);
-            if (master) sqlite3_mutex_enter(master);
-            if (!registry_mutex) {
-                registry_mutex = sqlite3_mutex_alloc(SQLITE_MUTEX_STATIC_APP2);
-            }
-            if (master) sqlite3_mutex_leave(master);
-        }
+    static void registry_lock() noexcept {
+        registry_lock_inst.lock();
+    }
+
+    /**
+     * @brief Releases the registry lock.
+     */
+    static void registry_unlock() noexcept {
+        registry_lock_inst.unlock();
     }
 
     /**
      * @brief Atomically increments the entry's reference counter.
      */
-    static Entry* entry_retain(Entry *entry) {
+    static Entry* entry_retain(Entry *entry) noexcept {
         if (!entry) return nullptr;
-        sqlite_atomic_increment_32(&entry->refcount);
+        entry->refcount.fetch_add(1);
         return entry;
     }
 
@@ -125,16 +127,19 @@ private:
      * @brief Unlinks from the map and destroys the entry if reference count is zero.
      */
     static void entry_free(Entry *entry) {
-        ensure_mutex_init();
-        if (registry_mutex) sqlite3_mutex_enter(registry_mutex);
+        if (!entry) return;
+        registry_lock();
         
-        if (sqlite_atomic_load_32(&entry->refcount) > 0) {
-            if (registry_mutex) sqlite3_mutex_leave(registry_mutex);
+        if (entry->refcount.load() > 0) {
+            registry_unlock();
             return;
         }
         
-        registry_map.erase(entry->db);
-        if (registry_mutex) sqlite3_mutex_leave(registry_mutex);
+        if (entry->db) {
+            registry_map.erase(entry->db);
+            entry->db = nullptr;
+        }
+        registry_unlock();
         
         sqlite_delete(entry);
     }
@@ -144,24 +149,32 @@ private:
      */
     static void entry_release(Entry *entry) {
         if (!entry) return;
-        if (sqlite_atomic_decrement_32(&entry->refcount) == 0) {
+        if (entry->refcount.fetch_sub(1) == 1) {
             entry_free(entry);
         }
     }
 
     /**
-     * @brief Dynamically allocates a new entry on the SQLite heap and inserts into registry_map.
+     * @brief Looks up existing state entry in the DuoSTL hash map.
+     * Assumes the caller holds the registry lock. Does not retain.
      */
-    static Entry* entry_alloc(sqlite3 *db, void (*init_fn)(T*)) {
-        Entry *entry = sqlite_new<Entry>();
+    static Entry* entry_find_locked(sqlite3 *db) {
+        Entry **p_entry = registry_map.get(db);
+        return p_entry ? *p_entry : nullptr;
+    }
+
+    /**
+     * @brief Retrieves an existing state entry from the global registry by connection handle.
+     * Thread-safely locks the registry and automatically retains the entry if found.
+     */
+    static Entry* entry_get(sqlite3 *db) {
+        if (!db) return nullptr;
+        registry_lock();
+        Entry *entry = entry_find_locked(db);
         if (entry) {
-            entry->db = db;
-            entry->refcount = 0;
-            if (init_fn) {
-                init_fn(&entry->state);
-            }
-            registry_map.insert_or_assign(db, entry);
+            entry_retain(entry);
         }
+        registry_unlock();
         return entry;
     }
 
@@ -171,7 +184,7 @@ public:
      * @param p Pointer to the managed Entry.
      */
     static void destructor(void *p) {
-        Entry *entry = (Entry *)p;
+        Entry *entry = static_cast<Entry*>(p);
         entry_release(entry);
     }
 
@@ -183,13 +196,9 @@ public:
      */
     static T* get(sqlite3 *db) {
         if (!db) return nullptr;
-        ensure_mutex_init();
-        if (registry_mutex) sqlite3_mutex_enter(registry_mutex);
-        
-        Entry** p_entry = registry_map.get(db);
-        Entry* entry = p_entry ? *p_entry : nullptr;
-        
-        if (registry_mutex) sqlite3_mutex_leave(registry_mutex);
+        registry_lock();
+        Entry *entry = entry_find_locked(db);
+        registry_unlock();
         return entry ? &entry->state : nullptr;
     }
 
@@ -210,26 +219,53 @@ public:
     /**
      * @brief Allocates and initializes state on connection open, returning a raw void* suitable for pApp.
      * 
+     * Thread-safely coordinates parallel connection creation across worker threads without holding locks
+     * during state object construction or init_fn execution.
+     * 
      * @param db The SQLite database connection handle.
      * @param init_fn Optional initialization callback.
      * @return void* Raw pointer to the internal Entry to pass as user_data.
      */
     static void* init(sqlite3 *db, void (*init_fn)(T*) = nullptr) {
         if (!db) return nullptr;
-        ensure_mutex_init();
-        if (registry_mutex) sqlite3_mutex_enter(registry_mutex);
-        
-        Entry** p_entry = registry_map.get(db);
-        Entry* entry = p_entry ? *p_entry : nullptr;
-        if (!entry) {
-            entry = entry_alloc(db, init_fn);
-        }
+
+        // Fast path: check if already registered
+        registry_lock();
+        Entry* entry = entry_find_locked(db);
         if (entry) {
             entry_retain(entry);
+            registry_unlock();
+            return entry;
         }
-        
-        if (registry_mutex) sqlite3_mutex_leave(registry_mutex);
-        return entry;
+        registry_unlock();
+
+        // Allocate and construct new entry outside the lock to eliminate lock contention
+        Entry* new_entry = sqlite_new<Entry>();
+        if (!new_entry) return nullptr;
+        new_entry->db = db;
+        new_entry->refcount.store(1);
+        if (init_fn) {
+            init_fn(&new_entry->state);
+        }
+
+        // Insert into registry map under mutex
+        registry_lock();
+        entry = entry_find_locked(db);
+        if (entry) {
+            // Another thread registered this connection concurrently: adopt existing
+            entry_retain(entry);
+            registry_unlock();
+            sqlite_delete(new_entry);
+            return entry;
+        }
+
+        if (!registry_map.insert_or_assign(db, new_entry)) {
+            registry_unlock();
+            sqlite_delete(new_entry);
+            return nullptr;
+        }
+        registry_unlock();
+        return new_entry;
     }
 
     /**
@@ -247,12 +283,19 @@ public:
     }
 
     /**
-     * @brief Fast-path state resolution inside scalar functions and virtual tables.
+     * @brief Retrieves the state pointer directly from a sqlite3* database handle.
+     */
+    static T* from_db(sqlite3 *db) {
+        return get(db);
+    }
+
+
+    /**
+     * @brief Fast-path state resolution inside scalar functions, aggregates, and virtual tables.
      * 
      * Pipeline:
-     * 1. Layer 1 (Hot Path): Checks AuxData cache on slot 0x45585401 (nanosecond O(1)).
-     * 2. Layer 2 (Warm Path): Checks function user_data and populates AuxData cache.
-     * 3. Layer 3 (Cold Path): Looks up connection pointer in duo::HashMap hash map.
+     * 1. Layer 1 (Hot Path): Direct function user_data (`sqlite3_user_data(ctx)`).
+     * 2. Layer 2 (Cold Path): Hash table lookup by `sqlite3*` via `from_db(db)`.
      * 
      * @param ctx SQLite function invocation context.
      * @return T* Pointer to the connection state, or nullptr if not found.
@@ -260,23 +303,15 @@ public:
     static T* from_context(sqlite3_context *ctx) {
         if (!ctx) return nullptr;
         
-        // Layer 1 (Hot Path): Auxdata Cache (O(1))
-        Entry *entry = (Entry*)sqlite3_get_auxdata(ctx, SQLITE_CONN_STATE_AUXDATA_SLOT);
+        // Layer 1 (Hot Path): Direct Function User Data
+        Entry *entry = (Entry*)sqlite3_user_data(ctx);
         if (entry) {
             return &entry->state;
         }
         
-        // Layer 2 (Warm Path): Function User Data
-        entry = (Entry*)sqlite3_user_data(ctx);
-        if (entry) {
-            entry_retain(entry);
-            sqlite3_set_auxdata(ctx, SQLITE_CONN_STATE_AUXDATA_SLOT, entry, destructor);
-            return &entry->state;
-        }
-        
-        // Layer 3 (Cold Path): Hash Table Lookup by sqlite3*
+        // Layer 2 (Cold Path): Hash Table Lookup by sqlite3*
         sqlite3 *db = sqlite3_context_db_handle(ctx);
-        return get(db);
+        return from_db(db);
     }
 
     /**
@@ -302,213 +337,36 @@ public:
     }
 
     /**
-     * @brief Explicitly removes and destroys the state entry for a connection.
+     * @brief Explicitly removes and unregisters the state entry for a connection.
+     * 
+     * Erases the connection from registry_map and safely decrements its refcount.
+     * If no active UDF references remain, releases heap memory immediately.
      * 
      * @param db The SQLite database connection handle.
      */
     static void remove(sqlite3 *db) {
         if (!db) return;
-        ensure_mutex_init();
-        if (registry_mutex) sqlite3_mutex_enter(registry_mutex);
-        Entry** p_entry = registry_map.get(db);
-        Entry* entry = p_entry ? *p_entry : nullptr;
+        registry_lock();
+        Entry *entry = entry_find_locked(db);
         if (entry) {
             registry_map.erase(db);
-            if (registry_mutex) sqlite3_mutex_leave(registry_mutex);
-            sqlite_delete(entry);
+            entry->db = nullptr;
+            registry_unlock();
+            entry_release(entry);
             return;
         }
-        if (registry_mutex) sqlite3_mutex_leave(registry_mutex);
+        registry_unlock();
     }
 };
 
 // Static storage definition per instantiated state type
 template <typename T>
-duo::HashMap<sqlite3*, typename SqliteConnState<T>::Entry*> SqliteConnState<T>::registry_map;
+typename SqliteConnState<T>::MapType SqliteConnState<T>::registry_map;
 
 template <typename T>
-sqlite3_mutex* SqliteConnState<T>::registry_mutex = nullptr;
+SqliteTinyLock SqliteConnState<T>::registry_lock_inst;
 
-/**
- * @brief Zero-dependency C++ template for combined hybrid state management.
- * 
- * Packages both shared per-database state (`SqliteExtState`) and unique per-connection
- * state (`SqliteConnState`) into a single unified container with single-destructor bridging.
- * 
- * @tparam ExtT The user-defined state type shared across all connections to the same database file.
- * @tparam ConnT The user-defined state type private to each individual connection handle (sqlite3*).
- * @tparam LockPolicy Concurrency lock policy for the shared component (defaults to SqliteRwLock).
- */
-template <typename ExtT, typename ConnT, typename LockPolicy>
-class SqliteHybridState {
-public:
-    /**
-     * @brief Value-type packaging pointers to both shared and connection state.
-     * Supports structured bindings (e.g. `auto [ext, conn] = ...`).
-     */
-    struct State {
-        ExtT  *ext  = nullptr; /**< Pointer to shared per-database state (requires lock). */
-        ConnT *conn = nullptr; /**< Pointer to unique per-connection state (lock-free). */
-
-        explicit operator bool() const noexcept {
-            return ext != nullptr && conn != nullptr;
-        }
-    };
-
-    /**
-     * @brief Internal carrier holding raw entry pointers for single xDestroy bridging.
-     */
-    struct Holder {
-        void *ext_raw  = nullptr;
-        void *conn_raw = nullptr;
-    };
-
-    /**
-     * @brief Initializes both states on the connection and returns a single unified Holder for pApp.
-     */
-    static void* init(
-        sqlite3 *db,
-        void (*init_ext)(ExtT*)   = nullptr,
-        void (*init_conn)(ConnT*) = nullptr
-    ) {
-        if (!db) return nullptr;
-
-        void *ext_raw  = SqliteExtState<ExtT, LockPolicy>::init(db, init_ext);
-        void *conn_raw = SqliteConnState<ConnT>::init(db, init_conn);
-
-        Holder *holder = static_cast<Holder*>(sqlite3_malloc64(sizeof(Holder)));
-        if (holder) {
-            holder->ext_raw  = ext_raw;
-            holder->conn_raw = conn_raw;
-        }
-        return static_cast<void*>(holder);
-    }
-
-    /**
-     * @brief Unified destructor passed as xDestroy to sqlite3_create_function_v2.
-     */
-    static void destructor(void *p) {
-        Holder *holder = static_cast<Holder*>(p);
-        if (holder) {
-            if (holder->ext_raw) {
-                SqliteExtState<ExtT, LockPolicy>::destructor(holder->ext_raw);
-            }
-            if (holder->conn_raw) {
-                SqliteConnState<ConnT>::destructor(holder->conn_raw);
-            }
-            sqlite3_free(holder);
-        }
-    }
-
-    /**
-     * @brief Resolves both states in O(1) time inside UDFs / TVFs.
-     */
-    static State from_context(sqlite3_context *ctx) {
-        if (!ctx) return State{};
-
-        Holder *holder = static_cast<Holder*>(sqlite3_user_data(ctx));
-        if (holder) {
-            ExtT *ext = SqliteExtState<ExtT, LockPolicy>::from_ptr(holder->ext_raw);
-            ConnT *conn = SqliteConnState<ConnT>::from_ptr(holder->conn_raw);
-            return State{ext, conn};
-        }
-
-        // Fallback for context without Holder in user_data (e.g. virtual tables or custom UDFs):
-        sqlite3 *db = sqlite3_context_db_handle(ctx);
-        ExtT *ext = SqliteExtState<ExtT, LockPolicy>::from_db(ctx, db);
-        ConnT *conn = SqliteConnState<ConnT>::from_context(ctx);
-        return State{ext, conn};
-    }
-
-    /**
-     * @brief Overload for SqliteContext wrapper instances.
-     */
-    template <typename Ctx>
-    static State from_context(Ctx& ctx) {
-        void* data = ctx.user_data();
-        if (data) {
-            Holder *holder = static_cast<Holder*>(data);
-            return State{
-                SqliteExtState<ExtT, LockPolicy>::from_ptr(holder->ext_raw),
-                SqliteConnState<ConnT>::from_ptr(holder->conn_raw)
-            };
-        }
-        return from_context(ctx.get());
-    }
-
-    /**
-     * @brief Resolves both states directly from a sqlite3* database connection handle.
-     */
-    static State from_db(sqlite3 *db) {
-        if (!db) return State{};
-        ExtT *ext = SqliteExtState<ExtT, LockPolicy>::get(db);
-        ConnT *conn = SqliteConnState<ConnT>::get(db);
-        return State{ext, conn};
-    }
-
-    /**
-     * @brief Acquires write lock on the shared extension state component.
-     */
-    static void write_acquire(State& s) {
-        if (s.ext) SqliteExtState<ExtT, LockPolicy>::write_acquire(s.ext);
-    }
-
-    /**
-     * @brief Releases write lock on the shared extension state component.
-     */
-    static void write_release(State& s) {
-        if (s.ext) SqliteExtState<ExtT, LockPolicy>::write_release(s.ext);
-    }
-
-    /**
-     * @brief Acquires read lock on the shared extension state component.
-     */
-    static void read_acquire(State& s) {
-        if (s.ext) SqliteExtState<ExtT, LockPolicy>::read_acquire(s.ext);
-    }
-
-    /**
-     * @brief Releases read lock on the shared extension state component.
-     */
-    static void read_release(State& s) {
-        if (s.ext) SqliteExtState<ExtT, LockPolicy>::read_release(s.ext);
-    }
-
-    /**
-     * @brief RAII guard for acquiring and automatically releasing an EXCLUSIVE (write) lock.
-     */
-    class WriteGuard {
-    private:
-        typename SqliteExtState<ExtT, LockPolicy>::WriteGuard guard_;
-    public:
-        explicit WriteGuard(ExtT *ext) : guard_(ext) {}
-        explicit WriteGuard(const State &s) : guard_(s.ext) {}
-        explicit WriteGuard(const State *s) : guard_(s ? s->ext : nullptr) {}
-
-        ExtT* get() noexcept { return guard_.get(); }
-        ExtT* operator->() noexcept { return guard_.operator->(); }
-        ExtT& operator*() noexcept { return guard_.operator*(); }
-    };
-
-    /**
-     * @brief RAII guard for acquiring and automatically releasing a SHARED (read) lock.
-     */
-    class ReadGuard {
-    private:
-        typename SqliteExtState<ExtT, LockPolicy>::ReadGuard guard_;
-    public:
-        explicit ReadGuard(ExtT *ext) : guard_(ext) {}
-        explicit ReadGuard(const State &s) : guard_(s.ext) {}
-        explicit ReadGuard(const State *s) : guard_(s ? s->ext : nullptr) {}
-
-        ExtT* get() noexcept { return guard_.get(); }
-        ExtT* operator->() noexcept { return guard_.operator->(); }
-        ExtT& operator*() noexcept { return guard_.operator*(); }
-    };
-};
-
-template <typename ExtT, typename ConnT, typename LockPolicy = SqliteRwLock>
-using SqliteHybrid = SqliteHybridState<ExtT, ConnT, LockPolicy>;
+// Forward backward-compatibility include for unified hybrid state
+#include "sqlite3_hybrid_state.hpp"
 
 #endif // SQLITE3_CONN_STATE_HPP
-

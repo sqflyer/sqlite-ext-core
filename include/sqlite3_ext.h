@@ -16,6 +16,7 @@ extern "C" {
 #include "sqlite3_smart_ptr.h"
 #include "sqlite3_ext_state.h"
 #include "sqlite3_conn_state.h"
+#include "sqlite3_hybrid_state.h"
 
 #ifdef __cplusplus
 }

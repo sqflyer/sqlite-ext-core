@@ -47,7 +47,7 @@ Manual memory, resource, and lock management is the leading cause of bugs in SQL
 - **`SqliteTransaction`**: Automatically issues a `ROLLBACK;` upon destruction unless explicitly committed.
 - **`SqliteSavepoint`**: Automatically issues a `ROLLBACK TO;` upon destruction, enabling safe nested C++ transactions.
 - **`SqliteBackup`**: Guarantees the source database read-lock is lifted via `sqlite3_backup_finish` in all scope-exit scenarios.
-- **`SqliteExtState` Lock Guards**: Scope-bound `ReadGuard` and `WriteGuard` mutex lifecycles.
+- **`SqliteExtState` & `SqliteHybridState` Lock Guards**: Scope-bound `ReadGuard` and `WriteGuard` mutex lifecycles strictly applied to shared extension state.
 
 ## 4. Template Metaprogramming & Compile-Time Matrix Dispatch
 
@@ -88,6 +88,8 @@ For a deeper dive into the specific mechanics and C++ paradigms used in individu
 - [**Online Backup (`SqliteBackup`)**](docs/BACKUP_ARCHITECTURE.md): RAII wrappers for the SQLite Online Backup API to ensure safe resource disposal during long-running background tasks.
 - [**Virtual Tables (`SqliteVTable`)**](docs/VTAB_ARCHITECTURE.md): An object-oriented routing framework that maps SQLite's raw C module function pointers to safe polymorphic C++ method invocations.
 - [**Extension State**](docs/EXT_STATE_ARCHITECTURE.md): Thread-safe management of global state across multiple SQLite connections.
+- [**Connection State (`SqliteConnState`)**](docs/CONN_STATE_ARCHITECTURE.md): Zero-lock per-connection state management with DuoSTL pointer hash maps and dual-barrier Go concurrency testing.
+- [**Hybrid State (`SqliteHybridState`)**](docs/HYBRID_STATE_ARCHITECTURE.md): Decoupled dual-tier state architecture uniting per-database shared state (`ExtT`) and per-connection private state (`ConnT`) under a single 16-byte `Holder` with independent `conn(ctx)` accessors and `WriteGuard` / `ReadGuard` protection.
 - [**Smart Pointers**](docs/SMART_PTR_ARCHITECTURE.md): Exception-safe `SqliteUniquePtr` and `SqliteSharedPtr` implementations without `<memory>`.
 - [**Custom Allocators**](docs/ALLOCATOR_ARCHITECTURE.md): Hooking into SQLite's memory arena via `sqlite3_malloc64`
 
@@ -182,6 +184,9 @@ The test framework is strictly modularized by domain and isolation level:
 - **`tests/cpp_value_containers/`**: Dedicated container verification split into core mechanics (`test_value_containers.cpp`), cross-container relational matrix (`test_value_containers_comparisons.cpp`), and C++14 STL container integration (`test_value_containers_std.cpp`).
 - **`tests/threads/`**: Threading primitives, condition variables, stackful fibers (`SqliteCoroutine`), streaming generators (`SqliteFiberGenerator`), M:N schedulers (`SqliteCoroScheduler`), and multi-database extension pools (`SqliteExtCoroPool`).
 - **`tests/cpp_sql_runner/`**: Zero-STD interactive SQL script runner (`sqlite3_sql_runner.hpp`), cell partitioning (`-- %%`), and Markdown snapshot verification (`-- @snapshot`).
+- **`tests/conn_state/`**: Multi-database high-concurrency Go test harness (`concurrency.go`, `lazy_load.go`) verifying strict connection isolation ($100 + 100 \times 11 = 1200$ across 75 connections) and dynamic runtime loading.
+- **`tests/hybrid_state/`**: Dedicated Go integration suite verifying simultaneous connection isolation (200) and shared database state (3500) under `AppHybrid::WriteGuard` across 75 connections.
+- **`tests/cpp_duo/`**: DuoSTL container mechanics (`duo::HashMap`, `duo::Vector`, `duo::String`, and pure C `duo_hashmap`) ensuring freestanding container operations and zero memory leaks.
 
 
 
