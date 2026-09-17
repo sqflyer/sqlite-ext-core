@@ -1566,16 +1566,16 @@ static inline bool duo_bytes_resize(duo_bytes_t* b, size_t new_size) {
         }
         return true;
     }
+    if (duo_bytes_is_sbo(b) && new_size <= DUO_SBO_BYTES_INLINE_CAP) {
+        DUO_MEMSET(&b->m_sbo.m_sbo[cur_sz], 0, new_size - cur_sz);
+        b->m_sbo.tag.length = (uint8_t)new_size;
+        return true;
+    }
     if (!duo_bytes_reserve(b, new_size)) {
         return false;
     }
-    if (duo_bytes_is_sbo(b)) {
-        DUO_MEMSET(&b->m_sbo.m_sbo[cur_sz], 0, new_size - cur_sz);
-        b->m_sbo.tag.length = (uint8_t)new_size;
-    } else {
-        DUO_MEMSET(b->m_heap.m_data + cur_sz, 0, new_size - cur_sz);
-        b->m_heap.m_size = new_size;
-    }
+    DUO_MEMSET(b->m_heap.m_data + cur_sz, 0, new_size - cur_sz);
+    b->m_heap.m_size = new_size;
     return true;
 }
 

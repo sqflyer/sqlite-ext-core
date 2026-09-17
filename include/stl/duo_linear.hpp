@@ -2502,10 +2502,12 @@ public:
     constexpr inline StringView(const char* data, size_t size) noexcept : m_inner{data, size} {}
 
     /**
-     * @brief Constructs a string view from a null-terminated C string.
+     * @brief Constructs a string view from a null-terminated C string or pointer.
+     * Constrained to pointer types so arrays and string literals route to the dedicated array constructor.
      * @param str Null-terminated C string, or nullptr for an empty view.
      */
-    inline StringView(const char* str) noexcept : m_inner{duo_str_view_make_cstr(str)} {}
+    template <typename T, typename = enable_if_t<is_same<T, const char*>::value || is_same<T, char*>::value || is_same<T, decltype(nullptr)>::value>>
+    inline StringView(T str) noexcept : m_inner{duo_str_view_make_cstr(str)} {}
 
     /**
      * @brief Constructs a string view from a string literal or char array with compile-time deduced length.
@@ -2514,6 +2516,15 @@ public:
      */
     template <size_t N>
     constexpr inline StringView(const char (&arr)[N]) noexcept : m_inner{arr, 0} {
+        size_t len = 0;
+        while (len < N && arr[len] != '\0') {
+            ++len;
+        }
+        m_inner.size = len;
+    }
+
+    template <size_t N>
+    constexpr inline StringView(char (&arr)[N]) noexcept : m_inner{arr, 0} {
         size_t len = 0;
         while (len < N && arr[len] != '\0') {
             ++len;
