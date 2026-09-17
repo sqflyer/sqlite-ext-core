@@ -2852,12 +2852,27 @@ public:
         return *this;
     }
 
-    /** @brief Assigns from a null-terminated C string. */
+    /** @brief Assigns from an immutable null-terminated C string. */
     inline String& operator=(const char* str) noexcept {
         duo_string_clear(&m_inner);
         if (str) {
             duo_string_append(&m_inner, str);
         }
+        return *this;
+    }
+
+    /** @brief Assigns from a mutable null-terminated C string. */
+    inline String& operator=(char* str) noexcept {
+        duo_string_clear(&m_inner);
+        if (str) {
+            duo_string_append(&m_inner, str);
+        }
+        return *this;
+    }
+
+    /** @brief Assigns from nullptr (clears string). */
+    inline String& operator=(decltype(nullptr)) noexcept {
+        duo_string_clear(&m_inner);
         return *this;
     }
 
@@ -3335,6 +3350,37 @@ public:
 
     FixedString(const FixedString&) = delete;
     FixedString& operator=(const FixedString&) = delete;
+
+    /** @brief Assigns from an immutable null-terminated C string. */
+    inline FixedString& operator=(const char* str) noexcept {
+        clear();
+        if (str) {
+            append(str);
+        }
+        return *this;
+    }
+
+    /** @brief Assigns from a mutable null-terminated C string. */
+    inline FixedString& operator=(char* str) noexcept {
+        clear();
+        if (str) {
+            append(str);
+        }
+        return *this;
+    }
+
+    /** @brief Assigns from nullptr (clears string). */
+    inline FixedString& operator=(decltype(nullptr)) noexcept {
+        clear();
+        return *this;
+    }
+
+    /** @brief Assigns from a StringView. */
+    inline FixedString& operator=(StringView sv) noexcept {
+        clear();
+        append(sv);
+        return *this;
+    }
 
     /** @brief Returns the maximum character capacity (excluding null terminator). */
     inline size_t capacity() const noexcept { return m_inner.capacity; }
