@@ -7,6 +7,7 @@
 #include "direct_dispatch_context.hpp"
 #include "direct_dispatch_hub.hpp"
 #include "sqlite3_udf.hpp"
+#include "async/sqlite3_thread.hpp"
 
 // ============================================================================
 // Helpers & Test Functions
@@ -276,76 +277,89 @@ static void test_direct_context_state_resolution() {
 }
 
 // ============================================================================
-// Test 5: DirectDispatchHub Registration & duo::HashMap Scaling
-// ============================================================================
 // Test 5: DirectDispatchHub Registration, Lookup & Lifecycle
 // ============================================================================
 static void test_hub_registration_and_lookup() {
     printf("--- Running test_hub_registration_and_lookup ---\n");
 
-    DirectDispatchHub hub;
-    assert(hub.empty());
-    assert(hub.size() == 0);
-    assert(!hub.contains("add"));
+    DirectDispatchHub::clear();
+    assert(DirectDispatchHub::empty());
+    assert(DirectDispatchHub::size() == 0);
+    assert(!DirectDispatchHub::contains("add"));
 
     // Register via function pointer
-    bool ok = hub.register_function("add", raw_add_handler);
+    bool ok = DirectDispatchHub::register_function("add", raw_add_handler);
     assert(ok);
-    assert(!hub.empty());
-    assert(hub.size() == 1);
-    assert(hub.contains("add"));
+    assert(!DirectDispatchHub::empty());
+    assert(DirectDispatchHub::size() == 1);
+    assert(DirectDispatchHub::contains("add"));
 
-    DirectDispatchHub::DirectDispatchHandler h = hub.find("add");
+    DirectDispatchHub::DirectDispatchHandler h = DirectDispatchHub::find("add");
     assert(h != nullptr);
     assert(h == raw_add_handler);
 
     // Register via register_udf template
-    ok = hub.register_udf<udf_bloom_check<DirectDispatchContext, SqliteRowOwnedWrapper>>("bloom");
+    ok = DirectDispatchHub::register_udf<udf_bloom_check<DirectDispatchContext, SqliteRowOwnedWrapper>>("bloom");
     assert(ok);
-    assert(hub.size() == 2);
-    assert(hub.contains("bloom"));
+    assert(DirectDispatchHub::size() == 2);
+    assert(DirectDispatchHub::contains("bloom"));
 
     // Re-registering existing names must return false (prevents overwriting)
-    bool dup_ok = hub.register_function("add", raw_add_handler);
+    bool dup_ok = DirectDispatchHub::register_function("add", raw_add_handler);
     assert(!dup_ok);
-    dup_ok = hub.register_function(duo::String("add"), raw_add_handler);
+    dup_ok = DirectDispatchHub::register_function(duo::String("add"), raw_add_handler);
     assert(!dup_ok);
-    dup_ok = hub.register_function(duo::StringView("add"), raw_add_handler);
+    dup_ok = DirectDispatchHub::register_function(duo::StringView("add"), raw_add_handler);
     assert(!dup_ok);
-    dup_ok = hub.register_udf<udf_bloom_check<DirectDispatchContext, SqliteRowOwnedWrapper>>("bloom");
+    dup_ok = DirectDispatchHub::register_udf<udf_bloom_check<DirectDispatchContext, SqliteRowOwnedWrapper>>("bloom");
     assert(!dup_ok);
-    assert(hub.size() == 2); // Size must remain unchanged
+    assert(DirectDispatchHub::size() == 2); // Size must remain unchanged
 
     // Not found check
-    assert(hub.find("nonexistent") == nullptr);
-    assert(!hub.contains("nonexistent"));
+    assert(DirectDispatchHub::find("nonexistent") == nullptr);
+    assert(!DirectDispatchHub::contains("nonexistent"));
 
     // Dynamic scaling beyond 128 items (verifying duo::HashMap Robin Hood rehashing)
     char name_buf[64][32];
     for (int i = 0; i < 64; ++i) {
         snprintf(name_buf[i], sizeof(name_buf[i]), "func_%d", i);
-        bool reg_ok = hub.register_function(name_buf[i], raw_add_handler);
+        bool reg_ok = DirectDispatchHub::register_function(name_buf[i], raw_add_handler);
         assert(reg_ok);
     }
-    assert(hub.size() == 66);
+    assert(DirectDispatchHub::size() == 66);
 
     for (int i = 0; i < 64; ++i) {
-        assert(hub.contains(name_buf[i]));
-        DirectDispatchHub::DirectDispatchHandler f = hub.find(name_buf[i]);
+        assert(DirectDispatchHub::contains(name_buf[i]));
+        DirectDispatchHub::DirectDispatchHandler f = DirectDispatchHub::find(name_buf[i]);
         assert(f != nullptr);
         assert(f == raw_add_handler);
     }
 
-    // Erase test
-    assert(hub.erase("add"));
-    assert(!hub.contains("add"));
-    assert(hub.find("add") == nullptr);
-    assert(hub.size() == 65);
+    // Erase / Unregister tests
+    assert(DirectDispatchHub::erase("add"));
+    assert(!DirectDispatchHub::contains("add"));
+    assert(DirectDispatchHub::find("add") == nullptr);
+    assert(DirectDispatchHub::size() == 65);
+
+    // Unregister function test
+    assert(DirectDispatchHub::unregister_function(name_buf[0]));
+    assert(!DirectDispatchHub::contains(name_buf[0]));
+    assert(DirectDispatchHub::size() == 64);
+
+    // Unregister alias test
+    assert(DirectDispatchHub::unregister(name_buf[1]));
+    assert(!DirectDispatchHub::contains(name_buf[1]));
+    assert(DirectDispatchHub::size() == 63);
+
+    // Unregister UDF test
+    assert(DirectDispatchHub::unregister_udf("bloom"));
+    assert(!DirectDispatchHub::contains("bloom"));
+    assert(DirectDispatchHub::size() == 62);
 
     // Clear test
-    hub.clear();
-    assert(hub.empty());
-    assert(hub.size() == 0);
+    DirectDispatchHub::clear();
+    assert(DirectDispatchHub::empty());
+    assert(DirectDispatchHub::size() == 0);
 
     printf("test_hub_registration_and_lookup: PASSED\n");
 }
@@ -356,13 +370,13 @@ static void test_hub_registration_and_lookup() {
 static void test_hub_dispatch_and_stack_allocation() {
     printf("--- Running test_hub_dispatch_and_stack_allocation ---\n");
 
-    DirectDispatchHub hub;
-    hub.register_function("add", raw_add_handler);
-    hub.register_udf<udf_bloom_check<DirectDispatchContext, SqliteRowOwnedWrapper>>("bloom_check");
+    DirectDispatchHub::clear();
+    DirectDispatchHub::register_function("add", raw_add_handler);
+    DirectDispatchHub::register_udf<udf_bloom_check<DirectDispatchContext, SqliteRowOwnedWrapper>>("bloom_check");
 
     // Dispatch "add" with 2 arguments (allocated on stack via withSqliteRowOwned)
     DirectDispatchContext ctx;
-    bool ok = hub.dispatch("add", 2, [](SqliteRowOwnedWrapper row) {
+    bool ok = DirectDispatchHub::dispatch("add", 2, [](SqliteRowOwnedWrapper row) {
         row[0] = 100LL;
         row[1] = 250LL;
     }, &ctx);
@@ -372,7 +386,7 @@ static void test_hub_dispatch_and_stack_allocation() {
     assert(ctx.result().as_int64() == 350LL);
 
     // Dispatch "bloom_check" with 2 arguments
-    ok = hub.dispatch("bloom_check", 2, [](SqliteRowOwnedWrapper row) {
+    ok = DirectDispatchHub::dispatch("bloom_check", 2, [](SqliteRowOwnedWrapper row) {
         row[0] = "users";
         row[1] = 1002;
     }, &ctx);
@@ -382,7 +396,7 @@ static void test_hub_dispatch_and_stack_allocation() {
     assert(ctx.result().as_int() == 1); // Starts with 'u' and 1002 is even
 
     // Negative match check
-    ok = hub.dispatch("bloom_check", 2, [](SqliteRowOwnedWrapper row) {
+    ok = DirectDispatchHub::dispatch("bloom_check", 2, [](SqliteRowOwnedWrapper row) {
         row[0] = "orders";
         row[1] = 1002;
     }, &ctx);
@@ -390,13 +404,13 @@ static void test_hub_dispatch_and_stack_allocation() {
     assert(ctx.result().as_int() == 0); // Starts with 'o'
 
     // Function not found check
-    ok = hub.dispatch("missing_fn", 2, [](SqliteRowOwnedWrapper) {}, &ctx);
+    ok = DirectDispatchHub::dispatch("missing_fn", 2, [](SqliteRowOwnedWrapper) {}, &ctx);
     assert(!ok);
     assert(ctx.is_error());
     assert(ctx.error_code() == SQLITE_NOTFOUND);
 
     // Stack argument arity testing (N = 0, 1, 4, 8, 16, and fallback >16)
-    hub.register_function("sum_all", [](DirectDispatchContext& c, SqliteRowOwnedWrapper args) {
+    DirectDispatchHub::register_function("sum_all", [](DirectDispatchContext& c, SqliteRowOwnedWrapper args) {
         sqlite3_int64 total = 0;
         for (int i = 0; i < args.size(); ++i) {
             total += args[i].as_int64();
@@ -405,29 +419,29 @@ static void test_hub_dispatch_and_stack_allocation() {
     });
 
     // 0 args
-    ok = hub.dispatch("sum_all", 0, [](SqliteRowOwnedWrapper) {}, &ctx);
+    ok = DirectDispatchHub::dispatch("sum_all", 0, [](SqliteRowOwnedWrapper) {}, &ctx);
     assert(ok && ctx.result().as_int64() == 0);
 
     // 4 args
-    ok = hub.dispatch("sum_all", 4, [](SqliteRowOwnedWrapper row) {
+    ok = DirectDispatchHub::dispatch("sum_all", 4, [](SqliteRowOwnedWrapper row) {
         for (int i = 0; i < 4; ++i) row[i] = 10;
     }, &ctx);
     assert(ok && ctx.result().as_int64() == 40);
 
     // 8 args
-    ok = hub.dispatch("sum_all", 8, [](SqliteRowOwnedWrapper row) {
+    ok = DirectDispatchHub::dispatch("sum_all", 8, [](SqliteRowOwnedWrapper row) {
         for (int i = 0; i < 8; ++i) row[i] = 5;
     }, &ctx);
     assert(ok && ctx.result().as_int64() == 40);
 
     // 16 args
-    ok = hub.dispatch("sum_all", 16, [](SqliteRowOwnedWrapper row) {
+    ok = DirectDispatchHub::dispatch("sum_all", 16, [](SqliteRowOwnedWrapper row) {
         for (int i = 0; i < 16; ++i) row[i] = 2;
     }, &ctx);
     assert(ok && ctx.result().as_int64() == 32);
 
     // 20 args (triggers heap fallback > 16)
-    ok = hub.dispatch("sum_all", 20, [](SqliteRowOwnedWrapper row) {
+    ok = DirectDispatchHub::dispatch("sum_all", 20, [](SqliteRowOwnedWrapper row) {
         for (int i = 0; i < 20; ++i) row[i] = 1;
     }, &ctx);
     assert(ok && ctx.result().as_int64() == 20);
@@ -437,33 +451,34 @@ static void test_hub_dispatch_and_stack_allocation() {
     SqliteRowOwnedWrapper row_span(arr, 2);
 
     // const char* invoke
-    ok = hub.invoke("add", ctx, row_span);
+    ok = DirectDispatchHub::invoke("add", ctx, row_span);
     assert(ok && ctx.result().as_int64() == 100LL);
 
     // duo::String invoke
     duo::String str_add("add");
-    ok = hub.invoke(str_add, ctx, row_span);
+    ok = DirectDispatchHub::invoke(str_add, ctx, row_span);
     assert(ok && ctx.result().as_int64() == 100LL);
 
     // duo::StringView invoke
     duo::StringView sv_add("add");
-    ok = hub.invoke(sv_add, ctx, row_span);
+    ok = DirectDispatchHub::invoke(sv_add, ctx, row_span);
     assert(ok && ctx.result().as_int64() == 100LL);
 
     // dispatch() with duo::String
-    ok = hub.dispatch(str_add, 2, [](SqliteRowOwnedWrapper row) {
+    ok = DirectDispatchHub::dispatch(str_add, 2, [](SqliteRowOwnedWrapper row) {
         row[0] = 50LL;
         row[1] = 75LL;
     }, &ctx);
     assert(ok && ctx.result().as_int64() == 125LL);
 
     // dispatch() with duo::StringView
-    ok = hub.dispatch(sv_add, 2, [](SqliteRowOwnedWrapper row) {
+    ok = DirectDispatchHub::dispatch(sv_add, 2, [](SqliteRowOwnedWrapper row) {
         row[0] = 30LL;
         row[1] = 40LL;
     }, &ctx);
     assert(ok && ctx.result().as_int64() == 70LL);
 
+    DirectDispatchHub::clear();
     printf("test_hub_dispatch_and_stack_allocation: PASSED\n");
 }
 
@@ -478,11 +493,11 @@ static void test_dual_udf_compatibility() {
     assert(rc == SQLITE_OK && db != nullptr);
 
     // 1. DirectDispatchHub registration and in-memory execution
-    DirectDispatchHub hub;
-    hub.register_udf<udf_bloom_check<DirectDispatchContext, SqliteRowOwnedWrapper>>("bloom_check");
+    DirectDispatchHub::clear();
+    DirectDispatchHub::register_udf<udf_bloom_check<DirectDispatchContext, SqliteRowOwnedWrapper>>("bloom_check");
 
     DirectDispatchContext dctx(db);
-    bool ok = hub.dispatch("bloom_check", 2, [](SqliteRowOwnedWrapper row) {
+    bool ok = DirectDispatchHub::dispatch("bloom_check", 2, [](SqliteRowOwnedWrapper row) {
         row[0] = "users";
         row[1] = 1002;
     }, &dctx);
@@ -490,12 +505,12 @@ static void test_dual_udf_compatibility() {
     int direct_res = dctx.result().as_int();
     assert(direct_res == 1);
 
-    // Verify multiple database connections sharing the EXACT same hub instance
+    // Verify multiple database connections sharing the EXACT same static hub
     sqlite3* db2 = nullptr;
     rc = sqlite3_open(":memory:", &db2);
     assert(rc == SQLITE_OK && db2 != nullptr);
     DirectDispatchContext dctx2(db2);
-    ok = hub.dispatch("bloom_check", 2, [](SqliteRowOwnedWrapper row) {
+    ok = DirectDispatchHub::dispatch("bloom_check", 2, [](SqliteRowOwnedWrapper row) {
         row[0] = "users";
         row[1] = 1002;
     }, &dctx2);
@@ -529,7 +544,76 @@ static void test_dual_udf_compatibility() {
     sqlite3_finalize(stmt);
 
     sqlite3_close(db);
+    DirectDispatchHub::clear();
     printf("test_dual_udf_compatibility: PASSED\n");
+}
+
+// ============================================================================
+// Test 8: DirectDispatchHub Multithreaded Concurrency Stress Test
+// ============================================================================
+static void test_hub_multithreaded_concurrency() {
+    printf("--- Running test_hub_multithreaded_concurrency ---\n");
+
+    DirectDispatchHub::clear();
+    // Pre-register a common function
+    DirectDispatchHub::register_function("add", [](DirectDispatchContext& ctx, SqliteRowOwnedWrapper args) {
+        if (args.size() >= 2) {
+            ctx.result_int64(args[0].as_int64() + args[1].as_int64());
+        }
+    });
+
+    constexpr int NUM_THREADS = 8;
+    constexpr int OPS_PER_THREAD = 50;
+    SqliteThread threads[NUM_THREADS];
+
+    for (int t = 0; t < NUM_THREADS; ++t) {
+        threads[t] = SqliteThread([t]() {
+            char name_buf[64];
+            for (int i = 0; i < OPS_PER_THREAD; ++i) {
+                snprintf(name_buf, sizeof(name_buf), "fn_%d_%d", t, i);
+                // Concurrent register
+                bool reg_ok = DirectDispatchHub::register_function(name_buf, [](DirectDispatchContext& ctx, SqliteRowOwnedWrapper args) {
+                    if (args.size() >= 1) {
+                        ctx.result_int(args[0].as_int() * 2);
+                    }
+                });
+                assert(reg_ok);
+
+                // Concurrent lookup & dispatch on pre-registered function
+                DirectDispatchContext ctx;
+                bool disp_ok = DirectDispatchHub::dispatch("add", 2, [](SqliteRowOwnedWrapper row) {
+                    row[0] = 10;
+                    row[1] = 20;
+                }, &ctx);
+                assert(disp_ok && ctx.result().as_int64() == 30);
+
+                // Concurrent lookup & dispatch on newly registered function
+                disp_ok = DirectDispatchHub::dispatch(name_buf, 1, [](SqliteRowOwnedWrapper row) {
+                    row[0] = 21;
+                }, &ctx);
+                assert(disp_ok && ctx.result().as_int() == 42);
+
+                assert(DirectDispatchHub::contains(name_buf));
+            }
+
+            // Concurrent erase
+            for (int i = 0; i < OPS_PER_THREAD; ++i) {
+                snprintf(name_buf, sizeof(name_buf), "fn_%d_%d", t, i);
+                bool erased = DirectDispatchHub::erase(name_buf);
+                assert(erased);
+                assert(!DirectDispatchHub::contains(name_buf));
+            }
+        });
+    }
+
+    for (int t = 0; t < NUM_THREADS; ++t) {
+        threads[t].join();
+    }
+
+    assert(DirectDispatchHub::size() == 1);
+    assert(DirectDispatchHub::contains("add"));
+    DirectDispatchHub::clear();
+    printf("test_hub_multithreaded_concurrency: PASSED\n");
 }
 
 // ============================================================================
@@ -547,6 +631,7 @@ int main() {
     test_hub_registration_and_lookup();
     test_hub_dispatch_and_stack_allocation();
     test_dual_udf_compatibility();
+    test_hub_multithreaded_concurrency();
 
     printf("================================================================\n");
     printf("ALL DIRECT DISPATCH CONTEXT & HUB TESTS PASSED SUCCESSFULLY!\n");

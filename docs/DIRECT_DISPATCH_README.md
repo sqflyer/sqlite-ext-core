@@ -43,12 +43,12 @@ static void add_handler(DirectDispatchContext& ctx, SqliteRowOwnedWrapper args) 
 }
 
 void demo_basic_dispatch() {
-    DirectDispatchHub hub;
-    hub.register_function("add", add_handler);
+    // Register function into the global static hub:
+    DirectDispatchHub::register_function("add", add_handler);
 
-    // Dispatch with 2 stack-allocated arguments
+    // Dispatch with 2 stack-allocated arguments:
     DirectDispatchContext ctx;
-    bool ok = hub.dispatch("add", 2, [](SqliteRowOwnedWrapper row) {
+    bool ok = DirectDispatchHub::dispatch("add", 2, [](SqliteRowOwnedWrapper row) {
         row[0] = 100LL;
         row[1] = 250LL;
     }, &ctx);
@@ -84,9 +84,9 @@ void udf_bloom_check(Context& ctx, Args args) {
     ctx.result_int(match ? 1 : 0);
 }
 
-void register_dual_udf(sqlite3* db, DirectDispatchHub& hub) {
-    // 1. Register for Direct In-Process C++ Dispatch
-    hub.register_udf<udf_bloom_check<DirectDispatchContext, SqliteRowOwnedWrapper>>("bloom_check");
+void register_dual_udf(sqlite3* db) {
+    // 1. Register for Direct In-Process C++ Dispatch (cross-extension static registry)
+    DirectDispatchHub::register_udf<udf_bloom_check<DirectDispatchContext, SqliteRowOwnedWrapper>>("bloom_check");
 
     // 2. Register for Standard SQLite SQL Queries (VDBE)
     SqliteUdf::define(db, "bloom_check", 2, [](SqliteContext& ctx, SqliteUdfArgs args) {
@@ -102,7 +102,7 @@ void register_dual_udf(sqlite3* db, DirectDispatchHub& hub) {
 When argument values are already held in a span or vector, use `invoke()` to bypass stack allocation:
 
 ```cpp
-void demo_invoke(DirectDispatchHub& hub) {
+void demo_invoke() {
     DirectDispatchContext ctx;
 
     SqliteValueOwned args[2] = {
@@ -111,7 +111,7 @@ void demo_invoke(DirectDispatchHub& hub) {
     };
     SqliteRowOwnedWrapper row_span(args, 2);
 
-    if (hub.invoke("add", ctx, row_span)) {
+    if (DirectDispatchHub::invoke("add", ctx, row_span)) {
         printf("Sum: %lld\n", ctx.result().as_int64()); // 100
     }
 }
@@ -124,21 +124,21 @@ void demo_invoke(DirectDispatchHub& hub) {
 `DirectDispatchHub` seamlessly interoperates with zero-copy string views and DuoSTL strings:
 
 ```cpp
-void demo_string_overloads(DirectDispatchHub& hub, DirectDispatchContext& ctx) {
+void demo_string_overloads(DirectDispatchContext& ctx) {
     // const char*
-    hub.dispatch("add", 2, [](SqliteRowOwnedWrapper row) {
+    DirectDispatchHub::dispatch("add", 2, [](SqliteRowOwnedWrapper row) {
         row[0] = 10; row[1] = 20;
     }, &ctx);
 
     // duo::String
     duo::String str_name("add");
-    hub.dispatch(str_name, 2, [](SqliteRowOwnedWrapper row) {
+    DirectDispatchHub::dispatch(str_name, 2, [](SqliteRowOwnedWrapper row) {
         row[0] = 10; row[1] = 20;
     }, &ctx);
 
     // duo::StringView (zero-copy string slice)
     duo::StringView sv_name("add");
-    hub.dispatch(sv_name, 2, [](SqliteRowOwnedWrapper row) {
+    DirectDispatchHub::dispatch(sv_name, 2, [](SqliteRowOwnedWrapper row) {
         row[0] = 10; row[1] = 20;
     }, &ctx);
 }
@@ -176,13 +176,12 @@ Instead of routing Lua function calls through SQL statements (`db:exec("SELECT m
 ```cpp
 // Generic Lua C-API dispatcher: my_ext.call("function_name", arg1, arg2, ...)
 static int lua_direct_dispatch(lua_State* L) {
-    DirectDispatchHub* hub = static_cast<DirectDispatchHub*>(lua_touserdata(L, lua_upvalueindex(1)));
-    sqlite3* db = static_cast<sqlite3*>(lua_touserdata(L, lua_upvalueindex(2)));
+    sqlite3* db = static_cast<sqlite3*>(lua_touserdata(L, lua_upvalueindex(1)));
     const char* func_name = luaL_checkstring(L, 1);
     int argc = lua_gettop(L) - 1; // Number of arguments passed from Lua
 
     DirectDispatchContext ctx(db);
-    bool ok = hub->dispatch(func_name, argc, [&](SqliteRowOwnedWrapper row) {
+    bool ok = DirectDispatchHub::dispatch(func_name, argc, [&](SqliteRowOwnedWrapper row) {
         for (int i = 0; i < argc; ++i) {
             int lua_idx = i + 2;
             int type = lua_type(L, lua_idx);
@@ -247,6 +246,7 @@ static int lua_direct_dispatch(lua_State* L) {
 | `user_data()` | `void* user_data() const noexcept` | Retrieves bound user data pointer. |
 | `state<T>()` | `T* state() noexcept` | Resolves per-database shared state via `SqliteExtState<T>`. |
 | `conn_state<T>()` | `T* conn_state() noexcept` | Resolves per-connection private state via `SqliteConnState<T>`. |
+| `hybrid_state<Ext, Conn, LockPolicy>()` | `auto hybrid_state() noexcept` | Resolves unified hybrid state (shared per-db + private per-connection). |
 | `result_int(int)` | `void result_int(int val) noexcept` | Sets 32-bit integer result. |
 | `result_int64(int64)` | `void result_int64(sqlite3_int64 val) noexcept` | Sets 64-bit integer result. |
 | `result_double(double)` | `void result_double(double val) noexcept` | Sets IEEE-754 double precision result. |
@@ -261,17 +261,21 @@ static int lua_direct_dispatch(lua_State* L) {
 
 ---
 
-### 3.2 `DirectDispatchHub`
+### 3.2 `DirectDispatchHub` (Static Class)
+
+`DirectDispatchHub` is a purely static utility class (`DirectDispatchHub() = delete;`) providing a centralized registry where all extensions built with `sqlite-ext-core` can register their functions. All internal registry access is synchronized with an atomic `SqliteTinyLock`, while handler execution runs lock-free.
 
 | Method | Signature | Description |
 | :--- | :--- | :--- |
-| `DirectDispatchHub` | `explicit DirectDispatchHub() noexcept` | Constructs stateless hub shared across database connections. |
-| `register_function` | `bool register_function(Name, DirectDispatchHandler)` | Registers raw function pointer with `const char*`, `duo::String`, or `duo::StringView`. |
-| `register_udf<Fn>` | `bool register_udf<Fn>(Name)` | Registers templated or free function via non-type template parameter. |
-| `find` | `DirectDispatchHandler find(Name) const noexcept` | O(1) Robin Hood hash lookup returning function pointer or `nullptr`. |
-| `contains` | `bool contains(Name) const noexcept` | Checks if function is registered. |
-| `dispatch` | `bool dispatch(Name, int argc, ArgFiller&&, DirectDispatchContext*)` | Stack-allocates `argc` arguments via `withSqliteRowOwned` and dispatches handler. |
-| `invoke` | `bool invoke(Name, DirectDispatchContext&, SqliteRowOwnedWrapper)` | Invokes handler using pre-existing argument wrapper span. |
-| `erase` | `bool erase(Name) noexcept` | Removes a registered function from registry. |
-| `size()` / `empty()` | `size_t size() const`, `bool empty() const` | Returns registry item count / emptiness. |
-| `clear()` | `void clear() noexcept` | Clears all registered functions from registry. |
+| `register_function` | `static bool register_function(Name, DirectDispatchHandler)` | Thread-safely registers raw function pointer (`const char*`, `duo::String`, or `duo::StringView`). Returns `false` if already registered. |
+| `register_udf<Fn>` | `static bool register_udf<Fn>(Name)` | Thread-safely registers templated or free function via non-type template parameter. |
+| `unregister_function` | `static bool unregister_function(Name) noexcept` | Thread-safely unregisters a function by name. |
+| `unregister` | `static bool unregister(Name) noexcept` | Alias for `unregister_function`. |
+| `unregister_udf` | `static bool unregister_udf(Name) noexcept` | Template/alias for unregistering UDFs. |
+| `find` | `static DirectDispatchHandler find(Name) noexcept` | O(1) Robin Hood hash lookup returning function pointer or `nullptr`. |
+| `contains` | `static bool contains(Name) noexcept` | Checks if function is currently registered. |
+| `dispatch` | `static bool dispatch(Name, int argc, ArgFiller&&, DirectDispatchContext*)` | Stack-allocates `argc` arguments via `withSqliteRowOwned` and dispatches handler outside locks. |
+| `invoke` | `static bool invoke(Name, DirectDispatchContext&, SqliteRowOwnedWrapper)` | Invokes handler using pre-existing argument wrapper span outside locks. |
+| `erase` | `static bool erase(Name) noexcept` | Removes a registered function from the registry. |
+| `size()` / `empty()` | `static size_t size()`, `static bool empty()` | Returns registry item count / emptiness. |
+| `clear()` | `static void clear() noexcept` | Clears all registered functions from the global registry. |

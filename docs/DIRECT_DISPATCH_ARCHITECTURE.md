@@ -196,6 +196,7 @@ A central design pillar of the framework is **Dual-Execution Compatibility**: en
 | **Error Handling** | Sets VDBE error flag & message | Records error code & message in-situ |
 | **Shared State** | `ctx.state<T>()` via `SqliteExtState` | `ctx.state<T>()` via `SqliteExtState` |
 | **Conn State** | `ctx.conn_state<T>()` via `SqliteConnState` | `ctx.conn_state<T>()` via `SqliteConnState` |
+| **Hybrid State** | `ctx.hybrid_state<Ext, Conn, LockPolicy>()` | `ctx.hybrid_state<Ext, Conn, LockPolicy>()` |
 | **DB Handle** | `ctx.db()` returns `sqlite3*` | `ctx.db()` returns `sqlite3*` |
 | **Subtypes** | `sqlite3_result_subtype()` | Stored in `SqliteValueOwned` subtag byte |
 | **Memory Cleanup** | Handled by VDBE instruction cleanup | Handled by stack frame unwinding |
@@ -205,27 +206,62 @@ A central design pillar of the framework is **Dual-Execution Compatibility**: en
 When instantiating `register_udf`, specify the plain context type without reference qualifiers:
 ```cpp
 // RECOMMENDED:
-hub.register_udf<udf_fn<DirectDispatchContext, SqliteRowOwnedWrapper>>("name");
+DirectDispatchHub::register_udf<udf_fn<DirectDispatchContext, SqliteRowOwnedWrapper>>("name");
 
 // AVOID (Redundant reference qualifier):
-hub.register_udf<udf_fn<DirectDispatchContext&, SqliteRowOwnedWrapper>>("name");
+DirectDispatchHub::register_udf<udf_fn<DirectDispatchContext&, SqliteRowOwnedWrapper>>("name");
 ```
 Because `udf_fn` takes `Context& ctx`, specifying `Context = DirectDispatchContext` causes the parameter to deduce cleanly as `DirectDispatchContext& ctx`.
 
 ---
 
-## 5. Registry & Dispatcher Architecture (`DirectDispatchHub`)
+## 5. Static Registry & Dispatcher Architecture (`DirectDispatchHub`)
 
-### 5.1 Internal Container: DuoSTL Robin Hood Hash Map
+### 5.1 Pure Static Hub Design
+
+`DirectDispatchHub` is engineered as a pure static class (`DirectDispatchHub() = delete;`). All extension libraries dynamically or statically linked against `sqlite-ext-core` register their functions directly to the shared static hub:
+
+```cpp
+class DirectDispatchHub {
+private:
+    using RegistryMap = duo::HashMap<duo::String, DirectDispatchHandler>;
+    static RegistryMap s_registry;
+    static SqliteTinyLock s_lock;
+    // ...
+};
+```
+
+### 5.2 Thread-Safe Concurrency Model (`SqliteTinyLock`)
+
+Registry operations are protected using an atomic spinlock (`SqliteTinyLock`):
+- **Map Mutations**: Adding (`register_function`, `register_udf`), unregistering (`unregister_function`, `unregister`, `unregister_udf`), and clearing (`clear()`) acquire `s_lock` exclusively.
+- **Handler Lookup**: Dispatching (`dispatch`, `invoke`) acquires `s_lock` only long enough to copy the function pointer from `duo::HashMap`.
+- **Lock-Free Handler Execution**: Once the function pointer is retrieved, `s_lock` is immediately released. The user handler executes completely lock-free, ensuring concurrent execution across multiple worker threads does not contend on the registry lock.
+
+### 5.3 Dynamic Registration & Unregistration APIs
+
+`DirectDispatchHub` provides symmetrical registration and unregistration interfaces:
+
+| Operation | Method Signature | Description |
+| :--- | :--- | :--- |
+| **Register Raw** | `DirectDispatchHub::register_function(name, handler)` | Registers a raw `DirectDispatchHandler` function pointer. |
+| **Register UDF** | `DirectDispatchHub::register_udf<Fn>(name)` | Compiles a templated UDF bridge into a dispatch handler. |
+| **Unregister Raw** | `DirectDispatchHub::unregister_function(name)` | Removes a handler by name. Returns `true` if found and erased. |
+| **Unregister Alias**| `DirectDispatchHub::unregister(name)` | Convenience alias for `unregister_function`. |
+| **Unregister UDF** | `DirectDispatchHub::unregister_udf<Fn>(name)` | Unregisters a registered UDF bridge by name. |
+| **Clear Registry** | `DirectDispatchHub::clear()` | Clears all registered functions from the hub. |
+| **Inspection** | `size()`, `empty()`, `contains(name)` | Thread-safe inspection queries under `s_lock`. |
+
+### 5.4 Internal Container: DuoSTL Robin Hood Hash Map
 
 `DirectDispatchHub` uses `duo::HashMap<duo::String, DirectDispatchHandler>` for function registration and lookup:
 
 - **Freestanding C++17**: Compiled with zero standard library headers (`-nostdlib++`).
 - **Robin Hood Open Addressing**: Uses Distance-to-Initial-Bucket (DIB) displacement algorithm to guarantee tight probe-length variance ($O(1)$ lookup).
-- **Zero-Tombstone Backward-Shift Deletion**: Removing entries via `erase()` performs backward-shifting rather than inserting tombstone markers, preserving optimal query performance across heavy churn.
+- **Zero-Tombstone Backward-Shift Deletion**: Removing entries via `erase()` / `unregister()` performs backward-shifting rather than inserting tombstone markers, preserving optimal query performance across heavy churn.
 - **xxHash3 Hashing**: Computes 64-bit non-cryptographic hashes with SIMD-vectorized throughput.
 
-### 5.2 Uniform Overload Strategy
+### 5.5 Uniform Overload Strategy
 
 To maximize caller flexibility and avoid unnecessary string copying, all entry-point methods provide three uniform overloads:
 
@@ -235,13 +271,13 @@ To maximize caller flexibility and avoid unnecessary string copying, all entry-p
 
 Internally, dispatch and invoke route into centralized implementation helpers:
 ```cpp
-dispatch(const char*, ...)      ──┐
-dispatch(const duo::String&, ...) ──┼──► dispatch_impl(find(name), argc, filler, out_ctx)
-dispatch(duo::StringView, ...)  ──┘
+dispatch(const char*, ...)        ──┐
+dispatch(const duo::String&, ...) ──┼──► dispatch_impl(find_handler(name), argc, filler, out_ctx)
+dispatch(duo::StringView, ...)    ──┘
 
-invoke(const char*, ...)        ──┐
-invoke(const duo::String&, ...)   ──┼──► invoke_impl(find(name), ctx, args)
-invoke(duo::StringView, ...)    ──┘
+invoke(const char*, ...)          ──┐
+invoke(const duo::String&, ...)   ──┼──► invoke_impl(find_handler(name), ctx, args)
+invoke(duo::StringView, ...)      ──┘
 ```
 
 ---

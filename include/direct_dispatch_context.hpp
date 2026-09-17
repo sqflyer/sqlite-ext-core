@@ -105,6 +105,38 @@ public:
         return nullptr;
     }
 
+    /**
+     * @brief Resolves per-connection private state component from a hybrid state context.
+     *
+     * @tparam ExtState Shared per-database state struct type.
+     * @tparam ConnState Unique per-connection state struct type.
+     * @tparam LockPolicy Concurrency lock policy for shared state (defaults to SqliteRwLock).
+     * @return ConnState* pointer or nullptr.
+     */
+    template <typename ExtState, typename ConnState, typename LockPolicy = SqliteRwLock>
+    inline ConnState* hybrid_conn() const noexcept {
+        if (m_db) {
+            return SqliteHybridState<ExtState, ConnState, LockPolicy>::conn(m_db);
+        }
+        return nullptr;
+    }
+
+    /**
+     * @brief Resolves shared per-database state component from a hybrid state context.
+     *
+     * @tparam ExtState Shared per-database state struct type.
+     * @tparam ConnState Unique per-connection state struct type.
+     * @tparam LockPolicy Concurrency lock policy for shared state (defaults to SqliteRwLock).
+     * @return ExtState* pointer or nullptr.
+     */
+    template <typename ExtState, typename ConnState, typename LockPolicy = SqliteRwLock>
+    inline ExtState* hybrid_ext() const noexcept {
+        if (m_db) {
+            return SqliteHybridState<ExtState, ConnState, LockPolicy>::ext(m_db);
+        }
+        return nullptr;
+    }
+
     // ========================================================================
     // Result Setters - Primitives (SqliteContext 1:1 Parity)
     // ========================================================================
