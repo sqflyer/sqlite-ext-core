@@ -39,6 +39,27 @@ When SQLite executes queries or passes arguments to User-Defined Functions (UDFs
 └───────────────────────────────────────────────────────────────────────────────────────┘
 ```
 
+### 1.1 Why Both `SqliteValueView` (8B) and `SqliteValueOwned` (24B) Coexist
+
+A natural question in systems architecture arises: *If `SqliteValueOwned` can directly borrow from `sqlite3_value*` with zero heap allocations via `borrow_from_sqlite3_val()`, why does `SqliteValueView` exist at all?*
+
+The answer lies in the fundamental distinction between **ephemeral zero-instruction observation** and **stateful polymorphic value containment**:
+
+| Architectural Dimension | `SqliteValueView` (8 Bytes) | `SqliteValueOwned` (24 Bytes) |
+| :--- | :--- | :--- |
+| **Physical Representation** | Single 64-bit pointer (`const sqlite3_value*`) | 24-byte multi-representation union + tag registers |
+| **Construction Overhead** | **0 cycles (0 ns)** — identical to copying a raw register | **5–15 instructions** — inspects type/bytes, writes SBO tag |
+| **Evaluation Strategy** | **100% Lazy**: Type, bytes, and payload extracted only when queried | **Eager**: Discriminator unpacked and bound immediately |
+| **SQLite Engine Binding** | **Tied to SQLite VDBE**: Requires valid `sqlite3_value*` | **Engine-Independent**: Freestanding container (Direct Dispatch, Lua, RPC) |
+| **Associative Lookup Probes** | **Optimal `is_transparent` probe key** in `std::map` without allocation | Stored persistent key/value container |
+| **Tabular Row Projections** | Backs `SqliteRowView` zero-copy column arrays | Backs `SqliteValueTuple<N>` and `SqliteValueVec<N>` rows |
+| **Lifecycle & Mutability** | Ephemeral, strictly read-only within statement/UDF scope | RAII-managed, re-assignable (`operator=`), escalatable (`.clone()`) |
+
+#### Deep Systems Rationale:
+1. **Zero-Instruction Call Boundary Overhead**: When a UDF receives multiple arguments (`argv[0] ... argv[N-1]`), wrapping them in `SqliteValueView` compiles into literal register moves (`mov rdi, [rsi + rcx*8]`). In contrast, eagerly constructing a `SqliteValueOwned` (even borrowed) for every parameter forces calling `sqlite3_value_type`, `sqlite3_value_bytes`, checking SBO limits, and packing tags—wasting CPU cycles on arguments that might never be read by the UDF's branching logic.
+2. **Transparent Query Probes in Associative Maps**: Heterogeneous map lookups (`std::map<SqliteValueOwned, T, std::less<>>` or Swiss Tables) enable querying existing maps using `SqliteValueView` directly. `view` acts as a zero-allocation, 8-byte probe key, avoiding the 24-byte stack allocation and type-unpacking cost entirely.
+3. **Container Compatibility**: C++ standard containers (`duo::Vector`, arrays) and composite key tuples (`SqliteValueTuple<N>`) cannot safely store transient raw pointers that SQLite's VDBE might invalidate on the next opcode. They require `SqliteValueOwned` to enforce RAII lifecycle, value semantics, and ownership escalation.
+
 ---
 
 ## 2. Mathematical Lower Bound & 24-Byte Alignment on 64-Bit Platforms
@@ -168,18 +189,48 @@ Byte Offset:  0                               15  16  17          21  22      23
 
 ### Zero-Copy Borrowed Buffers (`is_borrowed`)
 
-`SqliteValueOwned` provides zero-allocation adoption of externally owned buffers:
+`SqliteValueOwned` provides zero-allocation adoption of externally owned buffers through dedicated static factory methods:
 - `from_borrowed_text(const char* text, int len = -1, uint8_t subtype = SQLITE_SUBTYPE_NONE)`
 - `from_borrowed_blob(const void* data, int len, uint8_t subtype = SQLITE_SUBTYPE_NONE)`
+- `borrow_from_sqlite3_val(const sqlite3_value* val)`
+- `borrow_from_value_view(const SqliteValueView& view)`
+- Shorthand aliases: `brrow_from_sqlite3_val`, `brrow_from_value_view`
 
-If the payload fits within inline SBO limits ($\le 21\text{B}$ text, $\le 22\text{B}$ blob), it is copied directly into `m_inline.buf`. If it exceeds inline limits, it points directly to the external buffer via `payload.pData` and sets `is_borrowed = true`. When destructed, `free_heap()` skips calling `sqlite3_free()`. Calling `.clone()` or `.try_clone()` promotes a borrowed value to an owned heap allocation by deep-copying into a fresh `sqlite3_malloc64` buffer.
+#### Memory Mechanics & Small Buffer Optimization
+When borrowing a buffer or converting from a SQLite value:
+1. **Primitives (`SQLITE_INTEGER`, `SQLITE_FLOAT`, `SQLITE_NULL`)**: Copied directly into `payload.iValue` / `payload.dValue` with zero heap allocation (`is_heap() == false`, `is_borrowed() == false`).
+2. **Short Text & Blobs (SBO)**: If the payload fits within inline limits ($\le 21\text{B}$ text, $\le 22\text{B}$ blob), it is copied directly into `m_inline.buf`. The container retains complete ownership without calling `sqlite3_malloc64` (`is_heap() == false`, `is_borrowed() == false`).
+3. **Large Text & Blobs ($> 21\text{B}$ text, $> 22\text{B}$ blob)**: The container stores the external pointer directly in `payload.pData`, records `heap_len`, and sets `is_borrowed = true`.
+4. **Destructor Safety**: When destructed, `free_heap()` checks `!m_sqlite.is_borrowed` before invoking `sqlite3_free()`. For borrowed values, deallocation is completely bypassed, ensuring the underlying SQLite or external buffer remains intact.
+5. **Ownership Escalation & In-Place Cloning (`.clone()`, `.clone_in_place()`, `.to_owned()`)**: Calling `.to_owned()` or `.clone()` deep-copies the external buffer into an independent `sqlite3_malloc64` heap allocation, returning an owned copy with `is_borrowed = false`. Calling `.clone_in_place()` escalates the instance in-place from borrowed to owned heap memory.
+6. **Safe In-Place Mutation & Copy-On-Write (`.mutable_text()`, `.mutable_blob()`, `.mutable_data()`)**: Borrowed values treat external memory as strictly read-only. Calling `.mutable_text()` or `.mutable_blob()` automatically performs Copy-On-Write (COW) escalation via `clone_in_place()`, guaranteeing that mutations to the buffer never corrupt the underlying SQLite VDBE memory or external data. If the value is marked immutable, `nullptr` is returned.
+
+#### The SQLite Zero-Length Blob Edge Case
+In SQLite's native C implementation (`vdbemem.c`), invoking `sqlite3_value_blob(pVal)` returns `NULL` if the blob has a length of zero (`sqlite3_value_bytes(pVal) == 0`). 
+
+A naive wrapper checking `if (!blob) { init_null(); }` would inadvertently degrade valid zero-length blobs into SQL `NULL`. `borrow_from_sqlite3_val` explicitly handles this boundary condition:
+
+```cpp
+int bytes = sqlite3_value_bytes(const_cast<sqlite3_value*>(val));
+const void* blob = sqlite3_value_blob(const_cast<sqlite3_value*>(val));
+if (bytes == 0) {
+    res.init_blob("", 0, sub); // Correctly preserves empty BLOB with subtype
+} else if (!blob) {
+    res.init_null();
+} else if (bytes <= InlineBufferRep::MAX_BLOB_LEN) {
+    res.init_blob(blob, bytes, sub);
+} else {
+    res.init_borrowed_blob(blob, bytes, sub);
+}
+```
 
 #### Primary Use Cases
-1. **Scripting Interop (Lua, Python, QuickJS, WASM)**: Wrapping string arguments from foreign runtimes (e.g. `lua_tolstring()`) without heap allocations or GC pressure.
-2. **Memory-Mapped Tabular I/O (`mmap`, Arrow, Parquet)**: Ingesting columnar data slices directly from disk-mapped pages with zero memory copying.
-3. **Static Schema & String Literals**: Wrapping `.rodata` static strings and schemas without calling `sqlite3_malloc64`.
-4. **Filtering Pipelines with Deferred Promotion**: Evaluating SQL `WHERE` predicates on borrowed row candidates, calling `.clone()` only for retained rows.
-5. **Stack Scratch Formatting**: Consuming stack-formatted strings (`snprintf(scratch, ...)`) in downstream aggregators without heap allocation.
+1. **High-Throughput UDF Pipelines**: Ingesting incoming `argv[i]` or `SqliteValueView` into `SqliteValueVec<N>` or analytical pipelines with 0 heap allocations.
+2. **Scripting Interop (Lua, Python, QuickJS, WASM)**: Wrapping string arguments from foreign runtimes (e.g. `lua_tolstring()`) without heap allocations or GC pressure.
+3. **Memory-Mapped Tabular I/O (`mmap`, Arrow, Parquet)**: Ingesting columnar data slices directly from disk-mapped pages with zero memory copying.
+4. **Static Schema & String Literals**: Wrapping `.rodata` static strings and schemas without calling `sqlite3_malloc64`.
+5. **Filtering Pipelines with Deferred Promotion**: Evaluating SQL `WHERE` predicates on borrowed row candidates, calling `.clone()` only for retained rows.
+6. **Stack Scratch Formatting**: Consuming stack-formatted strings (`snprintf(scratch, ...)`) in downstream aggregators without heap allocation.
 
 ---
 

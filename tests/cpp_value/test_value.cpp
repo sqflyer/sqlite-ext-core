@@ -3890,6 +3890,410 @@ void test_borrowed_values() {
     assert(empty_borrowed.is_null());
 }
 
+void test_borrow_from_sqlite3_val(sqlite3* db) {
+    // 1. nullptr and empty view handling
+    {
+        SqliteValueOwned v_null1 = SqliteValueOwned::borrow_from_sqlite3_val(nullptr);
+        assert(v_null1.is_null());
+        assert(v_null1.type() == SQLITE_NULL);
+
+        SqliteValueOwned v_null2 = SqliteValueOwned::brrow_from_sqlite3_val(nullptr);
+        assert(v_null2.is_null());
+
+        SqliteValueView empty_view(nullptr);
+        SqliteValueOwned v_null3 = SqliteValueOwned::borrow_from_value_view(empty_view);
+        assert(v_null3.is_null());
+
+        SqliteValueOwned v_null4 = SqliteValueOwned::brrow_from_value_view(empty_view);
+        assert(v_null4.is_null());
+    }
+
+    // 2. Integer borrowing
+    {
+        sqlite3_stmt* stmt = nullptr;
+        int rc = sqlite3_prepare_v2(db, "SELECT 42, -9876543210, 0;", -1, &stmt, nullptr);
+        assert(rc == SQLITE_OK && stmt != nullptr);
+        assert(sqlite3_step(stmt) == SQLITE_ROW);
+
+        // Column 0: 42
+        sqlite3_value* val0 = sqlite3_column_value(stmt, 0);
+        SqliteValueOwned b0 = SqliteValueOwned::borrow_from_sqlite3_val(val0);
+        assert(b0.type() == SQLITE_INTEGER);
+        assert(b0.as_int() == 42);
+        assert(b0.as_int64() == 42LL);
+        assert(!b0.is_null());
+        assert(!b0.is_heap_allocated());
+
+        SqliteValueView view0(val0);
+        SqliteValueOwned b0_v = SqliteValueOwned::borrow_from_value_view(view0);
+        assert(b0_v.type() == SQLITE_INTEGER);
+        assert(b0_v.as_int64() == 42LL);
+        assert(b0 == b0_v);
+
+        // Column 1: -9876543210LL
+        sqlite3_value* val1 = sqlite3_column_value(stmt, 1);
+        SqliteValueOwned b1 = SqliteValueOwned::borrow_from_sqlite3_val(val1);
+        assert(b1.as_int64() == -9876543210LL);
+
+        // Column 2: 0
+        sqlite3_value* val2 = sqlite3_column_value(stmt, 2);
+        SqliteValueOwned b2 = SqliteValueOwned::brrow_from_sqlite3_val(val2);
+        assert(b2.as_int64() == 0LL);
+
+        SqliteValueView view2(val2);
+        SqliteValueOwned b2_v = SqliteValueOwned::brrow_from_value_view(view2);
+        assert(b2_v.as_int64() == 0LL);
+
+        sqlite3_finalize(stmt);
+    }
+
+    // 3. Float borrowing
+    {
+        sqlite3_stmt* stmt = nullptr;
+        int rc = sqlite3_prepare_v2(db, "SELECT 3.1415926535, -0.00125, 0.0;", -1, &stmt, nullptr);
+        assert(rc == SQLITE_OK && stmt != nullptr);
+        assert(sqlite3_step(stmt) == SQLITE_ROW);
+
+        sqlite3_value* f_val = sqlite3_column_value(stmt, 0);
+        SqliteValueOwned bf = SqliteValueOwned::borrow_from_sqlite3_val(f_val);
+        assert(bf.type() == SQLITE_FLOAT);
+        assert(!bf.is_heap_allocated());
+        assert(bf.as_double() > 3.14159 && bf.as_double() < 3.14160);
+
+        SqliteValueView f_view(f_val);
+        SqliteValueOwned bf_v = SqliteValueOwned::borrow_from_value_view(f_view);
+        assert(bf_v.as_double() == bf.as_double());
+        assert(bf == bf_v);
+
+        sqlite3_finalize(stmt);
+    }
+
+    // 4. Text borrowing (empty, short SBO, and long zero-copy)
+    {
+        sqlite3_stmt* stmt = nullptr;
+        const char* sql = "SELECT '', 'hello world', "
+                          "'This is a long text string exceeding the 21 byte inline SBO capacity to verify zero-copy borrowing!';";
+        int rc = sqlite3_prepare_v2(db, sql, -1, &stmt, nullptr);
+        assert(rc == SQLITE_OK && stmt != nullptr);
+        assert(sqlite3_step(stmt) == SQLITE_ROW);
+
+        // Empty text
+        sqlite3_value* t_empty = sqlite3_column_value(stmt, 0);
+        SqliteValueOwned b_empty = SqliteValueOwned::borrow_from_sqlite3_val(t_empty);
+        assert(b_empty.type() == SQLITE_TEXT);
+        assert(b_empty.as_text().size() == 0);
+        assert(b_empty.as_text() == "");
+
+        // Short SBO text
+        sqlite3_value* t_short = sqlite3_column_value(stmt, 1);
+        SqliteValueOwned b_short = SqliteValueOwned::borrow_from_sqlite3_val(t_short);
+        assert(b_short.type() == SQLITE_TEXT);
+        assert(b_short.as_text().size() == 11);
+        assert(b_short.as_text() == "hello world");
+
+        // Long text (> 21 bytes) - must be zero-copy borrowed
+        sqlite3_value* t_long = sqlite3_column_value(stmt, 2);
+        const char* raw_text_ptr = reinterpret_cast<const char*>(sqlite3_value_text(t_long));
+        int raw_len = sqlite3_value_bytes(t_long);
+        assert(raw_len > 21);
+
+        {
+            SqliteValueOwned b_long = SqliteValueOwned::borrow_from_sqlite3_val(t_long);
+            assert(b_long.type() == SQLITE_TEXT);
+            assert(b_long.as_text().size() == static_cast<size_t>(raw_len));
+            assert(b_long.is_borrowed());
+            assert(b_long.as_text().data() == raw_text_ptr); // Direct zero-copy pointer match!
+
+            // Check view-based overload
+            SqliteValueView v_long(t_long);
+            SqliteValueOwned b_long_view = SqliteValueOwned::borrow_from_value_view(v_long);
+            assert(b_long_view.is_borrowed());
+            assert(b_long_view.as_text().data() == raw_text_ptr);
+            assert(b_long == b_long_view);
+
+            // Check shorthand alias
+            SqliteValueOwned b_alias1 = SqliteValueOwned::brrow_from_sqlite3_val(t_long);
+            SqliteValueOwned b_alias2 = SqliteValueOwned::brrow_from_value_view(v_long);
+            assert(b_alias1.as_text().data() == raw_text_ptr);
+            assert(b_alias2.as_text().data() == raw_text_ptr);
+
+            // Deep clone from borrowed value
+            SqliteValueOwned cloned = b_long.clone();
+            assert(cloned.type() == SQLITE_TEXT);
+            assert(!cloned.is_borrowed());
+            assert(cloned.as_text().data() != raw_text_ptr); // Independent heap buffer
+            assert(cloned == b_long);
+        } // Out of scope: must NOT free raw_text_ptr!
+
+        sqlite3_finalize(stmt);
+    }
+
+    // 5. Blob borrowing (empty, short SBO, and long zero-copy)
+    {
+        sqlite3_stmt* stmt = nullptr;
+        const char* sql = "SELECT zeroblob(0), x'0102030405', "
+                          "x'000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f';"; // 32 bytes
+        int rc = sqlite3_prepare_v2(db, sql, -1, &stmt, nullptr);
+        assert(rc == SQLITE_OK && stmt != nullptr);
+        assert(sqlite3_step(stmt) == SQLITE_ROW);
+
+        // Empty blob
+        sqlite3_value* b_empty = sqlite3_column_value(stmt, 0);
+        SqliteValueOwned blob_empty = SqliteValueOwned::borrow_from_sqlite3_val(b_empty);
+        assert(blob_empty.type() == SQLITE_BLOB);
+        assert(blob_empty.as_blob().size() == 0);
+
+        // Short blob (5 bytes <= 22 bytes SBO)
+        sqlite3_value* b_short = sqlite3_column_value(stmt, 1);
+        SqliteValueOwned blob_short = SqliteValueOwned::borrow_from_sqlite3_val(b_short);
+        assert(blob_short.type() == SQLITE_BLOB);
+        assert(blob_short.as_blob().size() == 5);
+
+        // Long blob (32 bytes > 22 bytes SBO) - zero copy
+        sqlite3_value* b_long = sqlite3_column_value(stmt, 2);
+        const void* raw_blob_ptr = sqlite3_value_blob(b_long);
+        int raw_bytes = sqlite3_value_bytes(b_long);
+        assert(raw_bytes == 32);
+
+        {
+            SqliteValueOwned blob_long = SqliteValueOwned::borrow_from_sqlite3_val(b_long);
+            assert(blob_long.type() == SQLITE_BLOB);
+            assert(blob_long.as_blob().size() == 32);
+            assert(blob_long.is_borrowed());
+            assert(blob_long.as_blob().data() == raw_blob_ptr); // Direct zero-copy pointer match!
+
+            // Check view-based overload
+            SqliteValueView v_blob(b_long);
+            SqliteValueOwned blob_long_view = SqliteValueOwned::borrow_from_value_view(v_blob);
+            assert(blob_long_view.is_borrowed());
+            assert(blob_long_view.as_blob().data() == raw_blob_ptr);
+            assert(blob_long == blob_long_view);
+
+            // Check shorthand alias
+            SqliteValueOwned b_alias1 = SqliteValueOwned::brrow_from_sqlite3_val(b_long);
+            SqliteValueOwned b_alias2 = SqliteValueOwned::brrow_from_value_view(v_blob);
+            assert(b_alias1.as_blob().data() == raw_blob_ptr);
+            assert(b_alias2.as_blob().data() == raw_blob_ptr);
+
+            // Deep clone
+            SqliteValueOwned cloned = blob_long.clone();
+            assert(cloned.type() == SQLITE_BLOB);
+            assert(!cloned.is_borrowed());
+            assert(cloned.as_blob().data() != raw_blob_ptr);
+            assert(cloned == blob_long);
+        } // Out of scope: must NOT free raw_blob_ptr!
+
+        sqlite3_finalize(stmt);
+    }
+
+    // 6. SQL NULL
+    {
+        sqlite3_stmt* stmt = nullptr;
+        int rc = sqlite3_prepare_v2(db, "SELECT NULL;", -1, &stmt, nullptr);
+        assert(rc == SQLITE_OK && stmt != nullptr);
+        assert(sqlite3_step(stmt) == SQLITE_ROW);
+
+        sqlite3_value* n_val = sqlite3_column_value(stmt, 0);
+        SqliteValueOwned bn = SqliteValueOwned::borrow_from_sqlite3_val(n_val);
+        assert(bn.is_null());
+        assert(bn.type() == SQLITE_NULL);
+
+        SqliteValueView vn(n_val);
+        SqliteValueOwned bn_v = SqliteValueOwned::borrow_from_value_view(vn);
+        assert(bn_v.is_null());
+
+        sqlite3_finalize(stmt);
+    }
+
+    // 7. Subtype retention during borrowing in UDF callback
+    {
+        auto test_udf_subtype_borrow = [](sqlite3_context* ctx, int argc, sqlite3_value** argv) {
+            (void)argc;
+            // Short string (<= 21 bytes) inlines with subtype
+            SqliteValueOwned short_borrowed = SqliteValueOwned::borrow_from_sqlite3_val(argv[0]);
+            assert(short_borrowed.type() == SQLITE_TEXT);
+            assert(short_borrowed.subtype() == 74);
+            assert(short_borrowed.as_text() == "{\"key\":123}");
+            assert(!short_borrowed.is_borrowed()); // Inlined into SBO struct
+
+            // Long string (> 21 bytes) borrows zero-copy with subtype
+            SqliteValueOwned long_borrowed = SqliteValueOwned::borrow_from_sqlite3_val(argv[1]);
+            assert(long_borrowed.type() == SQLITE_TEXT);
+            assert(long_borrowed.subtype() == 74);
+            assert(long_borrowed.as_text() == "{\"key\":\"long_json_exceeding_sbo_capacity\"}");
+            assert(long_borrowed.is_borrowed()); // Zero-copy borrowed pointer!
+
+            // Borrow via view
+            SqliteValueView view(argv[1]);
+            SqliteValueOwned borrowed_v = SqliteValueOwned::borrow_from_value_view(view);
+            assert(borrowed_v.subtype() == 74);
+            assert(borrowed_v.is_borrowed());
+
+            sqlite3_result_int(ctx, 1);
+        };
+
+        int rc = sqlite3_create_function_v2(
+            db, "test_borrow_subtype", 2, SQLITE_UTF8,
+            nullptr, test_udf_subtype_borrow, nullptr, nullptr, nullptr
+        );
+        assert(rc == SQLITE_OK);
+
+        auto set_json_short = [](sqlite3_context* ctx, int, sqlite3_value**) {
+            sqlite3_result_text(ctx, "{\"key\":123}", -1, SQLITE_TRANSIENT);
+            sqlite3_result_subtype(ctx, 74);
+        };
+        sqlite3_create_function_v2(db, "get_json_short", 0, SQLITE_UTF8, nullptr, set_json_short, nullptr, nullptr, nullptr);
+
+        auto set_json_long = [](sqlite3_context* ctx, int, sqlite3_value**) {
+            sqlite3_result_text(ctx, "{\"key\":\"long_json_exceeding_sbo_capacity\"}", -1, SQLITE_TRANSIENT);
+            sqlite3_result_subtype(ctx, 74);
+        };
+        sqlite3_create_function_v2(db, "get_json_long", 0, SQLITE_UTF8, nullptr, set_json_long, nullptr, nullptr, nullptr);
+
+        sqlite3_stmt* stmt = nullptr;
+        rc = sqlite3_prepare_v2(db, "SELECT test_borrow_subtype(get_json_short(), get_json_long());", -1, &stmt, nullptr);
+        assert(rc == SQLITE_OK && stmt != nullptr);
+        assert(sqlite3_step(stmt) == SQLITE_ROW);
+        assert(sqlite3_column_int(stmt, 0) == 1);
+        sqlite3_finalize(stmt);
+    }
+}
+
+static void test_clone_in_place_and_mutation(sqlite3* db) {
+    // 1. Long text borrowing with val.clone() in-place escalation
+    {
+        sqlite3_stmt* stmt = nullptr;
+        int rc = sqlite3_prepare_v2(db, "SELECT 'this is a long string that exceeds 21 bytes and triggers borrowing';", -1, &stmt, nullptr);
+        assert(rc == SQLITE_OK && stmt != nullptr);
+        assert(sqlite3_step(stmt) == SQLITE_ROW);
+
+        const char* raw_ptr = reinterpret_cast<const char*>(sqlite3_value_text(sqlite3_column_value(stmt, 0)));
+        SqliteValueOwned b = SqliteValueOwned::borrow_from_sqlite3_val(sqlite3_column_value(stmt, 0));
+        assert(b.is_borrowed());
+        assert(b.as_text().data() == raw_ptr);
+
+        // to_owned() creates a completely owned independent copy from borrowed value
+        SqliteValueOwned owned_copy = b.to_owned();
+        assert(!owned_copy.is_borrowed());
+        assert(owned_copy.as_text() == b.as_text());
+        assert(owned_copy.as_text().data() != raw_ptr);
+
+        // Escalation via b.clone_in_place() (in-place promotion)
+        b.clone_in_place();
+        assert(!b.is_borrowed()); // Promoted in-place to owned heap buffer!
+        assert(b.as_text().data() != raw_ptr); // Independent heap buffer!
+        assert(b.as_text() == "this is a long string that exceeds 21 bytes and triggers borrowing");
+        assert(strcmp(raw_ptr, "this is a long string that exceeds 21 bytes and triggers borrowing") == 0); // Original SQLite memory intact!
+
+        // Mutation on escalated owned buffer
+        char* mut = b.mutable_text();
+        assert(mut != nullptr);
+        assert(mut != raw_ptr);
+        mut[0] = 'T';
+        mut[1] = 'H';
+        mut[2] = 'A';
+        mut[3] = 'T';
+        assert(b.as_text().starts_with("THAT"));
+        // Original SQLite memory is 100% UNTOUCHED:
+        assert(strncmp(raw_ptr, "this", 4) == 0);
+
+        sqlite3_finalize(stmt);
+    }
+
+    // 2. Copy-on-Write auto-escalation via mutable_text() without prior clone()
+    {
+        sqlite3_stmt* stmt = nullptr;
+        int rc = sqlite3_prepare_v2(db, "SELECT 'another long string payload for copy-on-write auto-escalation';", -1, &stmt, nullptr);
+        assert(rc == SQLITE_OK && stmt != nullptr);
+        assert(sqlite3_step(stmt) == SQLITE_ROW);
+
+        const char* raw_ptr = reinterpret_cast<const char*>(sqlite3_value_text(sqlite3_column_value(stmt, 0)));
+        SqliteValueOwned b = SqliteValueOwned::borrow_from_sqlite3_val(sqlite3_column_value(stmt, 0));
+        assert(b.is_borrowed());
+        assert(b.as_text().data() == raw_ptr);
+
+        // Calling mutable_text() automatically executes Copy-On-Write!
+        char* mut = b.mutable_text();
+        assert(mut != nullptr);
+        assert(!b.is_borrowed());
+        assert(mut != raw_ptr);
+
+        mut[0] = 'Z';
+        assert(b.as_text().data()[0] == 'Z');
+        assert(raw_ptr[0] == 'a'); // Original SQLite buffer unharmed!
+
+        sqlite3_finalize(stmt);
+    }
+
+    // 3. Blob borrowing, clone_in_place(), and mutable_blob()
+    {
+        sqlite3_stmt* stmt = nullptr;
+        const char* sql = "SELECT x'000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f';";
+        int rc = sqlite3_prepare_v2(db, sql, -1, &stmt, nullptr);
+        assert(rc == SQLITE_OK && stmt != nullptr);
+        assert(sqlite3_step(stmt) == SQLITE_ROW);
+
+        const uint8_t* raw_blob = reinterpret_cast<const uint8_t*>(sqlite3_value_blob(sqlite3_column_value(stmt, 0)));
+        SqliteValueOwned bb = SqliteValueOwned::borrow_from_sqlite3_val(sqlite3_column_value(stmt, 0));
+        assert(bb.is_borrowed());
+        assert(bb.as_blob().data() == raw_blob);
+
+        bb.clone_in_place();
+        assert(!bb.is_borrowed());
+        assert(bb.as_blob().data() != raw_blob);
+
+        uint8_t* mut_blob = reinterpret_cast<uint8_t*>(bb.mutable_blob());
+        assert(mut_blob != nullptr);
+        mut_blob[0] = 0xFF;
+        assert(static_cast<const uint8_t*>(bb.as_blob().data())[0] == 0xFF);
+        assert(raw_blob[0] == 0x00); // Original SQLite blob untouched!
+
+        sqlite3_finalize(stmt);
+    }
+
+    // 4. try_clone_in_place() and try_clone() fallible APIs
+    {
+        sqlite3_stmt* stmt = nullptr;
+        int rc = sqlite3_prepare_v2(db, "SELECT 'fallible test string with length exceeding sbo capacity';", -1, &stmt, nullptr);
+        assert(rc == SQLITE_OK && stmt != nullptr);
+        assert(sqlite3_step(stmt) == SQLITE_ROW);
+
+        SqliteValueOwned b = SqliteValueOwned::borrow_from_sqlite3_val(sqlite3_column_value(stmt, 0));
+        assert(b.is_borrowed());
+
+        SqliteStatus stat = b.try_clone_in_place();
+        assert(stat.is_ok());
+        assert(!b.is_borrowed());
+
+        SqliteResult<SqliteValueOwned> res = b.try_clone();
+        assert(res.is_ok());
+        assert(!res.unwrap().is_borrowed());
+        assert(res.unwrap() == b);
+
+        sqlite3_finalize(stmt);
+    }
+
+    // 5. Immutability protection
+    {
+        SqliteValueOwned imm = SqliteValueOwned::from_text("immutable string with long heap capacity");
+        imm.mark_immutable();
+        assert(imm.is_immutable());
+        assert(imm.mutable_data() == nullptr);
+        assert(imm.mutable_text() == nullptr);
+        assert(imm.mutable_blob() == nullptr);
+    }
+
+    // 6. Inline SBO mutation
+    {
+        SqliteValueOwned sbo = SqliteValueOwned::from_text("hello");
+        assert(!sbo.is_heap_allocated());
+        char* mut = sbo.mutable_text();
+        assert(mut != nullptr);
+        mut[0] = 'H';
+        assert(sbo.as_text() == "Hello");
+    }
+}
+
 int main() {
     sqlite3_initialize();
     
@@ -3901,6 +4305,12 @@ int main() {
 
     printf("Testing Borrowed Values (Zero-Copy Pointers & Safe Destructor)...\n");
     test_borrowed_values();
+
+    printf("Testing borrow_from_sqlite3_val and borrow_from_value_view...\n");
+    test_borrow_from_sqlite3_val(db);
+
+    printf("Testing clone() In-Place Escalation and Mutable Data Updates...\n");
+    test_clone_in_place_and_mutation(db);
 
     printf("Testing String Types...\n");
     test_string_types(db);

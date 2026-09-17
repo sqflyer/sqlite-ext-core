@@ -1857,9 +1857,13 @@ private:
         if (other.is_heap_allocated()) {
             if (other.m_sqlite.payload.pData && other.m_sqlite.heap_len > 0) {
                 size_t alloc_sz = static_cast<size_t>(other.m_sqlite.heap_len);
-                char* buf = static_cast<char*>(sqlite3_malloc64(static_cast<sqlite3_uint64>(alloc_sz)));
+                size_t total_alloc = (other.type() == SQLITE_TEXT) ? (alloc_sz + 1) : alloc_sz;
+                char* buf = static_cast<char*>(sqlite3_malloc64(static_cast<sqlite3_uint64>(total_alloc)));
                 if (buf) {
                     memcpy(buf, other.m_sqlite.payload.pData, alloc_sz);
+                    if (other.type() == SQLITE_TEXT) {
+                        buf[alloc_sz] = '\0';
+                    }
                 }
                 m_sqlite.payload.pData = buf;
                 m_sqlite.is_borrowed = false; // Deep copies are always owned
@@ -2283,6 +2287,88 @@ public:
         val.m_sqlite.subtag.set(subtype, false);
         val.set_tag(SQLITE_BLOB, true, 0);
         return val;
+    }
+
+    /**
+     * @brief Zero-copy borrows an existing sqlite3_value* without heap allocation.
+     * - Primitives (integer, float, null): copied into inline SBO struct.
+     * - Text & Blob: borrows the buffer pointer directly (is_borrowed = true) without copying.
+     *
+     * @param val The SQLite value pointer to borrow.
+     * @return Zero-copy borrowed SqliteValueOwned.
+     */
+    static inline SqliteValueOwned borrow_from_sqlite3_val(const sqlite3_value* val) noexcept {
+        SqliteValueOwned res;
+        if (!val) {
+            res.init_null();
+            return res;
+        }
+
+        int t = sqlite3_value_type(const_cast<sqlite3_value*>(val));
+        uint8_t sub = static_cast<uint8_t>(sqlite3_value_subtype(const_cast<sqlite3_value*>(val)));
+
+        switch (t) {
+            case SQLITE_INTEGER:
+                res.init_integer(sqlite3_value_int64(const_cast<sqlite3_value*>(val)), sub);
+                break;
+            case SQLITE_FLOAT:
+                res.init_float(sqlite3_value_double(const_cast<sqlite3_value*>(val)), sub);
+                break;
+            case SQLITE_TEXT: {
+                const char* text = reinterpret_cast<const char*>(sqlite3_value_text(const_cast<sqlite3_value*>(val)));
+                int bytes = sqlite3_value_bytes(const_cast<sqlite3_value*>(val));
+                if (bytes < 0) {
+                    res.init_null();
+                } else if (bytes == 0) {
+                    res.init_text("", 0, sub);
+                } else if (!text) {
+                    res.init_null();
+                } else {
+                    res = from_borrowed_text(text, bytes, sub);
+                }
+                break;
+            }
+            case SQLITE_BLOB: {
+                const void* blob = sqlite3_value_blob(const_cast<sqlite3_value*>(val));
+                int bytes = sqlite3_value_bytes(const_cast<sqlite3_value*>(val));
+                if (bytes < 0) {
+                    res.init_null();
+                } else if (bytes == 0) {
+                    res.init_blob("", 0, sub);
+                } else if (!blob) {
+                    res.init_null();
+                } else {
+                    res = from_borrowed_blob(blob, bytes, sub);
+                }
+                break;
+            }
+            case SQLITE_NULL:
+            default:
+                res.init_null();
+                res.set_subtype(sub);
+                break;
+        }
+        return res;
+    }
+
+    /**
+     * @brief Zero-copy borrows an existing SqliteValueView without heap allocation.
+     *
+     * @param view The SQLite value view to borrow.
+     * @return Zero-copy borrowed SqliteValueOwned.
+     */
+    static inline SqliteValueOwned borrow_from_value_view(const SqliteValueView& view) noexcept {
+        return borrow_from_sqlite3_val(view.get());
+    }
+
+    /** @brief Alias matching user shorthand. */
+    static inline SqliteValueOwned brrow_from_sqlite3_val(const sqlite3_value* val) noexcept {
+        return borrow_from_sqlite3_val(val);
+    }
+
+    /** @brief Alias matching user shorthand. */
+    static inline SqliteValueOwned brrow_from_value_view(const SqliteValueView& view) noexcept {
+        return borrow_from_value_view(view);
     }
 
     /** @brief Attempts to construct an inline or heap-backed string value, returning SqliteResult. */
@@ -2769,11 +2855,15 @@ public:
             return SqliteResult<SqliteValueOwned>::ok(SqliteValueOwned(*this));
         }
         size_t alloc_sz = static_cast<size_t>(m_sqlite.heap_len);
-        char* buf = static_cast<char*>(sqlite3_malloc64(static_cast<sqlite3_uint64>(alloc_sz)));
+        size_t total_alloc = (type() == SQLITE_TEXT) ? (alloc_sz + 1) : alloc_sz;
+        char* buf = static_cast<char*>(sqlite3_malloc64(static_cast<sqlite3_uint64>(total_alloc)));
         if (!buf) {
             return SqliteResult<SqliteValueOwned>::nomem("Failed to clone heap buffer in SqliteValueOwned::try_clone");
         }
         memcpy(buf, m_sqlite.payload.pData, alloc_sz);
+        if (type() == SQLITE_TEXT) {
+            buf[alloc_sz] = '\0';
+        }
         SqliteValueOwned res;
         memcpy(static_cast<void*>(&res), this, sizeof(SqliteValueOwned));
         res.m_sqlite.payload.pData = buf;
@@ -2874,9 +2964,56 @@ public:
         return *this;
     }
 
-    /** @brief Creates an owned duplicate/clone of this value. */
+    /** @brief Creates an owned duplicate/clone of this value without modifying *this. */
     inline SqliteValueOwned clone() const {
         return SqliteValueOwned(*this);
+    }
+
+    /**
+     * @brief In-place escalates a borrowed value into an owned heap allocation (clone in-place).
+     * If the value is already owned, inline SBO, or a primitive, this is a no-op.
+     * If the value is borrowed heap text/blob, allocates a fresh buffer via sqlite3_malloc64,
+     * copies the external data, updates m_sqlite.payload.pData, and clears is_borrowed.
+     * 
+     * @return Reference to *this.
+     */
+    inline SqliteValueOwned& clone_in_place() noexcept {
+        if (is_borrowed() && m_sqlite.payload.pData && m_sqlite.heap_len > 0) {
+            size_t alloc_sz = static_cast<size_t>(m_sqlite.heap_len);
+            size_t total_alloc = (type() == SQLITE_TEXT) ? (alloc_sz + 1) : alloc_sz;
+            char* buf = static_cast<char*>(sqlite3_malloc64(static_cast<sqlite3_uint64>(total_alloc)));
+            if (buf) {
+                memcpy(buf, m_sqlite.payload.pData, alloc_sz);
+                if (type() == SQLITE_TEXT) {
+                    buf[alloc_sz] = '\0';
+                }
+                m_sqlite.payload.pData = buf;
+                m_sqlite.is_borrowed = false;
+            }
+        }
+        return *this;
+    }
+
+    /**
+     * @brief Fallible in-place escalation returning SqliteStatus.
+     * On SQLITE_NOMEM failure, leaves original borrowed buffer intact.
+     */
+    inline SqliteStatus try_clone_in_place() noexcept {
+        if (is_borrowed() && m_sqlite.payload.pData && m_sqlite.heap_len > 0) {
+            size_t alloc_sz = static_cast<size_t>(m_sqlite.heap_len);
+            size_t total_alloc = (type() == SQLITE_TEXT) ? (alloc_sz + 1) : alloc_sz;
+            char* buf = static_cast<char*>(sqlite3_malloc64(static_cast<sqlite3_uint64>(total_alloc)));
+            if (!buf) {
+                return SqliteStatus::nomem("Failed to allocate memory in clone_in_place");
+            }
+            memcpy(buf, m_sqlite.payload.pData, alloc_sz);
+            if (type() == SQLITE_TEXT) {
+                buf[alloc_sz] = '\0';
+            }
+            m_sqlite.payload.pData = buf;
+            m_sqlite.is_borrowed = false;
+        }
+        return SqliteStatus::ok();
     }
     
     /** @brief Returns the SQLite datatype (e.g. SQLITE_INTEGER). */
@@ -3080,6 +3217,40 @@ public:
             return SqliteBlobView(m_inline.buf, inline_length());
         }
         return SqliteBlobView(m_sqlite.payload.pData, m_sqlite.heap_len);
+    }
+
+    /**
+     * @brief Returns a mutable pointer to the text or blob buffer.
+     * If the value is borrowed, automatically promotes to owned heap (Copy-On-Write)
+     * so that the external borrowed buffer is NEVER modified.
+     * If the value is immutable or not text/blob, returns nullptr.
+     */
+    inline char* mutable_data() noexcept {
+        if (is_immutable()) return nullptr;
+        if (is_borrowed()) {
+            clone_in_place();
+            if (is_borrowed()) return nullptr; // OOM check
+        }
+        if (type() == SQLITE_TEXT) {
+            return is_heap_allocated() ? m_sqlite.payload.pData : m_inline.buf;
+        }
+        if (type() == SQLITE_BLOB) {
+            if (m_sqlite.tag.is_uuid()) return reinterpret_cast<char*>(m_uuid.bytes);
+            return is_heap_allocated() ? m_sqlite.payload.pData : m_inline.buf;
+        }
+        return nullptr;
+    }
+
+    /** @brief Returns mutable pointer to text data, or nullptr if not text/immutable. */
+    inline char* mutable_text() noexcept {
+        if (type() != SQLITE_TEXT) return nullptr;
+        return mutable_data();
+    }
+
+    /** @brief Returns mutable pointer to blob data, or nullptr if not blob/immutable. */
+    inline void* mutable_blob() noexcept {
+        if (type() != SQLITE_BLOB) return nullptr;
+        return static_cast<void*>(mutable_data());
     }
 
     /**

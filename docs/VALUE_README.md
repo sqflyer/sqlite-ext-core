@@ -128,17 +128,36 @@ CustomContext* p2 = val.as_pointer<CustomContext>("custom_tag"); // Explicit tag
 bool has_ptr      = val.has_pointer<CustomContext>();            // Checks matching tag and non-null address
 ```
 
-### Conversion to Owned
+### Conversion to Owned vs. Zero-Copy Borrowing
+Depending on whether your application requires independent memory ownership or zero-allocation throughput:
+
 ```cpp
-// Duplicates the value into owned memory or stores it inline via SBO
+// 1. Deep Copy: Duplicates large strings/blobs into independent heap buffers:
 SqliteValueOwned owned = val.to_owned();
+
+// 2. Zero-Copy Borrowing: Adopts the underlying buffer pointer directly (0 heap allocations!):
+SqliteValueOwned borrowed = SqliteValueOwned::borrow_from_value_view(val);
+// Or directly from raw sqlite3_value*:
+SqliteValueOwned borrowed_raw = SqliteValueOwned::borrow_from_sqlite3_val(argv[0]);
 ```
+
+### Architectural Decision Guide: `SqliteValueView` vs. `SqliteValueOwned`
+
+| Dimension | `SqliteValueView` | `SqliteValueOwned` (including Borrowed) |
+| :--- | :--- | :--- |
+| **Size** | **8 Bytes** (1 raw pointer `const sqlite3_value*`) | **24 Bytes** (tag byte + subtype + 16-byte payload union) |
+| **Construction Cost** | **Zero CPU cycles** (1 pointer copy, $0 \text{ ns}$) | **5–15 instructions** (inspects type, bytes, writes SBO tag) |
+| **Evaluation Model** | **100% Lazy**: Evaluates type and payload on-demand | **Eager**: Unpacks SQLite type and binds pointer immediately |
+| **Engine Dependency** | **Tied to SQLite**: Must wrap a valid `sqlite3_value*` | **Freestanding**: Can exist without SQLite VDBE (Direct Dispatch, Lua) |
+| **Mutability** | **Strictly Read-Only** ephemeral observer | **Mutable**: Supports `operator=`, primitive assignment, `set_null()` |
+| **Container Storage** | Unsafe for persistent storage (dangles across query rows) | **Primary container value**: Used in `SqliteValueTuple<N>`, `SqliteValueVec<N>` |
+| **Map Lookups** | **Transparent probe key**: `map.find(view)` without allocations | **Stored map key / value**: Holds persistent key data |
 
 ---
 
 ## 4. `SqliteValueOwned` API Reference
 
-`SqliteValueOwned` is a 24-byte RAII polymorphic container featuring Small Buffer Optimization (SBO), shared-offset subtype tracking, in-situ 16-byte raw UUID representation, and automatic memory cleanup.
+`SqliteValueOwned` is a 24-byte RAII polymorphic container featuring Small Buffer Optimization (SBO), shared-offset subtype tracking, in-situ 16-byte raw UUID representation, zero-copy buffer borrowing, and automatic memory cleanup.
 
 ### Primitive Constructors (Zero Heap Allocation)
 ```cpp
@@ -154,6 +173,33 @@ SqliteValueOwned float_val(3.1415926535);
 // 4. Boolean (Tagged with SQLITE_SUBTYPE_BOOL)
 SqliteValueOwned bool_val(true);
 ```
+
+### Zero-Copy Borrowing APIs (`borrow_from_sqlite3_val`, `borrow_from_value_view`)
+
+When consuming SQLite query results or UDF arguments inside high-throughput C++ pipelines, `borrow_from_sqlite3_val` and `borrow_from_value_view` construct a `SqliteValueOwned` with **zero heap allocations**:
+
+```cpp
+// 1. Zero-copy borrow from raw sqlite3_value* (e.g. inside UDF argv):
+SqliteValueOwned b1 = SqliteValueOwned::borrow_from_sqlite3_val(argv[0]);
+
+// 2. Zero-copy borrow from an existing SqliteValueView:
+SqliteValueView view(argv[0]);
+SqliteValueOwned b2 = SqliteValueOwned::borrow_from_value_view(view);
+
+// 3. Shorthand aliases (supporting user shorthand):
+SqliteValueOwned b3 = SqliteValueOwned::brrow_from_sqlite3_val(argv[0]);
+SqliteValueOwned b4 = SqliteValueOwned::brrow_from_value_view(view);
+```
+
+#### Behavioral Guarantees:
+- **Primitives (Integer, Float, Null)**: Copied directly into the inline 24-byte SBO struct (`is_heap() == false`, `is_borrowed() == false`).
+- **Short Text ($\le 21$B) & Short Blobs ($\le 22$B)**: Inlined directly into the 24-byte SBO payload with zero heap overhead.
+- **Large Text ($> 21$B) & Large Blobs ($> 22$B)**: Points directly to SQLite's internal buffer (`is_borrowed() == true`), completely bypassing `sqlite3_malloc64`!
+- **Subtype Retention**: Preserves SQLite subtypes (e.g., JSON `'J'`, UUID `'U'`, Vector `'V'`).
+- **Zero-Length Blob Handling**: Safely handles SQLite 0-length blobs (where `sqlite3_value_blob()` returns `NULL`) by initializing an empty blob (`b.as_blob().size() == 0`) rather than degrading into SQL NULL.
+- **Scope-Exit Safety**: When a borrowed `SqliteValueOwned` goes out of scope, its destructor safely bypasses `sqlite3_free()`, leaving SQLite's buffer intact.
+- **Ownership Escalation & In-Place Cloning (`.clone()`, `.clone_in_place()`, `.to_owned()`)**: Calling `b1.to_owned()` or `b1.clone()` deep-copies borrowed memory into an independent SQLite heap buffer (`is_borrowed() == false`). Calling `b1.clone_in_place()` escalates `b1` in-place from borrowed to owned heap memory.
+- **Safe In-Place Mutation & Copy-On-Write (`.mutable_text()`, `.mutable_blob()`)**: Calling `b1.mutable_text()` or `b1.mutable_blob()` automatically performs Copy-On-Write (COW) escalation before returning a mutable pointer. The original borrowed SQLite memory or external buffer is NEVER modified!
 
 ### Static Subtype Factory Methods
 ```cpp
