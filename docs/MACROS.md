@@ -46,7 +46,7 @@ The macro suite is organized into clean functional tiers:
 
 ## 1. Array & Standard Container Synthesis Suite (`include/sqlite3_row.hpp`)
 
-These macros are applied inside row and container class definitions to synthesize standard container member types, element accessors, composite MurmurHash2 computation, and standard forward/reverse iterators.
+These macros are applied inside row and container class definitions to synthesize standard container member types, element accessors, composite xxHash3 computation, and standard forward/reverse iterators.
 
 ### 1.1 `SQLITE_DERIVE_STANDARD_CONTAINER_TYPEDEFS`
 
@@ -136,7 +136,7 @@ Synthesizes uniform, zero-overhead convenience accessors for integer, float, tex
 
 ### 2.2 `SQLITE_DERIVE_ARRAY_HASH`
 
-Synthesizes 64-bit composite MurmurHash2 computation across all columns with an $O(1)$ fast path for 1-column rows:
+Synthesizes 64-bit composite xxHash3 computation across all columns with an $O(1)$ fast path for 1-column rows:
 
 ```cpp
 #define SQLITE_DERIVE_ARRAY_HASH \

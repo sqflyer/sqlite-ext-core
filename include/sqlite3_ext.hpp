@@ -448,7 +448,7 @@ public:
     // ========================================================================
 
     /**
-     * @brief 64-bit MurmurHash2 (MurmurHash64A) over arbitrary binary payloads.
+     * @brief 64-bit xxHash3 (MurmurHash64A) over arbitrary binary payloads.
      * @param ptr Pointer to the data buffer (alignment-safe).
      * @param len Number of bytes to hash.
      * @param seed 64-bit initialization seed (defaults to DEFAULT_SEED).
@@ -459,7 +459,7 @@ public:
     }
 
     /**
-     * @brief Hashes a 64-bit signed integer with MurmurHash2 avalanche mixing.
+     * @brief Hashes a 64-bit signed integer with xxHash3 avalanche mixing.
      * @param val 64-bit integer value.
      * @param seed 64-bit initialization seed.
      * @return 64-bit unsigned hash digest.
@@ -490,7 +490,7 @@ public:
 
     /**
      * @brief Generates the i-th Bloom filter bit index using Kirsch-Mitzenmacher double hashing.
-     * @param hash64 The single precomputed 64-bit MurmurHash2.
+     * @param hash64 The single precomputed 64-bit xxHash3.
      * @param i The probe index (0 .. k-1).
      * @param num_bits Total bit array capacity.
      * @return Bit index in range [0, num_bits - 1] (returns 0 if num_bits == 0).

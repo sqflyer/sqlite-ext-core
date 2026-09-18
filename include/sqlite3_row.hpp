@@ -203,7 +203,7 @@ public:
 
 #ifndef SQLITE_DERIVE_ARRAY_HASH
 /**
- * @brief Macro helper to synthesize uniform, zero-overhead MurmurHash2
+ * @brief Macro helper to synthesize uniform, zero-overhead xxHash3
  * composite hashing across all array/tabular containers (SqliteValueTuple,
  * SqliteValueVec, SqliteRowView, SqliteRowOwnedWrapper).
  */
@@ -1219,7 +1219,7 @@ public:
     return (*this)[col];
   }
 
-  // Typed Extraction Accessors & MurmurHash2 Calculation
+  // Typed Extraction Accessors & xxHash3 Calculation
   SQLITE_DERIVE_ARRAY_ACCESSORS
   SQLITE_DERIVE_ARRAY_HASH
 
@@ -1608,7 +1608,7 @@ inline void copy_from_wrapper(SqliteValueOwned *dest,
 
 /**
  * @struct SqliteRowHash
- * @brief Transparent 64-bit MurmurHash2 functor for row spans, containers, and
+ * @brief Transparent 64-bit xxHash3 functor for row spans, containers, and
  * primitives.
  *
  * Enables zero-allocation heterogeneous hashing across SqliteRowOwnedWrapper

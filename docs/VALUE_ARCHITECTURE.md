@@ -204,6 +204,7 @@ When borrowing a buffer or converting from a SQLite value:
 4. **Destructor Safety**: When destructed, `free_heap()` checks `!m_sqlite.is_borrowed` before invoking `sqlite3_free()`. For borrowed values, deallocation is completely bypassed, ensuring the underlying SQLite or external buffer remains intact.
 5. **Ownership Escalation & In-Place Cloning (`.clone()`, `.clone_in_place()`, `.to_owned()`)**: Calling `.to_owned()` or `.clone()` deep-copies the external buffer into an independent `sqlite3_malloc64` heap allocation, returning an owned copy with `is_borrowed = false`. Calling `.clone_in_place()` escalates the instance in-place from borrowed to owned heap memory.
 6. **Safe In-Place Mutation & Copy-On-Write (`.mutable_text()`, `.mutable_blob()`, `.mutable_data()`)**: Borrowed values treat external memory as strictly read-only. Calling `.mutable_text()` or `.mutable_blob()` automatically performs Copy-On-Write (COW) escalation via `clone_in_place()`, guaranteeing that mutations to the buffer never corrupt the underlying SQLite VDBE memory or external data. If the value is marked immutable, `nullptr` is returned.
+7. **Heap Pointer Ownership Transfer (`transfer_text`, `transfer_blob`)**: Takes a caller's pointer (`char**`, `char*&`, `void**`, `uint8_t**`), adopts it directly with zero copying, and sets `*pStr = nullptr`. If the payload fits within SBO ($\le 21\text{B}$ text, $\le 22\text{B}$ blob), it is inlined into the 24-byte struct and the external heap buffer is immediately freed via `sqlite3_free()`, avoiding heap fragmentation. For payloads exceeding SBO, the pointer is adopted directly with `is_borrowed = false`, ensuring automatic reclamation on destruction.
 
 #### The SQLite Zero-Length Blob Edge Case
 In SQLite's native C implementation (`vdbemem.c`), invoking `sqlite3_value_blob(pVal)` returns `NULL` if the blob has a length of zero (`sqlite3_value_bytes(pVal) == 0`). 
@@ -365,7 +366,7 @@ Modern optimizing compilers (GCC, Clang, MSVC) compile `SqliteValueOwned` method
     5. 38-char braced hyphenated text (`{xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx}`)
     6. 34-char compact braced text (`{xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx}`)
   - Direct zero-copy `memcmp` / case-folded byte comparison without allocating or copying intermediate strings.
-  - `SqliteValueOwned::hash()` and `std::hash<SqliteValueOwned>` hash the 36-character canonical lowercase hyphenated form across all representations, guaranteeing that equal UUIDs in any format produce identical 64-bit MurmurHash2 hashes.
+  - `SqliteValueOwned::hash()` and `std::hash<SqliteValueOwned>` hash the 36-character canonical lowercase hyphenated form across all representations, guaranteeing that equal UUIDs in any format produce identical 64-bit xxHash3 hashes.
 
 > [!IMPORTANT]
 > **Subtype Guidance for Application & Extension Developers**:
@@ -419,7 +420,7 @@ Multi-column composite keys and rows are modeled as contiguous RAII-managed arra
 
 To prevent code bloat and maintain a unified API across all container and tabular types, all containers utilize `SQLITE_DERIVE_ARRAY_ACCESSORS` and `SQLITE_DERIVE_ARRAY_HASH`:
 - **Direct Typed Extraction**: Provides inlined `as_int64(i = 0)`, `as_int(i = 0)`, `as_double(i = 0)`, `as_text(i = 0)`, `as_blob(i = 0)`, `as_bool(i = 0)`, `is_null(i = 0)`, `type(i = 0)`, and `subtype(i = 0)`.
-- **Unified MurmurHash2 Digest**: Generates inlined `hash()` computing multi-column composite MurmurHash2 digests combining each element sequentially.
+- **Unified xxHash3 Digest**: Generates inlined `hash()` computing multi-column composite xxHash3 digests combining each element sequentially.
 - **Shared Identically Across All Containers**: `SqliteValueTuple<N>`, `SqliteValueVec<N>`, `SqliteRowView`, `SqliteRowOwnedView`, and `SqliteRowOwnedWrapper`.
 
 ---

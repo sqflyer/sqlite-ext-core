@@ -84,7 +84,7 @@
  */
 namespace SqliteStringUtil {
     /**
-     * @brief Computes a 64-bit MurmurHash2 of a character array.
+     * @brief Computes a 64-bit xxhash3 of a character array.
      * @param val Pointer to the string data.
      * @param len Length of the string in bytes.
      * @return 64-bit hash value.
@@ -436,7 +436,7 @@ public:
         return SqliteResult<SqliteStringOwned>::ok(sqlite_move(str));
     }
 
-    /** @brief Computes the MurmurHash2 of the built string. */
+    /** @brief Computes the xxhash3 of the built string. */
     unsigned long long hash() const {
         return SqliteStringUtil::hash(value(), length());
     }
@@ -494,7 +494,7 @@ inline bool SqliteStringView::operator<(const SqliteStringOwned& other) const {
  */
 namespace SqliteBlobUtil {
     /**
-     * @brief Computes a 64-bit MurmurHash2 of a binary buffer.
+     * @brief Computes a 64-bit xxhash3 of a binary buffer.
      */
     inline unsigned long long hash(const void* val, int len) {
         return SqliteHashUtil::hash(val, len);
@@ -739,7 +739,7 @@ public:
         return is_valid();
     }
 
-    /** @brief Computes the MurmurHash2 of the owned payload. */
+    /** @brief Computes the xxhash3 of the owned payload. */
     unsigned long long hash() const {
         return SqliteBlobUtil::hash(m_data, m_size);
     }
@@ -2228,10 +2228,10 @@ public:
      * @param len Length in bytes (or -1 to auto-calculate length via strlen).
      * @param subtype Optional SQLite subtype.
      */
-    static inline SqliteValueOwned from_borrowed_text(const char* text, int len = -1, uint8_t subtype = SQLITE_SUBTYPE_NONE) noexcept {
+    static inline SqliteValueOwned from_borrowed_text(const char* text, int len = -1, uint8_t subtype = SQLITE_SUBTYPE_NONE, bool is_immutable = false) noexcept {
         SqliteValueOwned val;
         if (!text) {
-            val.init_null();
+            val.init_null(is_immutable);
             return val;
         }
 
@@ -2239,13 +2239,13 @@ public:
             len = SqliteStringUtil::sqlite_strlen(text);
         }
         if (len <= 0) {
-            val.init_null();
+            val.init_null(is_immutable);
             return val;
         }
 
         // 1. If small (<= 21 bytes), inline into 24-byte SBO struct
         if (len <= 21) {
-            val.init_text(text, len, subtype);
+            val.init_text(text, len, subtype, is_immutable);
             return val;
         }
 
@@ -2255,9 +2255,14 @@ public:
         val.m_sqlite.affinity      = SQLITE_AFF_TEXT;
         val.m_sqlite.is_borrowed   = true; // Do NOT call sqlite3_free()!
         memset(val.m_sqlite.reserved, 0, sizeof(val.m_sqlite.reserved));
-        val.m_sqlite.subtag.set(subtype, false);
+        val.m_sqlite.subtag.set(subtype, is_immutable);
         val.set_tag(SQLITE_TEXT, true, 0); // is_heap = true, but borrowed
         return val;
+    }
+
+    /** @brief Alias matching user shorthand. */
+    static inline SqliteValueOwned from_borrow_text(const char* text, int len = -1, uint8_t subtype = SQLITE_SUBTYPE_NONE, bool is_immutable = false) noexcept {
+        return from_borrowed_text(text, len, subtype, is_immutable);
     }
 
     /**
@@ -2266,16 +2271,17 @@ public:
      * @param data Blob pointer (caller guarantees lifetime).
      * @param len Length in bytes.
      * @param subtype Optional SQLite subtype.
+     * @param is_immutable Optional flag marking the value immutable.
      */
-    static inline SqliteValueOwned from_borrowed_blob(const void* data, int len, uint8_t subtype = SQLITE_SUBTYPE_NONE) noexcept {
+    static inline SqliteValueOwned from_borrowed_blob(const void* data, int len, uint8_t subtype = SQLITE_SUBTYPE_NONE, bool is_immutable = false) noexcept {
         SqliteValueOwned val;
         if (!data || len <= 0) {
-            val.init_null();
+            val.init_null(is_immutable);
             return val;
         }
 
         if (len <= 22) {
-            val.init_blob(data, len, subtype);
+            val.init_blob(data, len, subtype, is_immutable);
             return val;
         }
 
@@ -2284,9 +2290,14 @@ public:
         val.m_sqlite.affinity      = SQLITE_AFF_BLOB;
         val.m_sqlite.is_borrowed   = true; // Do NOT call sqlite3_free()!
         memset(val.m_sqlite.reserved, 0, sizeof(val.m_sqlite.reserved));
-        val.m_sqlite.subtag.set(subtype, false);
+        val.m_sqlite.subtag.set(subtype, is_immutable);
         val.set_tag(SQLITE_BLOB, true, 0);
         return val;
+    }
+
+    /** @brief Alias matching user shorthand. */
+    static inline SqliteValueOwned from_borrow_blob(const void* data, int len, uint8_t subtype = SQLITE_SUBTYPE_NONE, bool is_immutable = false) noexcept {
+        return from_borrowed_blob(data, len, subtype, is_immutable);
     }
 
     /**
@@ -2369,6 +2380,147 @@ public:
     /** @brief Alias matching user shorthand. */
     static inline SqliteValueOwned brrow_from_value_view(const SqliteValueView& view) noexcept {
         return borrow_from_value_view(view);
+    }
+
+    /**
+     * @brief Adopts/transfers ownership of an existing heap-allocated text buffer (allocated via sqlite3_malloc64).
+     *
+     * The buffer pointer is adopted directly with ZERO copying or reallocation (m_sqlite.is_borrowed = false),
+     * and the caller's pointer is safely set to nullptr (*pStr = nullptr) to prevent dangling references or double-frees.
+     * When this SqliteValueOwned is destroyed, the buffer will be automatically reclaimed via sqlite3_free().
+     *
+     * @param pStr Pointer to the caller's heap buffer pointer. Set to nullptr upon return.
+     * @param len Length in bytes (or -1 to auto-calculate via strlen).
+     * @param subtype Optional SQLite subtype.
+     * @param is_immutable Optional flag marking the value immutable.
+     * @return Transferred SqliteValueOwned owning the buffer.
+     */
+    static inline SqliteValueOwned transfer_text(char** pStr, int len = -1, uint8_t subtype = SQLITE_SUBTYPE_NONE, bool is_immutable = false) noexcept {
+        SqliteValueOwned val;
+        if (!pStr || !*pStr) {
+            val.init_null(is_immutable);
+            if (pStr) *pStr = nullptr;
+            return val;
+        }
+
+        char* ptr = *pStr;
+        *pStr = nullptr;
+
+        int n = (len >= 0) ? len : SqliteStringUtil::sqlite_strlen(ptr);
+        if (n < 0) {
+            sqlite3_free(ptr);
+            val.init_null(is_immutable);
+            return val;
+        }
+
+        if (n == 0) {
+            sqlite3_free(ptr);
+            val.init_text("", 0, subtype, is_immutable);
+            return val;
+        }
+
+        // Check SBO: If length fits in SBO (<= 21 bytes), inline into 24-byte struct and free heap buffer!
+        if (n <= 21) {
+            val.init_text(ptr, n, subtype, is_immutable);
+            sqlite3_free(ptr);
+            return val;
+        }
+
+        val.m_sqlite.payload.pData = ptr;
+        val.m_sqlite.heap_len      = n;
+        val.m_sqlite.affinity      = SQLITE_AFF_TEXT;
+        val.m_sqlite.is_borrowed   = false;
+        memset(val.m_sqlite.reserved, 0, sizeof(val.m_sqlite.reserved));
+        val.m_sqlite.subtag.set(subtype, is_immutable);
+        val.set_tag(SQLITE_TEXT, true, 0);
+        return val;
+    }
+
+    /**
+     * @brief C++ reference overload for transfer_text: adopts str and resets it to nullptr.
+     */
+    static inline SqliteValueOwned transfer_text(char*& str, int len = -1, uint8_t subtype = SQLITE_SUBTYPE_NONE, bool is_immutable = false) noexcept {
+        return transfer_text(&str, len, subtype, is_immutable);
+    }
+
+    /**
+     * @brief Adopts/transfers ownership of an existing heap-allocated binary blob (allocated via sqlite3_malloc64).
+     *
+     * If the blob fits within Small Buffer Optimization (len <= 22 bytes), it is inlined into the 24-byte
+     * struct and the external heap allocation is immediately freed. If len > 22 bytes, the pointer is adopted
+     * directly with ZERO copying or reallocation (m_sqlite.is_borrowed = false).
+     * The caller's pointer is safely set to nullptr (*pBlob = nullptr) to prevent dangling references or double-frees.
+     * When this SqliteValueOwned is destroyed, the buffer will be automatically reclaimed via sqlite3_free().
+     *
+     * @param pBlob Pointer to the caller's heap buffer pointer. Set to nullptr upon return.
+     * @param len Length in bytes.
+     * @param subtype Optional SQLite subtype.
+     * @param is_immutable Optional flag marking the value immutable.
+     * @return Transferred SqliteValueOwned owning the buffer.
+     */
+    static inline SqliteValueOwned transfer_blob(void** pBlob, int len, uint8_t subtype = SQLITE_SUBTYPE_NONE, bool is_immutable = false) noexcept {
+        SqliteValueOwned val;
+        if (!pBlob || !*pBlob) {
+            val.init_null(is_immutable);
+            if (pBlob) *pBlob = nullptr;
+            return val;
+        }
+
+        void* ptr = *pBlob;
+        *pBlob = nullptr;
+
+        if (len < 0) {
+            sqlite3_free(ptr);
+            val.init_null(is_immutable);
+            return val;
+        }
+
+        if (len == 0) {
+            sqlite3_free(ptr);
+            val.init_blob("", 0, subtype, is_immutable);
+            return val;
+        }
+
+        // Check SBO: If length fits in SBO (<= 22 bytes), inline into 24-byte struct and free heap buffer!
+        if (len <= 22) {
+            val.init_blob(ptr, len, subtype, is_immutable);
+            sqlite3_free(ptr);
+            return val;
+        }
+
+        val.m_sqlite.payload.pData = static_cast<char*>(ptr);
+        val.m_sqlite.heap_len      = len;
+        val.m_sqlite.affinity      = SQLITE_AFF_BLOB;
+        val.m_sqlite.is_borrowed   = false;
+        memset(val.m_sqlite.reserved, 0, sizeof(val.m_sqlite.reserved));
+        val.m_sqlite.subtag.set(subtype, is_immutable);
+        val.set_tag(SQLITE_BLOB, true, 0);
+        return val;
+    }
+
+    /**
+     * @brief C++ reference overload for transfer_blob with void*&.
+     */
+    static inline SqliteValueOwned transfer_blob(void*& blob, int len, uint8_t subtype = SQLITE_SUBTYPE_NONE, bool is_immutable = false) noexcept {
+        return transfer_blob(&blob, len, subtype, is_immutable);
+    }
+
+    /**
+     * @brief Overload for transfer_blob with uint8_t**.
+     */
+    static inline SqliteValueOwned transfer_blob(uint8_t** pBlob, int len, uint8_t subtype = SQLITE_SUBTYPE_NONE, bool is_immutable = false) noexcept {
+        if (!pBlob) return transfer_blob(static_cast<void**>(nullptr), len, subtype, is_immutable);
+        void* v = *pBlob;
+        SqliteValueOwned res = transfer_blob(&v, len, subtype, is_immutable);
+        *pBlob = static_cast<uint8_t*>(v);
+        return res;
+    }
+
+    /**
+     * @brief C++ reference overload for transfer_blob with uint8_t*&.
+     */
+    static inline SqliteValueOwned transfer_blob(uint8_t*& blob, int len, uint8_t subtype = SQLITE_SUBTYPE_NONE, bool is_immutable = false) noexcept {
+        return transfer_blob(&blob, len, subtype, is_immutable);
     }
 
     /** @brief Attempts to construct an inline or heap-backed string value, returning SqliteResult. */
@@ -3333,7 +3485,7 @@ public:
     }
 
     /** 
-     * @brief Computes a polymorphic 64-bit MurmurHash2 of the value.
+     * @brief Computes a polymorphic 64-bit xxhash3 of the value.
      */
     unsigned long long hash() const {
         if (is_uuid()) {

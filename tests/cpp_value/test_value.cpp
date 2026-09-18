@@ -4294,6 +4294,197 @@ static void test_clone_in_place_and_mutation(sqlite3* db) {
     }
 }
 
+static void test_transfer_text_and_blob() {
+    // 1. Text transfer with double pointer (char**)
+    {
+        const char* msg = "this is a dynamically allocated text string for transfer testing";
+        size_t len = strlen(msg);
+        char* buf = static_cast<char*>(sqlite3_malloc64(len + 1));
+        assert(buf != nullptr);
+        memcpy(buf, msg, len + 1);
+        char* orig_ptr = buf;
+
+        SqliteValueOwned val = SqliteValueOwned::transfer_text(&buf, static_cast<int>(len), SQLITE_SUBTYPE_JSON);
+        assert(buf == nullptr); // Destructive move: caller's pointer is null!
+        assert(val.is_text());
+        assert(val.is_heap_allocated());
+        assert(!val.is_borrowed()); // Owned by container, will be freed by destructor!
+        assert(val.as_text().data() == orig_ptr); // Zero-copy adoption!
+        assert(val.as_text() == msg);
+        assert(val.subtype() == SQLITE_SUBTYPE_JSON);
+
+        // Mutable update directly on adopted buffer
+        char* mut = val.mutable_text();
+        assert(mut == orig_ptr);
+        mut[0] = 'T';
+        assert(val.as_text().starts_with("This"));
+    } // val destructs and calls sqlite3_free(orig_ptr) safely without leaks!
+
+    // 2. Text transfer with C++ reference (char*&) and sqlite3_mprintf
+    {
+        char* formatted = sqlite3_mprintf("Generated count: %d, status: %s", 12345, "SUCCESS");
+        assert(formatted != nullptr);
+        char* orig_ptr = formatted;
+
+        SqliteValueOwned val = SqliteValueOwned::transfer_text(formatted);
+        assert(formatted == nullptr); // Reference overload cleared the pointer!
+        assert(val.is_text());
+        assert(!val.is_borrowed());
+        assert(val.as_text().data() == orig_ptr);
+        assert(val.as_text() == "Generated count: 12345, status: SUCCESS");
+    }
+
+    // 3. Text transfer with empty string (len == 0)
+    {
+        char* empty_buf = static_cast<char*>(sqlite3_malloc64(16));
+        assert(empty_buf != nullptr);
+        empty_buf[0] = '\0';
+
+        SqliteValueOwned val = SqliteValueOwned::transfer_text(&empty_buf, 0, 42);
+        assert(empty_buf == nullptr);
+        assert(val.is_text());
+        assert(val.as_text().length() == 0);
+        assert(val.as_text() == "");
+        assert(val.subtype() == 42);
+    }
+
+    // 4. Text transfer with null pointers
+    {
+        char* null_ptr = nullptr;
+        SqliteValueOwned val1 = SqliteValueOwned::transfer_text(&null_ptr);
+        assert(null_ptr == nullptr);
+        assert(val1.is_null());
+
+        SqliteValueOwned val2 = SqliteValueOwned::transfer_text(static_cast<char**>(nullptr));
+        assert(val2.is_null());
+    }
+
+    // 5. Blob transfer with void** and void*&
+    {
+        const int blob_sz = 48;
+        void* raw_blob = sqlite3_malloc64(blob_sz);
+        assert(raw_blob != nullptr);
+        memset(raw_blob, 0xAB, blob_sz);
+        void* orig_blob = raw_blob;
+
+        SqliteValueOwned val = SqliteValueOwned::transfer_blob(&raw_blob, blob_sz, SQLITE_SUBTYPE_VECTOR);
+        assert(raw_blob == nullptr); // Destructive move!
+        assert(val.is_blob());
+        assert(!val.is_borrowed());
+        assert(val.as_blob().data() == orig_blob);
+        assert(val.as_blob().size() == blob_sz);
+        assert(val.subtype() == SQLITE_SUBTYPE_VECTOR);
+
+        void* mut_b = val.mutable_blob();
+        assert(mut_b == orig_blob);
+        static_cast<uint8_t*>(mut_b)[0] = 0xCD;
+        assert(static_cast<const uint8_t*>(val.as_blob().data())[0] == 0xCD);
+    }
+
+    // 6. Blob transfer with uint8_t*&
+    {
+        const int blob_sz = 32;
+        uint8_t* u_blob = static_cast<uint8_t*>(sqlite3_malloc64(blob_sz));
+        assert(u_blob != nullptr);
+        memset(u_blob, 0xEE, blob_sz);
+        uint8_t* orig_u = u_blob;
+
+        SqliteValueOwned val = SqliteValueOwned::transfer_blob(u_blob, blob_sz, 77);
+        assert(u_blob == nullptr);
+        assert(val.is_blob());
+        assert(!val.is_borrowed());
+        assert(val.as_blob().data() == orig_u);
+        assert(val.subtype() == 77);
+    }
+
+    // 7. Blob transfer with empty blob (len == 0)
+    {
+        void* empty_b = sqlite3_malloc64(16);
+        assert(empty_b != nullptr);
+
+        SqliteValueOwned val = SqliteValueOwned::transfer_blob(&empty_b, 0, 88);
+        assert(empty_b == nullptr);
+        assert(val.is_blob());
+        assert(val.as_blob().size() == 0);
+        assert(val.subtype() == 88);
+    }
+
+    // 8. Immutability flag during transfer
+    {
+        char* imm_buf = static_cast<char*>(sqlite3_malloc64(32));
+        assert(imm_buf != nullptr);
+        strcpy(imm_buf, "transfer immutable test");
+
+        SqliteValueOwned val = SqliteValueOwned::transfer_text(&imm_buf, -1, 0, true);
+        assert(imm_buf == nullptr);
+        assert(val.is_immutable());
+        assert(val.mutable_text() == nullptr);
+        assert(val.mutable_data() == nullptr);
+    }
+
+    // 9. SBO inlining on transfer_text for short strings (len <= 21)
+    {
+        const char* short_msg = "inline transfer";
+        size_t len = strlen(short_msg);
+        assert(len <= 21);
+        char* buf = static_cast<char*>(sqlite3_malloc64(len + 1));
+        assert(buf != nullptr);
+        memcpy(buf, short_msg, len + 1);
+
+        SqliteValueOwned val = SqliteValueOwned::transfer_text(&buf);
+        assert(buf == nullptr); // Freed and nulled!
+        assert(val.is_text());
+        assert(!val.is_heap_allocated()); // Inlined into SBO struct!
+        assert(val.as_text() == short_msg);
+    }
+
+    // 10. SBO inlining on transfer_blob for short blobs (len <= 22)
+    {
+        const int short_sz = 16;
+        void* raw_blob = sqlite3_malloc64(short_sz);
+        assert(raw_blob != nullptr);
+        memset(raw_blob, 0x42, short_sz);
+
+        SqliteValueOwned val = SqliteValueOwned::transfer_blob(&raw_blob, short_sz);
+        assert(raw_blob == nullptr); // Freed and nulled!
+        assert(val.is_blob());
+        assert(!val.is_heap_allocated()); // Inlined into SBO struct!
+        assert(val.as_blob().size() == short_sz);
+        assert(static_cast<const uint8_t*>(val.as_blob().data())[0] == 0x42);
+    }
+
+    // 11. from_borrowed_text and from_borrow_text with is_immutable = true
+    {
+        const char* static_str = "borrowed static text exceeding twenty-one bytes boundary";
+        SqliteValueOwned val = SqliteValueOwned::from_borrowed_text(static_str, -1, SQLITE_SUBTYPE_JSON, true);
+        assert(val.is_borrowed());
+        assert(val.is_immutable());
+        assert(val.mutable_text() == nullptr);
+
+        // Alias from_borrow_text
+        SqliteValueOwned val_alias = SqliteValueOwned::from_borrow_text(static_str, -1, SQLITE_SUBTYPE_JSON, true);
+        assert(val_alias.is_borrowed());
+        assert(val_alias.is_immutable());
+        assert(val_alias.mutable_text() == nullptr);
+    }
+
+    // 12. from_borrowed_blob and from_borrow_blob with is_immutable = true
+    {
+        uint8_t static_bytes[30];
+        memset(static_bytes, 0x55, sizeof(static_bytes));
+        SqliteValueOwned val = SqliteValueOwned::from_borrowed_blob(static_bytes, sizeof(static_bytes), SQLITE_SUBTYPE_VECTOR, true);
+        assert(val.is_borrowed());
+        assert(val.is_immutable());
+        assert(val.mutable_blob() == nullptr);
+
+        // Alias from_borrow_blob
+        SqliteValueOwned val_alias = SqliteValueOwned::from_borrow_blob(static_bytes, sizeof(static_bytes), SQLITE_SUBTYPE_VECTOR, true);
+        assert(val_alias.is_borrowed());
+        assert(val_alias.is_immutable());
+        assert(val_alias.mutable_blob() == nullptr);
+    }
+}
+
 int main() {
     sqlite3_initialize();
     
@@ -4311,6 +4502,9 @@ int main() {
 
     printf("Testing clone() In-Place Escalation and Mutable Data Updates...\n");
     test_clone_in_place_and_mutation(db);
+
+    printf("Testing transfer_text and transfer_blob (Ownership Adoption)...\n");
+    test_transfer_text_and_blob();
 
     printf("Testing String Types...\n");
     test_string_types(db);

@@ -201,6 +201,32 @@ SqliteValueOwned b4 = SqliteValueOwned::brrow_from_value_view(view);
 - **Ownership Escalation & In-Place Cloning (`.clone()`, `.clone_in_place()`, `.to_owned()`)**: Calling `b1.to_owned()` or `b1.clone()` deep-copies borrowed memory into an independent SQLite heap buffer (`is_borrowed() == false`). Calling `b1.clone_in_place()` escalates `b1` in-place from borrowed to owned heap memory.
 - **Safe In-Place Mutation & Copy-On-Write (`.mutable_text()`, `.mutable_blob()`)**: Calling `b1.mutable_text()` or `b1.mutable_blob()` automatically performs Copy-On-Write (COW) escalation before returning a mutable pointer. The original borrowed SQLite memory or external buffer is NEVER modified!
 
+### Zero-Allocation Heap Ownership Transfer (`transfer_text`, `transfer_blob`)
+When a C/C++ routine dynamically allocates a buffer via SQLite's allocator (`sqlite3_malloc64`, `sqlite3_mprintf`, etc.), copying causes unnecessary allocations, while borrowing leaves buffer lifetime unmanaged. `transfer_text` and `transfer_blob` solve this via **destructive pointer adoption**:
+
+```cpp
+// 1. Text transfer with double pointer or reference:
+char* buf = sqlite3_mprintf("User ID: %d, Role: %s", 1001, "admin");
+SqliteValueOwned val1 = SqliteValueOwned::transfer_text(&buf); // or transfer_text(buf)
+assert(buf == nullptr); // Pointer is cleared immediately!
+assert(!val1.is_borrowed()); // Owned! Automatically reclaimed by sqlite3_free() on destruction!
+
+// 2. Small Buffer Optimization (SBO) on Transfer:
+// If transferred payload fits within SBO (<= 21B text, <= 22B blob), it is copied directly
+// into the 24-byte struct and the external heap buffer is immediately freed!
+char* small_buf = static_cast<char*>(sqlite3_malloc64(10));
+strcpy(small_buf, "hello");
+SqliteValueOwned val2 = SqliteValueOwned::transfer_text(&small_buf);
+assert(small_buf == nullptr);
+assert(!val2.is_heap_allocated()); // Inlined into 24-byte SBO struct!
+
+// 3. Binary blob transfer (supports void** / void*& and uint8_t** / uint8_t*&):
+void* raw_blob = sqlite3_malloc64(64);
+SqliteValueOwned val3 = SqliteValueOwned::transfer_blob(&raw_blob, 64, SQLITE_SUBTYPE_VECTOR);
+assert(raw_blob == nullptr);
+assert(!val3.is_borrowed());
+```
+
 ### Static Subtype Factory Methods
 ```cpp
 // 1. JSON (Strings <= 21 chars stored inline with zero heap allocations)
@@ -297,7 +323,7 @@ SqliteValueOwned u_text = SqliteValueOwned::from_uuid(raw_uuid, SqliteUuidUtil::
 SqliteValueOwned u_upper = SqliteValueOwned::from_uuid(raw_uuid, SqliteUuidUtil::UUID_FORMAT_STANDARD | SqliteUuidUtil::UUID_FORMAT_UPPERCASE);
 SqliteValueOwned u_brace = SqliteValueOwned::from_uuid(raw_uuid, SqliteUuidUtil::UUID_FORMAT_BRACED | SqliteUuidUtil::UUID_FORMAT_STANDARD);
 
-// All formats evaluate equal and produce identical 64-bit MurmurHash2 hashes!
+// All formats evaluate equal and produce identical 64-bit xxHash3 hashes!
 assert(u_blob == u_text);
 assert(u_text == u_upper);
 assert(u_upper == u_brace);
@@ -413,7 +439,7 @@ assert(vec.empty()); // Source safely zeroed
 
 ### Typed Extraction Accessors & Composite Hashing (`SQLITE_DERIVE_ARRAY_ACCESSORS`, `SQLITE_DERIVE_ARRAY_HASH`)
 
-Both `SqliteValueTuple<N>` and `SqliteValueVec<N>` utilize unified macros to synthesize zero-overhead direct column extractors and 64-bit MurmurHash2 composite hashing:
+Both `SqliteValueTuple<N>` and `SqliteValueVec<N>` utilize unified macros to synthesize zero-overhead direct column extractors and 64-bit xxHash3 composite hashing:
 
 ```cpp
 // Direct typed extraction without indexing into intermediate values
@@ -424,7 +450,7 @@ double        val  = vec.as_double(2);  // Double float
 bool          nul  = vec.is_null(3);    // Null check
 uint8_t       sub  = vec.subtype(1);    // Subtype code
 
-// 64-bit MurmurHash2 composite digest across all elements
+// 64-bit xxHash3 composite digest across all elements
 unsigned long long digest = vec.hash();
 ```
 
@@ -498,7 +524,7 @@ poly_map.emplace(SqliteValueOwned::from_text("hello"), "text record");
 `sqlite3_value.hpp` provides transparent functors (`is_transparent = void`) enabling zero-allocation queries on both ordered (`std::map`, B-Trees) and unordered (`std::unordered_map`, Swiss Tables) containers:
 
 ```cpp
-struct SqliteValueHash;  // 64-bit MurmurHash2 transparent hasher
+struct SqliteValueHash;  // 64-bit xxHash3 transparent hasher
 struct SqliteValueEqual; // Transparent equality (a == b)
 struct SqliteValueLess;  // Transparent SQLite collation less-than (a < b)
 ```

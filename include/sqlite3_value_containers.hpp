@@ -211,7 +211,7 @@ template <typename T> struct is_valid_variadic_arg {
  */
 template <size_t N> struct TupleHashHelper {
   /**
-   * @brief Computes composite 64-bit MurmurHash2 across N elements.
+   * @brief Computes composite 64-bit xxhash3 across N elements.
    * @param vals Pointer to contiguous array of SqliteValueOwned elements.
    * @return 64-bit composite hash value.
    */
@@ -777,7 +777,7 @@ public:
   /**
    * @brief Computes 64-bit composite hash code for hash table lookups (Swiss
    * tables).
-   * @return 64-bit MurmurHash2 hash value.
+   * @return 64-bit xxhash3 hash value.
    */
   inline unsigned long long hash() const noexcept {
     return sqlite_container_internal::TupleHashHelper<N>::compute(m_values);
@@ -1069,7 +1069,7 @@ public:
 
   /**
    * @brief Computes 64-bit composite hash code across all heap elements.
-   * @return 64-bit MurmurHash2 hash value.
+   * @return 64-bit xxhash3 hash value.
    */
   inline unsigned long long hash() const noexcept {
     if (m_size == 0)
@@ -1848,7 +1848,7 @@ public:
   /**
    * @brief Computes 64-bit composite hash code for hash table lookups (Swiss
    * tables).
-   * @return 64-bit MurmurHash2 hash value.
+   * @return 64-bit xxhash3 hash value.
    */
   inline unsigned long long hash() const noexcept {
     int sz = size();
@@ -2321,7 +2321,7 @@ public:
 
   /**
    * @brief Computes 64-bit composite hash code across all heap elements.
-   * @return 64-bit MurmurHash2 hash value.
+   * @return 64-bit xxhash3 hash value.
    */
   inline unsigned long long hash() const noexcept {
     if (m_size == 0)

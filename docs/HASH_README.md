@@ -1,6 +1,6 @@
-# Freestanding 64-Bit MurmurHash2 Engine (`sqlite3_hash.hpp`)
+# Freestanding 64-Bit xxHash3 Engine (`sqlite3_hash.hpp`)
 
-High-performance, zero-dependency, freestanding 64-bit MurmurHash2 (MurmurHash64A) implementation engineered specifically for the SQLite extension core. Provides **unaligned-memory safe hashing**, **Kirsch-Mitzenmacher double hashing for Bloom filters**, **high-entropy 64-bit combiner algorithms**, and **normalized floating-point hash stability**.
+High-performance, zero-dependency, freestanding 64-bit xxHash3 (MurmurHash64A) implementation engineered specifically for the SQLite extension core. Provides **unaligned-memory safe hashing**, **Kirsch-Mitzenmacher double hashing for Bloom filters**, **high-entropy 64-bit combiner algorithms**, and **normalized floating-point hash stability**.
 
 > **Architecture Reference**: For an in-depth systems analysis of the bitwise avalanche mixing constants ($M = \text{0xc6a4a7935bd1e995}$, $r = 47$), unaligned byte reconstruction, Kirsch-Mitzenmacher mathematical proofs, collision resistance characteristics, and assembly-level instruction pipelines, see [`docs/HASH_ARCHITECTURE.md`](HASH_ARCHITECTURE.md).
 
@@ -51,13 +51,13 @@ All hashing functions are contained within the header-only `SqliteHashUtil` name
 
 ```cpp
 namespace SqliteHashUtil {
-    // Canonical 64-bit seed constant for MurmurHash2
+    // Canonical 64-bit seed constant for xxHash3
     static constexpr uint64_t DEFAULT_SEED  = 0xc6a4a7935bd1e995ULL;
     static constexpr uint64_t MURMUR2_64_M  = 0xc6a4a7935bd1e995ULL;
     static constexpr int      MURMUR2_64_R  = 47;
     static constexpr uint64_t COMBINE_MAGIC = 0x517cc1b727220a95ULL;
 
-    // 64-bit MurmurHash2 algorithm over arbitrary binary payloads
+    // 64-bit xxHash3 algorithm over arbitrary binary payloads
     inline uint64_t murmur_hash2_64(const void* key, int len, uint64_t seed = DEFAULT_SEED) noexcept;
 
     // Convenience alias for murmur_hash2_64

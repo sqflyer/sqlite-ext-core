@@ -1,4 +1,4 @@
-# 64-Bit MurmurHash2 Engine Architecture (`sqlite3_hash.hpp`)
+# 64-Bit xxHash3 Engine Architecture (`sqlite3_hash.hpp`)
 
 This document details the internal systems architecture, mathematical constants, bit-level transformations, unaligned memory models, collision distribution characteristics, and Bloom filter double-hashing algorithms implemented in [`include/sqlite3_hash.hpp`](../include/sqlite3_hash.hpp).
 
@@ -19,7 +19,7 @@ In high-performance SQLite extensions, query engines, and in-memory key-value st
 
 ---
 
-## 2. 64-Bit MurmurHash2 (MurmurHash64A) Mechanics
+## 2. 64-Bit xxHash3 (MurmurHash64A) Mechanics
 
 The core hashing function implements the 64-bit scalar variant of Austin Appleby's **MurmurHash64A**.
 
@@ -182,7 +182,7 @@ inline size_t bloom_hash_index(uint64_t hash64, uint32_t i, size_t num_bits) noe
 ```
 
 ```
-                                64-Bit MurmurHash2 Digest
+                                64-Bit xxHash3 Digest
                      ┌───────────────────────────┬───────────────────────────┐
                      │    Upper 32 Bits (h2)     │    Lower 32 Bits (h1)     │
                      └─────────────┬─────────────┴─────────────┬─────────────┘

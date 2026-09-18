@@ -19,7 +19,7 @@ An exhaustive test suite verifying the **dual value container templates** (`Sqli
 ### A. Core Value Containers (`test_value_containers.cpp`)
 1. **`SqliteValueTuple<N>` In-Situ Static Footprint ($N \in [1..8]$)**:
    - Verifies exact $N \times 16\text{B}$ stack array without dynamic heap allocations.
-   - Tests bounds safety, direct extraction accessors, in-place element mutation, and MurmurHash2 composite hashing.
+   - Tests bounds safety, direct extraction accessors, in-place element mutation, and xxHash3 composite hashing.
 2. **`SqliteValueTuple<N>` Direct Heap Tuple ($N = 0$, default `SqliteValueTuple<>`)**:
    - Verifies dynamic heap allocation via `sqlite3_malloc64` and runtime sizing via constructor argument.
 3. **`SqliteValueVec<N>` Adaptive Stack SBO & Reversible Heap Spilling ($N \in [1..8]$)**:

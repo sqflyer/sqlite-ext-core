@@ -221,7 +221,7 @@ auto it_lb = index.lower_bound(100);
 - `void fill(const SqliteValueOwned& val)` / `void fill(const TPrimitive& val)`: Replaces all elements with `val`.
 - `void swap(SqliteValueTuple<N>& other) noexcept`: In-place swap.
 - `SqliteRowOwnedWrapper view() const noexcept`: Returns non-owning span.
-- `unsigned long long hash() const noexcept`: 64-bit MurmurHash2 hash value.
+- `unsigned long long hash() const noexcept`: 64-bit xxHash3 hash value.
 
 ### `SqliteValueVec<N>` Standard Vector Methods
 
@@ -244,7 +244,7 @@ auto it_lb = index.lower_bound(100);
 - `void swap(SqliteValueVec<N>& other) noexcept`.
 - `void push_back(...)`, `emplace_back(...)`, `pop_back()`, `clear()`.
 - `SqliteRowOwnedWrapper view() const noexcept`: Returns non-owning span.
-- `unsigned long long hash() const noexcept`: 64-bit MurmurHash2 hash value.
+- `unsigned long long hash() const noexcept`: 64-bit xxHash3 hash value.
 
 ---
 
